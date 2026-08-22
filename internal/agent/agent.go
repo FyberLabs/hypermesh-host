@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -171,13 +172,13 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 		return err
 	}
 	if sess == nil {
+		if err := a.tunnels.Teardown(ctx); err != nil {
+			return err
+		}
 		if a.applied != "" {
-			if err := a.tunnels.Teardown(ctx); err != nil {
-				return err
-			}
-			a.applied = ""
 			a.log.Info("tunnel gone (204), torn down")
 		}
+		a.applied = ""
 		return nil
 	}
 	switch sess.Status {
@@ -232,33 +233,46 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed)
+	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason)
 	return nil
 }
 
 func (a *Agent) runJob(ctx context.Context, job api.Job) pathb.Result {
 	switch job.Kind {
-	case api.KindPathB, api.KindInstanceCheck, "":
+	case api.KindPathB, api.KindInstanceCheck:
 		return a.pathb.Run(ctx, job)
 	case api.KindLeaseStart:
 		return a.leaseStart(ctx, job)
 	case api.KindLeaseStop:
 		return a.leaseStop(ctx, job)
+	case "":
+		return pathb.Result{Passed: false, Reason: "empty job kind"}
 	default:
 		return pathb.Result{Passed: false, Reason: "unknown job kind"}
 	}
 }
 
 func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
+	if strings.TrimSpace(job.ImageDigest) == "" {
+		return pathb.Result{Passed: false, Reason: "no image_digest; no soak image"}
+	}
 	h, err := a.runtime.Start(ctx, runtime.Spec{
-		Name:        "hypermesh-lease",
 		LeaseID:     job.LeaseID,
 		CatalogID:   job.CatalogID,
 		ImageDigest: job.ImageDigest,
 		Runtime:     job.Runtime,
 	})
 	if err != nil {
-		return pathb.Result{Passed: false, Reason: "runtime start failed"}
+		reason := "runtime start failed"
+		switch {
+		case errors.Is(err, runtime.ErrNoImage):
+			reason = "no image_digest; no soak image"
+		case errors.Is(err, runtime.ErrBareDigest):
+			reason = "image_digest is not repo@digest"
+		case errors.Is(err, runtime.ErrNoLeaseID):
+			reason = "lease_start requires lease_id"
+		}
+		return pathb.Result{Passed: false, Reason: reason}
 	}
 	a.lease = h
 	if err := a.saveLease(h); err != nil {
@@ -266,11 +280,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	}
 	snap, _ := a.telem.Collect(ctx)
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
-	if h.Noop {
-		a.log.Info("lease_start recorded no-op (empty image_digest)", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-	} else {
-		a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-	}
+	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
 	return pathb.Result{Passed: true, ImageHash: image, Reason: "lease_start"}
 }
 

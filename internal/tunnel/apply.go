@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+const (
+	idPrefix     = "# hypermesh-tunnel-id: "
+	appliedFile  = "hypermesh.applied"
+	defaultIface = "hypermesh"
+)
+
 var (
 	// ErrNoSession means GET /agent/tunnel returned nothing to apply.
 	ErrNoSession = errors.New("hypermesh tunnel: no session")
@@ -52,25 +58,34 @@ type Runner struct {
 
 // NewRunner uses /etc/wireguard and wg-quick on PATH.
 func NewRunner() *Runner {
-	return &Runner{Iface: "hypermesh", ConfigDir: "/etc/wireguard"}
+	return &Runner{Iface: defaultIface, ConfigDir: "/etc/wireguard"}
 }
 
 func (r *Runner) iface() string {
 	if r.Iface != "" {
 		return r.Iface
 	}
-	return "hypermesh"
+	return defaultIface
+}
+
+func (r *Runner) configDir() string {
+	if r.ConfigDir != "" {
+		return r.ConfigDir
+	}
+	return "/etc/wireguard"
 }
 
 func (r *Runner) confPath() string {
-	dir := r.ConfigDir
-	if dir == "" {
-		dir = "/etc/wireguard"
-	}
-	return filepath.Join(dir, r.iface()+".conf")
+	return filepath.Join(r.configDir(), r.iface()+".conf")
+}
+
+func (r *Runner) appliedPath() string {
+	return filepath.Join(r.configDir(), appliedFile)
 }
 
 // Apply writes the wg-quick config and brings the interface up.
+// If conf + applied marker already match this tunnel_id, wg-quick up is skipped
+// so a restart or a failed ack does not error on a second up.
 func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -81,30 +96,86 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if strings.TrimSpace(sess.PeerPrivateKey) == "" {
 		return ErrMissingPrivateKey
 	}
-	if err := os.MkdirAll(filepath.Dir(r.confPath()), 0o700); err != nil {
+	if sess.TunnelID != "" && r.alreadyApplied(sess.TunnelID) {
+		return nil
+	}
+	if err := os.MkdirAll(r.configDir(), 0o700); err != nil {
 		return err
 	}
 	body := wgQuickConfig(sess)
 	if err := os.WriteFile(r.confPath(), []byte(body), 0o600); err != nil {
 		return err
 	}
-	return r.quick(ctx, "up", r.confPath())
+	if err := r.quick(ctx, "up", r.confPath()); err != nil {
+		return err
+	}
+	return r.saveApplied(sess.TunnelID)
 }
 
-// Teardown runs wg-quick down. Missing interface is not an error.
+// Teardown runs wg-quick down and shreds the conf so the peer key does not stay on disk.
 func (r *Runner) Teardown(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	err := r.quick(ctx, "down", r.confPath())
-	if err == nil {
+	if !r.hasLocal() {
 		return nil
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "cannot find") || strings.Contains(msg, "does not exist") || strings.Contains(msg, "no such") {
+	downErr := r.quick(ctx, "down", r.confPath())
+	shredErr := shredFile(r.confPath())
+	_ = os.Remove(r.appliedPath())
+	if downErr != nil && !missingIface(downErr) {
+		return downErr
+	}
+	return shredErr
+}
+
+func (r *Runner) alreadyApplied(tunnelID string) bool {
+	if tunnelID == "" {
+		return false
+	}
+	if r.loadApplied() != tunnelID {
+		return false
+	}
+	return r.confHasTunnelID(tunnelID)
+}
+
+func (r *Runner) hasLocal() bool {
+	if _, err := os.Stat(r.confPath()); err == nil {
+		return true
+	}
+	if _, err := os.Stat(r.appliedPath()); err == nil {
+		return true
+	}
+	return false
+}
+
+func (r *Runner) confHasTunnelID(id string) bool {
+	raw, err := os.ReadFile(r.confPath())
+	if err != nil {
+		return false
+	}
+	want := strings.TrimSpace(idPrefix + id)
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) saveApplied(id string) error {
+	if id == "" {
 		return nil
 	}
-	return err
+	return os.WriteFile(r.appliedPath(), []byte(id+"\n"), 0o600)
+}
+
+func (r *Runner) loadApplied() string {
+	b, err := os.ReadFile(r.appliedPath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func (r *Runner) quick(ctx context.Context, args ...string) error {
@@ -123,8 +194,37 @@ func (r *Runner) quick(ctx context.Context, args ...string) error {
 	return nil
 }
 
+func missingIface(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cannot find") || strings.Contains(msg, "does not exist") || strings.Contains(msg, "no such")
+}
+
+func shredFile(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	n := fi.Size()
+	if n < 1 {
+		n = 1
+	}
+	zeros := make([]byte, n)
+	if err := os.WriteFile(path, zeros, 0o600); err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
 func wgQuickConfig(s Session) string {
 	var b strings.Builder
+	if s.TunnelID != "" {
+		b.WriteString(idPrefix)
+		b.WriteString(s.TunnelID)
+		b.WriteString("\n")
+	}
 	b.WriteString("[Interface]\n")
 	b.WriteString("PrivateKey = ")
 	b.WriteString(s.PeerPrivateKey)

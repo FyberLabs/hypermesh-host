@@ -324,9 +324,25 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 	})
 }
 
-func TestLeaseStartNoopAndStop(t *testing.T) {
+func TestEmptyAndUnknownKindFail(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	empty := a.runJob(context.Background(), api.Job{JobID: "j-empty", DeviceID: testDevice})
+	if empty.Passed || empty.Reason != "empty job kind" {
+		t.Fatalf("empty kind %+v", empty)
+	}
+	unknown := a.runJob(context.Background(), api.Job{JobID: "j-bad", Kind: "not-a-kind", DeviceID: testDevice})
+	if unknown.Passed || unknown.Reason != "unknown job kind" {
+		t.Fatalf("unknown kind %+v", unknown)
+	}
+}
+
+func TestLeaseStartEmptyDigestFails(t *testing.T) {
 	var mu sync.Mutex
 	var kinds []api.JobKind
+	var startPassed *bool
 	var dockerCalls int
 
 	jobs := []api.Job{
@@ -358,12 +374,13 @@ func TestLeaseStartNoopAndStop(t *testing.T) {
 	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/j-start/result", func(w http.ResponseWriter, r *http.Request) {
 		var body api.JobResultRequest
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if !body.Passed {
-			t.Errorf("empty-digest lease_start should pass (recorded no-op)")
-		}
 		mu.Lock()
+		startPassed = &body.Passed
 		kinds = append(kinds, api.KindLeaseStart)
 		mu.Unlock()
+		if body.Passed {
+			t.Errorf("empty-digest lease_start must not pass")
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/j-stop/result", func(w http.ResponseWriter, r *http.Request) {
@@ -403,14 +420,18 @@ func TestLeaseStartNoopAndStop(t *testing.T) {
 	if dockerCalls != 0 {
 		t.Fatalf("empty digest must not invoke docker, calls=%d", dockerCalls)
 	}
+	if startPassed == nil || *startPassed {
+		t.Fatalf("empty digest must POST passed=false")
+	}
 	if len(kinds) < 2 || kinds[0] != api.KindLeaseStart || kinds[1] != api.KindLeaseStop {
 		t.Fatalf("kinds %v", kinds)
 	}
 }
 
 func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
+	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	var mu sync.Mutex
-	var args []string
+	var calls [][]string
 	var passed bool
 
 	mux := http.NewServeMux()
@@ -437,7 +458,7 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 			DeviceID:    testDevice,
 			LeaseID:     "lease-2",
 			CatalogID:   "llama-3.1-8b-q4",
-			ImageDigest: "sha256:abc",
+			ImageDigest: ref,
 			Runtime:     "nvidia",
 		})
 	})
@@ -459,7 +480,7 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	a.tunnels = &fakeTunnel{}
 	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, a ...string) ([]byte, error) {
 		mu.Lock()
-		args = append([]string{}, a...)
+		calls = append(calls, append([]string{}, a...))
 		mu.Unlock()
 		return []byte("cid9\n"), nil
 	}}
@@ -467,11 +488,17 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	waitLoop(t, a, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return passed && len(args) > 0
+		return passed && len(calls) >= 2
 	})
-	joined := strings.Join(args, " ")
+	if calls[0][0] != "pull" || calls[0][1] != ref {
+		t.Fatalf("pull %v", calls[0])
+	}
+	joined := strings.Join(calls[1], " ")
 	if !strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "--gpus") {
-		t.Fatalf("docker args %v", args)
+		t.Fatalf("docker args %v", calls[1])
+	}
+	if !strings.Contains(joined, "hypermesh-lease-2") || !strings.Contains(joined, ref) {
+		t.Fatalf("name/ref %v", calls[1])
 	}
 }
 

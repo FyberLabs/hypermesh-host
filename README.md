@@ -6,7 +6,7 @@ The agent enrolls, heartbeats, applies the allocated WireGuard tunnel, and runs 
 
 ## Status
 
-Agent HTTP matches the locked :8010 shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty `image_digest` on lease_start is a recorded no-op (no docker pull, no tok/s).
+Agent HTTP matches the locked :8010 shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty or bare `image_digest` on lease_start POSTs `passed=false` (not a running instance; CP must not go active).
 
 ## Build and test
 
@@ -34,7 +34,7 @@ export HYPERMESH_STATE_DIR=./state
 
 Same values as flags: `-control-plane-url`, `-tenant-id`, `-enroll-token`, `-state-dir`.
 
-Enroll (`POST /agent/enroll`) is unauthenticated except `X-Tenant-ID`. The 200 body is `device_id`, `credential_prefix`, and `device_secret` (`hm_dev_…`, shown once). The agent writes those to `$STATE_DIR/device.json` at mode **0600**. The enroll token is not stored. The secret is never logged and must not be copied into unit command lines or journald.
+Enroll (`POST /api/v1/hypermesh/agent/enroll`) is unauthenticated except `X-Tenant-ID`. The 200 body is `device_id`, `credential_prefix`, and `device_secret` (`hm_dev_…`, shown once). The agent writes those to `$STATE_DIR/device.json` at mode **0600**. The enroll token is not stored. The secret is never logged and must not be copied into unit command lines or journald.
 
 After enroll, these routes send `Authorization: Bearer <device_secret>`, `X-Tenant-ID`, and `device_id` in the body or query:
 
@@ -57,8 +57,8 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 | kind | What the agent does |
 |---|---|
 | `path_b` / `instance_check` | stub-suite-v1: collect image hash / uptime / thermal, POST `passed` + `image_hash` |
-| `lease_start` | `docker --runtime=nvidia` when `image_digest` is set. If digest is empty (until soak), record a no-op handle and POST `passed=true`. No catalog image is invented. |
-| `lease_stop` | Stop the container (or clear the no-op record). Tunnel teardown waits for GET tunnel `status=revoked`. |
+| `lease_start` | `image_digest` must be `repo@digest`. `docker pull` then `docker --runtime=nvidia --name hypermesh-<lease_id>`. Empty digest or bare `sha256:hex` → `passed=false`. Empty/unknown `kind` → `passed=false`. |
+| `lease_stop` | Stop the container named for that lease. Tunnel teardown waits for GET tunnel `status=revoked`. |
 
 Result body stays `{"passed", "image_hash?"}`.
 
@@ -66,9 +66,9 @@ Result body stays `{"passed", "image_hash?"}`.
 
 Control plane allocates on paid→starting. GET 200 is the current session or 204 none.
 
-Allocated: `peer_private_key` is only on that GET. The agent writes a 0600 wg-quick config, `wg-quick up`, then POST ack `{"applied":true}`. The key is never logged.
+Allocated: `peer_private_key` is only on that GET. The agent writes a 0600 wg-quick config, `wg-quick up`, then POST ack `{"applied":true}`. Apply is idempotent: if conf + applied marker already match this `tunnel_id`, `wg-quick up` is skipped. The key is never logged.
 
-Revoked: GET omits the private key. The agent runs `wg-quick down`.
+Revoked or 204: `wg-quick down` and shred `/etc/wireguard/hypermesh.conf` so the peer key does not stay on disk.
 
 ## Install architecture
 

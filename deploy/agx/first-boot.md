@@ -42,17 +42,16 @@ On the device, after the NVIDIA image boots:
 
    `/etc/docker/daemon.json` should use `"default-runtime": "nvidia"` and must not treat x86 `--gpus` as the Jetson GPU path. Workloads start as `docker --runtime=nvidia`.
 
-4. Install `hypermesh-agent` to `/usr/local/bin/hypermesh-agent`.
-5. Install `deploy/agx/hypermesh-agent.service` to `/etc/systemd/system/`.
-6. Copy `deploy/agx/agent.env.example` to `/etc/hypermesh/agent.env`, set tenant id and enroll token, `chmod 0600`.
-7. `sudo mkdir -p /var/lib/hypermesh && sudo chmod 0700 /var/lib/hypermesh`
-8. `sudo systemctl enable --now hypermesh-agent`
-
-Install `wireguard-tools` so the agent can `wg-quick` an allocated session.
+4. Install `wireguard-tools` so the agent can `wg-quick` an allocated session.
+5. Install `hypermesh-agent` to `/usr/local/bin/hypermesh-agent`.
+6. Install `deploy/agx/hypermesh-agent.service` to `/etc/systemd/system/`.
+7. Copy `deploy/agx/agent.env.example` to `/etc/hypermesh/agent.env`, set tenant id and enroll token, `chmod 0600`.
+8. `sudo mkdir -p /var/lib/hypermesh && sudo chmod 0700 /var/lib/hypermesh`
+9. `sudo systemctl enable --now hypermesh-agent`
 
 The control plane the agent expects is Panopticon `products/hypermesh` on **:8010**. After enroll it persists `device_secret` in `/var/lib/hypermesh/device.json` (0600). Do not put that secret in `agent.env`, the unit command line, or journald.
 
-Empty `image_digest` on `lease_start` is a recorded no-op until a soak hash exists. Do not invent a catalog image or tokens/sec.
+Empty `image_digest` on `lease_start` POSTs `passed=false` (no soak image; not a running instance). `image_digest` must be `repo@digest` to start. Do not invent a catalog image or tokens/sec.
 
 ## Power
 
@@ -60,4 +59,4 @@ AGX Orin 64GB nvpmodel default is **30W (id 2)**. The agent reports `nvpmodel -q
 
 ## Catalog
 
-In-tree product 2 id: `llama-3.1-8b-q4`. Uncertified until a soak hash exists. Do not quote tokens/sec.
+In-tree P2 id: `llama-3.1-8b-q4`. Uncertified until a soak hash exists. Do not quote tokens/sec.

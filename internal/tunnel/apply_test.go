@@ -8,18 +8,8 @@ import (
 	"testing"
 )
 
-func TestApplyWritesConfigAndCallsUp(t *testing.T) {
-	dir := t.TempDir()
-	var got []string
-	r := &Runner{
-		Iface:     "hypermesh",
-		ConfigDir: dir,
-		Quick: func(_ context.Context, args ...string) error {
-			got = append(got, args...)
-			return nil
-		},
-	}
-	err := r.Apply(context.Background(), Session{
+func allocated() Session {
+	return Session{
 		TunnelID:        "tun-1",
 		Status:          "allocated",
 		Endpoint:        "198.51.100.10:51820",
@@ -27,12 +17,25 @@ func TestApplyWritesConfigAndCallsUp(t *testing.T) {
 		PeerPrivateKey:  "PEERPRIVATE",
 		AllowedIPs:      "10.8.0.0/24",
 		ClientAddress:   "10.8.0.2/32",
-	})
-	if err != nil {
+	}
+}
+
+func TestApplyWritesConfigAndCallsUp(t *testing.T) {
+	dir := t.TempDir()
+	var ops []string
+	r := &Runner{
+		Iface:     "hypermesh",
+		ConfigDir: dir,
+		Quick: func(_ context.Context, args ...string) error {
+			ops = append(ops, args[0])
+			return nil
+		},
+	}
+	if err := r.Apply(context.Background(), allocated()); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0] != "up" {
-		t.Fatalf("quick %v", got)
+	if len(ops) != 1 || ops[0] != "up" {
+		t.Fatalf("quick %v", ops)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "hypermesh.conf"))
 	if err != nil {
@@ -46,8 +49,32 @@ func TestApplyWritesConfigAndCallsUp(t *testing.T) {
 		t.Fatalf("conf mode %o", fi.Mode().Perm())
 	}
 	text := string(raw)
-	if !strings.Contains(text, "PrivateKey = PEERPRIVATE") || !strings.Contains(text, "Endpoint = 198.51.100.10:51820") {
+	if !strings.Contains(text, "PrivateKey = PEERPRIVATE") || !strings.Contains(text, idPrefix+"tun-1") {
 		t.Fatalf("config contents incomplete")
+	}
+}
+
+func TestApplyIdempotentSkipsSecondUp(t *testing.T) {
+	dir := t.TempDir()
+	var ups int
+	r := &Runner{
+		ConfigDir: dir,
+		Quick: func(_ context.Context, args ...string) error {
+			if args[0] == "up" {
+				ups++
+			}
+			return nil
+		},
+	}
+	ctx := context.Background()
+	if err := r.Apply(ctx, allocated()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Apply(ctx, allocated()); err != nil {
+		t.Fatal(err)
+	}
+	if ups != 1 {
+		t.Fatalf("wg-quick up count %d", ups)
 	}
 }
 
@@ -61,20 +88,43 @@ func TestApplyRequiresAllocatedKey(t *testing.T) {
 	}
 }
 
-func TestTeardownCallsDown(t *testing.T) {
-	var got []string
+func TestTeardownShredsConf(t *testing.T) {
+	dir := t.TempDir()
+	var ops []string
+	r := &Runner{
+		ConfigDir: dir,
+		Quick: func(_ context.Context, args ...string) error {
+			ops = append(ops, args[0])
+			return nil
+		},
+	}
+	if err := r.Apply(context.Background(), allocated()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Teardown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 2 || ops[0] != "up" || ops[1] != "down" {
+		t.Fatalf("%v", ops)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hypermesh.conf")); !os.IsNotExist(err) {
+		t.Fatal("conf must be shredded")
+	}
+	if _, err := os.Stat(filepath.Join(dir, appliedFile)); !os.IsNotExist(err) {
+		t.Fatal("applied marker must be removed")
+	}
+}
+
+func TestTeardownNoLocalIsNoop(t *testing.T) {
 	r := &Runner{
 		ConfigDir: t.TempDir(),
-		Quick: func(_ context.Context, args ...string) error {
-			got = append(got, args...)
+		Quick: func(context.Context, ...string) error {
+			t.Fatal("wg-quick must not run when nothing is local")
 			return nil
 		},
 	}
 	if err := r.Teardown(context.Background()); err != nil {
 		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0] != "down" {
-		t.Fatalf("%v", got)
 	}
 }
 
@@ -82,7 +132,7 @@ func TestApplyHonorsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r := &Runner{ConfigDir: t.TempDir()}
-	if err := r.Apply(ctx, Session{Status: "allocated", PeerPrivateKey: "x"}); err == nil {
+	if err := r.Apply(ctx, Session{Status: "allocated", PeerPrivateKey: "x", TunnelID: "t"}); err == nil {
 		t.Fatal("expected ctx error")
 	}
 }

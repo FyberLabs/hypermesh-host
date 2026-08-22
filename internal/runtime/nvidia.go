@@ -3,9 +3,9 @@
 //
 // The GPU path is `docker --runtime=nvidia`. Do not use x86 `--gpus`.
 //
-// Empty image_digest: Start does not pull or invent a catalog image.
-// It records a no-op handle for the lease and returns success. That is
-// not a tokens/sec claim and not a running model.
+// lease_start needs a real image ref `repo@digest`. A bare sha256:hex is
+// not runnable. An empty digest is not a running instance: Start fails
+// so the agent POSTs passed=false and the control plane does not go active.
 package runtime
 
 import (
@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
@@ -22,25 +23,30 @@ var (
 	ErrUsesGPUsFlag = errors.New("hypermesh: GPU path is NVIDIA Container Runtime (--runtime=nvidia), not x86 --gpus")
 	// ErrWrongRuntime means the job asked for something other than nvidia.
 	ErrWrongRuntime = errors.New("hypermesh: lease runtime must be nvidia")
+	// ErrNoImage means lease_start has no image_digest. Not a running instance.
+	ErrNoImage = errors.New("hypermesh: no image_digest; no soak image")
+	// ErrBareDigest means we were given sha256:hex without a repository.
+	ErrBareDigest = errors.New("hypermesh: image_digest is not repo@digest")
+	// ErrNoLeaseID means we cannot name the container without a lease_id.
+	ErrNoLeaseID = errors.New("hypermesh: lease_start requires lease_id")
 )
 
 // Spec is a leased workload from a lease_start job.
+// ImageDigest must be repo@digest (the locked job field). No extra CP fields.
 type Spec struct {
-	Name        string
 	LeaseID     string
 	CatalogID   string
 	ImageDigest string
 	Runtime     string
 }
 
-// Handle is a started container or a recorded no-op.
+// Handle is a started container.
 type Handle struct {
 	Name        string
 	LeaseID     string
 	CatalogID   string
 	ImageDigest string
 	ContainerID string
-	Noop        bool
 }
 
 // NVIDIA talks to docker with --runtime=nvidia.
@@ -54,34 +60,69 @@ func NewNVIDIA() *NVIDIA {
 	return &NVIDIA{Docker: "docker"}
 }
 
-// StartArgs is the docker argv for a spec with a digest.
-func StartArgs(spec Spec) []string {
-	args := []string{"run", "-d", "--runtime=nvidia"}
-	if spec.Name != "" {
-		args = append(args, "--name", spec.Name)
+// ImageRef accepts the locked image_digest field. It must be repo@digest.
+// Bare sha256:hex fails; we will not invent a registry or repository.
+func ImageRef(imageDigest string) (string, error) {
+	s := strings.TrimSpace(imageDigest)
+	if s == "" {
+		return "", ErrNoImage
 	}
-	args = append(args, spec.ImageDigest)
+	if !strings.Contains(s, "/") && strings.HasPrefix(s, "sha256:") {
+		return "", ErrBareDigest
+	}
+	repo, dig, ok := strings.Cut(s, "@")
+	if !ok || strings.TrimSpace(repo) == "" || !strings.HasPrefix(dig, "sha256:") {
+		return "", ErrBareDigest
+	}
+	return s, nil
+}
+
+// ContainerName is unique per lease so a second lease_start is not blocked.
+func ContainerName(leaseID string) string {
+	var b strings.Builder
+	b.WriteString("hypermesh-")
+	for _, r := range leaseID {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '.' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+// PullArgs is `docker pull repo@digest`.
+func PullArgs(ref string) []string {
+	return []string{"pull", ref}
+}
+
+// StartArgs is the docker run argv for a resolved repo@digest.
+func StartArgs(spec Spec, ref string) []string {
+	args := []string{"run", "-d", "--runtime=nvidia"}
+	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
+		args = append(args, "--name", name)
+	}
+	args = append(args, ref)
 	return args
 }
 
-// Start runs the image with the NVIDIA runtime.
-//
-// Empty ImageDigest: no docker invocation. Returns a Noop handle so the
-// agent can record the lease and POST passed=true. A later soak hash
-// replaces this.
+// Start pulls repo@digest then runs it with the NVIDIA runtime.
 func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if spec.Runtime != "" && spec.Runtime != "nvidia" {
 		return nil, ErrWrongRuntime
 	}
-	if strings.TrimSpace(spec.ImageDigest) == "" {
-		return &Handle{
-			Name:      spec.Name,
-			LeaseID:   spec.LeaseID,
-			CatalogID: spec.CatalogID,
-			Noop:      true,
-		}, nil
+	if strings.TrimSpace(spec.LeaseID) == "" {
+		return nil, ErrNoLeaseID
 	}
-	args := StartArgs(spec)
+	ref, err := ImageRef(spec.ImageDigest)
+	if err != nil {
+		return nil, err
+	}
+	name := ContainerName(spec.LeaseID)
+	if _, err := n.run(ctx, PullArgs(ref)...); err != nil {
+		return nil, fmt.Errorf("hypermesh runtime: docker pull: %w", err)
+	}
+	args := StartArgs(spec, ref)
 	for _, a := range args {
 		if a == "--gpus" || strings.HasPrefix(a, "--gpus=") {
 			return nil, ErrUsesGPUsFlag
@@ -91,23 +132,19 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("hypermesh runtime: docker start: %w", err)
 	}
-	id := strings.TrimSpace(string(out))
 	return &Handle{
-		Name:        spec.Name,
+		Name:        name,
 		LeaseID:     spec.LeaseID,
 		CatalogID:   spec.CatalogID,
-		ImageDigest: spec.ImageDigest,
-		ContainerID: id,
+		ImageDigest: ref,
+		ContainerID: strings.TrimSpace(string(out)),
 	}, nil
 }
 
-// Stop sends docker stop, or is a no-op for a recorded empty-digest start.
+// Stop sends docker stop.
 func (n *NVIDIA) Stop(ctx context.Context, h *Handle) error {
 	if h == nil {
 		return errors.New("hypermesh runtime: nil handle")
-	}
-	if h.Noop {
-		return nil
 	}
 	target := h.ContainerID
 	if target == "" {
@@ -131,7 +168,7 @@ func (n *NVIDIA) run(ctx context.Context, args ...string) ([]byte, error) {
 	if n.Run != nil {
 		return n.Run(ctx, name, args...)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
