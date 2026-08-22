@@ -2,11 +2,11 @@
 
 Host software for certified Jetson boxes. First machine: NVIDIA Jetson AGX Orin 64GB. Product name is **Hypermesh** or **Hyperme.sh**. This repo is not the control plane and does not live in FyberLabs/panopticon.
 
-The agent enrolls, heartbeats, and runs **stub-suite-v1** Path B against Panopticon `products/hypermesh` on port **8010**. It does not invent AIL, a subnet, Connect, public bot rental, or tokens/sec.
+The agent enrolls, heartbeats, applies the allocated WireGuard tunnel, and runs jobs against Panopticon `products/hypermesh` on port **8010**. It does not invent AIL, a subnet, Connect, public bot rental, or tokens/sec.
 
 ## Status
 
-First slice. Tunnel apply is a no-op until the control plane sends a payload (there is no tunnel HTTP yet). NVIDIA-runtime container start is an interface; Start without a workload digest errors instead of faking a lease. Catalog id `llama-3.1-8b-q4` is in-tree and uncertified.
+Agent HTTP matches the locked :8010 shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty `image_digest` on lease_start is a recorded no-op (no docker pull, no tok/s).
 
 ## Build and test
 
@@ -17,7 +17,7 @@ go test ./...
 go build -o hypermesh-agent ./cmd/agent
 ```
 
-Tests use `net/http/httptest`. They do not need a live Panopticon.
+Tests use `net/http/httptest` fixtures of the locked shapes. They do not need a live Panopticon.
 
 ## Run against :8010
 
@@ -34,20 +34,41 @@ export HYPERMESH_STATE_DIR=./state
 
 Same values as flags: `-control-plane-url`, `-tenant-id`, `-enroll-token`, `-state-dir`.
 
-Every request sends `X-Tenant-ID`. After enroll the process writes `device.json` (`device_id`, `credential_prefix` only). The enroll token is not stored. The control plane currently returns `credential_prefix` and does not check Bearer on agent routes; `-device-secret-header` is a hook for when that header is documented. Do not send a guessed `Authorization`.
+Enroll (`POST /agent/enroll`) is unauthenticated except `X-Tenant-ID`. The 200 body is `device_id`, `credential_prefix`, and `device_secret` (`hm_dev_…`, shown once). The agent writes those to `$STATE_DIR/device.json` at mode **0600**. The enroll token is not stored. The secret is never logged and must not be copied into unit command lines or journald.
 
-Agent routes used (and only these):
+After enroll, these routes send `Authorization: Bearer <device_secret>`, `X-Tenant-ID`, and `device_id` in the body or query:
 
 | Call | Path |
 |---|---|
-| Enroll | `POST /api/v1/hypermesh/agent/enroll` |
 | Heartbeat | `POST /api/v1/hypermesh/agent/heartbeat` |
 | Job pull | `GET /api/v1/hypermesh/agent/jobs?device_id=` |
-| Result | `POST /api/v1/hypermesh/agent/jobs/{id}/result` |
+| Result | `POST /api/v1/hypermesh/agent/jobs/{job_id}/result?device_id=` |
+| Tunnel | `GET /api/v1/hypermesh/agent/tunnel?device_id=` |
+| Tunnel ack | `POST /api/v1/hypermesh/agent/tunnel/ack?device_id=` |
 
-Heartbeat includes image hash, uptime, and thermal when available, plus an nvpmodel reading in the local log. Path B stub collects those and POSTs `passed` + `image_hash`. It is not a real cert suite.
+401 is missing/wrong secret. 403 is secret does not match `device_id`.
 
-Logs must not contain enroll tokens, device secrets, or renter prompts.
+If the seed AGX already has a `device_id` but lost the secret, it cannot re-enroll (409). Platform mints a new token with `POST /api/v1/hypermesh/devices/{device_id}/enroll-token` (`X-Tenant-ID` only). That helper exists on the client; the agent loop does not call it.
+
+### Jobs
+
+Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`, `catalog_id`, `image_digest`, `runtime`, `suite_id`.
+
+| kind | What the agent does |
+|---|---|
+| `path_b` / `instance_check` | stub-suite-v1: collect image hash / uptime / thermal, POST `passed` + `image_hash` |
+| `lease_start` | `docker --runtime=nvidia` when `image_digest` is set. If digest is empty (until soak), record a no-op handle and POST `passed=true`. No catalog image is invented. |
+| `lease_stop` | Stop the container (or clear the no-op record). Tunnel teardown waits for GET tunnel `status=revoked`. |
+
+Result body stays `{"passed", "image_hash?"}`.
+
+### Tunnel
+
+Control plane allocates on paid→starting. GET 200 is the current session or 204 none.
+
+Allocated: `peer_private_key` is only on that GET. The agent writes a 0600 wg-quick config, `wg-quick up`, then POST ack `{"applied":true}`. The key is never logged.
+
+Revoked: GET omits the private key. The agent runs `wg-quick down`.
 
 ## Install architecture
 
@@ -59,7 +80,7 @@ Pin **JetPack 7.2.1 / L4T r39.2.1** (Ubuntu 24.04 sample rootfs, kernel 6.8) unl
 
 On the flash host: `l4t_create_default_user.sh`. On the device: `multi-user.target`. Do not purge `gdm3` or `nvidia-l4t-3d-core`. Do not overwrite `/etc/nv_boot_control.conf`.
 
-Then: systemd unit + this agent + Docker from get.docker.com + JetPack `nvidia-container` + `nvidia-ctk runtime configure --runtime=docker` + Docker `default-runtime` nvidia. GPU path is `--runtime=nvidia`, never x86 `--gpus`.
+Then: systemd unit + this agent + Docker from get.docker.com + JetPack `nvidia-container` + `nvidia-ctk runtime configure --runtime=docker` + Docker `default-runtime` nvidia + `wireguard-tools`. GPU path is `--runtime=nvidia`, never x86 `--gpus`.
 
 AGX 64GB nvpmodel default is **30W (id 2)**. Report nvpmodel. Do not default MAXN + `jetson_clocks`.
 
@@ -73,16 +94,16 @@ Orin NX 16GB, not AGX. Seeed mfi **JP6.2 / 36.4.3** or **JP7.2.0 / 39.2.0** (not
 
 ```
 cmd/agent           process
-internal/api        four-route HTTP client
+internal/api        locked HTTP client (agent routes + optional enroll-token helper)
 internal/pathb      stub-suite-v1
 internal/runtime    NVIDIA Container Runtime start/stop
-internal/tunnel     WireGuard apply (no-op / honest error)
+internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
-internal/agent      enroll / heartbeat / job loop
+internal/agent      enroll / heartbeat / tunnel / job loop
 deploy/agx          systemd + first-boot
 deploy/seeed-j4012  placeholder
 ```
 
 ## Out of scope here
 
-Tunnel allocate, lease start, workload pull, a real Path B suite, Seeed factory flash, public bot rental, fake tok/s. Those wait on the control plane or a later slice.
+Payment-service, Kafka, a real Path B suite, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs.

@@ -15,74 +15,113 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/telem"
+	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
 
-func TestLoopEnrollHeartbeat204ThenJob(t *testing.T) {
-	const tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	const device = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	const jobID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+const (
+	testTenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	testDevice = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	testSecret = "hm_dev_fixture_secret"
+	testJob    = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+)
 
+type fakeTunnel struct {
+	mu        sync.Mutex
+	applied   []tunnel.Session
+	teardowns int
+}
+
+func (f *fakeTunnel) Apply(_ context.Context, sess tunnel.Session) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applied = append(f.applied, sess)
+	return nil
+}
+
+func (f *fakeTunnel) Teardown(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.teardowns++
+	return nil
+}
+
+func TestLoopEnrollBearerPersistAndPathB(t *testing.T) {
 	var mu sync.Mutex
 	var enrolls, heartbeats, pulls, results int
+	var enrollAuth, hbAuth string
 	var enrollBody api.EnrollRequest
-	var seenAuth string
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		enrolls++
+		enrollAuth = r.Header.Get("Authorization")
 		_ = json.NewDecoder(r.Body).Decode(&enrollBody)
-		seenAuth = r.Header.Get("Authorization")
 		mu.Unlock()
-		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: device, CredentialPrefix: "cafe0000"})
+		writeJSON(w, http.StatusOK, api.EnrollResponse{
+			DeviceID:         testDevice,
+			CredentialPrefix: "cafe0000",
+			DeviceSecret:     testSecret,
+		})
 	})
 	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		heartbeats++
+		hbAuth = r.Header.Get("Authorization")
 		mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		writeJSON(w, http.StatusOK, api.HeartbeatResponse{
-			DeviceID:   device,
+			DeviceID:   testDevice,
 			PathBState: api.PathBNeverRun,
 			AcceptedAt: time.Now().UTC(),
 		})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		pulls++
 		n := pulls
 		mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		if n == 1 {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		writeJSON(w, http.StatusOK, api.CertJob{
-			ID:        jobID,
-			TenantID:  tenant,
-			DeviceID:  device,
-			SuiteID:   "stub-suite-v1",
-			Kind:      api.KindPathB,
-			Status:    api.StatusPending,
-			CreatedAt: time.Now().UTC(),
+		writeJSON(w, http.StatusOK, api.Job{
+			JobID:    testJob,
+			Kind:     api.KindPathB,
+			DeviceID: testDevice,
+			SuiteID:  "stub-suite-v1",
 		})
 	})
-	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+jobID+"/result", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+testJob+"/result", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		results++
 		mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		var body api.JobResultRequest
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if !body.Passed {
 			t.Errorf("stub should pass, got %+v", body)
 		}
-		now := time.Now().UTC()
-		writeJSON(w, http.StatusOK, api.CertJob{
-			ID:          jobID,
-			Status:      api.StatusPassed,
-			SuiteID:     "stub-suite-v1",
-			CompletedAt: &now,
-			ImageHash:   body.ImageHash,
-		})
+		w.WriteHeader(http.StatusOK)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -94,89 +133,78 @@ func TestLoopEnrollHeartbeat204ThenJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := Config{
-		ControlPlaneURL: srv.URL,
-		TenantID:        tenant,
-		EnrollToken:     "one-time-token",
-		StateDir:        dir,
-		HeartbeatEvery:  40 * time.Millisecond,
-		JobEvery:        40 * time.Millisecond,
-		ImageHash:       "sha256:fixture",
-	}
-	a, err := New(cfg, discardLog())
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.telem = telem.Source{
-		UptimePath:    uptime,
-		ImageHashFile: filepath.Join(dir, "no-such-hash"),
-		LookPath:      func(string) (string, error) { return "", os.ErrNotExist },
-	}
-	a.pathb.Collector = a.telem
+	a := newTestAgent(t, srv.URL, dir, uptime, "one-time-token", "")
+	ft := &fakeTunnel{}
+	a.tunnels = ft
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- a.Run(ctx) }()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	waitLoop(t, a, func() bool {
 		mu.Lock()
-		ok := enrolls == 1 && heartbeats >= 1 && pulls >= 2 && results >= 1
-		mu.Unlock()
-		if ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancel()
-	<-done
+		defer mu.Unlock()
+		return enrolls == 1 && heartbeats >= 1 && pulls >= 2 && results >= 1
+	})
 
 	mu.Lock()
 	defer mu.Unlock()
-	if enrolls != 1 {
-		t.Fatalf("enrolls %d", enrolls)
+	if enrollAuth != "" {
+		t.Fatalf("enroll sent Authorization %q", enrollAuth)
 	}
-	if heartbeats < 1 || pulls < 2 || results < 1 {
-		t.Fatalf("hb=%d pulls=%d results=%d", heartbeats, pulls, results)
+	if hbAuth != "Bearer "+testSecret {
+		t.Fatalf("heartbeat auth %q", hbAuth)
 	}
 	if enrollBody.EnrollToken != "one-time-token" {
-		t.Fatalf("enroll body token missing")
-	}
-	if seenAuth != "" {
-		t.Fatalf("must not invent Bearer, got %q", seenAuth)
+		t.Fatal("enroll body token missing")
 	}
 
-	raw, err := os.ReadFile(filepath.Join(dir, "device.json"))
+	path := filepath.Join(dir, "device.json")
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "one-time-token") {
 		t.Fatal("enroll token written to state")
 	}
+	if !strings.Contains(string(raw), testSecret) {
+		t.Fatal("device_secret not persisted")
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("state mode %o", fi.Mode().Perm())
+	}
 	var st State
 	if err := json.Unmarshal(raw, &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.DeviceID != device || st.CredentialPrefix != "cafe0000" {
+	if st.DeviceID != testDevice || st.DeviceSecret != testSecret {
 		t.Fatalf("state %+v", st)
 	}
 }
 
-func TestSkipsEnrollWhenDeviceOnDisk(t *testing.T) {
-	const tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	const device = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-
+func TestSkipsEnrollWhenDeviceAndSecretOnDisk(t *testing.T) {
+	var heartbeats int
+	var mu sync.Mutex
 	mux := http.NewServeMux()
 	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("enroll must not run when device_id is on disk")
+		t.Errorf("enroll must not run when device_id+secret are on disk")
 		w.WriteHeader(http.StatusConflict)
 	})
 	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			t.Errorf("stored secret not sent")
+		}
+		mu.Lock()
+		heartbeats++
+		mu.Unlock()
 		writeJSON(w, http.StatusOK, api.HeartbeatResponse{
-			DeviceID:   device,
+			DeviceID:   testDevice,
 			PathBState: api.PathBGreen,
 			AcceptedAt: time.Now().UTC(),
 		})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -185,37 +213,266 @@ func TestSkipsEnrollWhenDeviceOnDisk(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "device.json"), []byte(`{"device_id":"`+device+`"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "device.json"), []byte(`{"device_id":"`+testDevice+`","device_secret":"`+testSecret+`"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "uptime"), []byte("1 1\n"), 0o644); err != nil {
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	a := newTestAgent(t, srv.URL, dir, uptime, "must-not-be-sent", "")
+	a.tunnels = &fakeTunnel{}
+	waitLoop(t, a, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return heartbeats >= 1
+	})
+}
+
+func TestTunnelApplyAckAndRevoke(t *testing.T) {
+	var mu sync.Mutex
+	acks := 0
+	phase := 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body api.TunnelAckRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Applied {
+			t.Errorf("ack applied=false")
+		}
+		mu.Lock()
+		acks++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		p := phase
+		mu.Unlock()
+		if p == 0 {
+			writeJSON(w, http.StatusOK, api.TunnelSession{
+				TunnelID:        "tun-1",
+				LeaseID:         "lease-1",
+				Status:          api.TunnelAllocated,
+				Endpoint:        "198.51.100.10:51820",
+				ServerPublicKey: "serverpub",
+				PeerPrivateKey:  "PEERPRIVATE",
+				AllowedIPs:      "10.8.0.0/24",
+				ClientAddress:   "10.8.0.2/32",
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, api.TunnelSession{
+			TunnelID: "tun-1",
+			LeaseID:  "lease-1",
+			Status:   api.TunnelRevoked,
+		})
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	waitLoop(t, a, func() bool {
+		ft.mu.Lock()
+		n := len(ft.applied)
+		ft.mu.Unlock()
+		mu.Lock()
+		nAck := acks
+		mu.Unlock()
+		return n >= 1 && nAck >= 1
+	})
+
+	ft.mu.Lock()
+	if len(ft.applied) < 1 || ft.applied[0].PeerPrivateKey != "PEERPRIVATE" {
+		ft.mu.Unlock()
+		t.Fatalf("apply %+v", ft.applied)
+	}
+	ft.mu.Unlock()
+
+	mu.Lock()
+	phase = 1
+	mu.Unlock()
+
+	waitLoop(t, a, func() bool {
+		ft.mu.Lock()
+		defer ft.mu.Unlock()
+		return ft.teardowns >= 1
+	})
+}
+
+func TestLeaseStartNoopAndStop(t *testing.T) {
+	var mu sync.Mutex
+	var kinds []api.JobKind
+	var dockerCalls int
+
+	jobs := []api.Job{
+		{JobID: "j-start", Kind: api.KindLeaseStart, DeviceID: testDevice, LeaseID: "lease-1", CatalogID: "llama-3.1-8b-q4", Runtime: "nvidia"},
+		{JobID: "j-stop", Kind: api.KindLeaseStop, DeviceID: testDevice, LeaseID: "lease-1"},
 	}
 
-	cfg := Config{
-		ControlPlaneURL: srv.URL,
-		TenantID:        tenant,
-		EnrollToken:     "must-not-be-sent",
-		StateDir:        dir,
-		HeartbeatEvery:  time.Hour,
-		JobEvery:        time.Hour,
-	}
-	a, err := New(cfg, discardLog())
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.telem = telem.Source{
-		UptimePath: filepath.Join(dir, "uptime"),
-		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
-	}
-	a.pathb.Collector = a.telem
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(jobs) == 0 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		j := jobs[0]
+		jobs = jobs[1:]
+		writeJSON(w, http.StatusOK, j)
+	})
+	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/j-start/result", func(w http.ResponseWriter, r *http.Request) {
+		var body api.JobResultRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Passed {
+			t.Errorf("empty-digest lease_start should pass (recorded no-op)")
+		}
+		mu.Lock()
+		kinds = append(kinds, api.KindLeaseStart)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/j-stop/result", func(w http.ResponseWriter, r *http.Request) {
+		var body api.JobResultRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Passed {
+			t.Errorf("lease_stop should pass")
+		}
+		mu.Lock()
+		kinds = append(kinds, api.KindLeaseStop)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- a.Run(ctx) }()
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	<-done
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	a.tunnels = &fakeTunnel{}
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		mu.Lock()
+		dockerCalls++
+		mu.Unlock()
+		return []byte("cid\n"), nil
+	}}
+
+	waitLoop(t, a, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(kinds) >= 2
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if dockerCalls != 0 {
+		t.Fatalf("empty digest must not invoke docker, calls=%d", dockerCalls)
+	}
+	if len(kinds) < 2 || kinds[0] != api.KindLeaseStart || kinds[1] != api.KindLeaseStop {
+		t.Fatalf("kinds %v", kinds)
+	}
+}
+
+func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
+	var mu sync.Mutex
+	var args []string
+	var passed bool
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		done := passed
+		mu.Unlock()
+		if done {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, http.StatusOK, api.Job{
+			JobID:       "j-dig",
+			Kind:        api.KindLeaseStart,
+			DeviceID:    testDevice,
+			LeaseID:     "lease-2",
+			CatalogID:   "llama-3.1-8b-q4",
+			ImageDigest: "sha256:abc",
+			Runtime:     "nvidia",
+		})
+	})
+	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/j-dig/result", func(w http.ResponseWriter, r *http.Request) {
+		var body api.JobResultRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		passed = body.Passed
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	a.tunnels = &fakeTunnel{}
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, a ...string) ([]byte, error) {
+		mu.Lock()
+		args = append([]string{}, a...)
+		mu.Unlock()
+		return []byte("cid9\n"), nil
+	}}
+
+	waitLoop(t, a, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return passed && len(args) > 0
+	})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "--gpus") {
+		t.Fatalf("docker args %v", args)
+	}
 }
 
 func TestValidateTenant(t *testing.T) {
@@ -224,6 +481,73 @@ func TestValidateTenant(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected tenant uuid error")
 	}
+}
+
+func TestDeviceIDWithoutSecretErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "device.json"), []byte(`{"device_id":"`+testDevice+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		ControlPlaneURL: "http://127.0.0.1:8010",
+		TenantID:        testTenant,
+		StateDir:        dir,
+		HeartbeatEvery:  time.Hour,
+		JobEvery:        time.Hour,
+	}
+	a, err := New(cfg, discardLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = a.ensureEnrolled(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "enroll-token") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
+	t.Helper()
+	cfg := Config{
+		ControlPlaneURL: url,
+		TenantID:        testTenant,
+		EnrollToken:     enroll,
+		StateDir:        dir,
+		HeartbeatEvery:  40 * time.Millisecond,
+		JobEvery:        40 * time.Millisecond,
+		ImageHash:       image,
+	}
+	if image == "" {
+		cfg.ImageHash = "sha256:fixture"
+	}
+	a, err := New(cfg, discardLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.telem = telem.Source{
+		UptimePath: uptime,
+		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
+	}
+	a.pathb.Collector = a.telem
+	return a
+}
+
+func waitLoop(t *testing.T, a *Agent, ok func() bool) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			cancel()
+			<-done
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("loop did not reach expected state")
 }
 
 func discardLog() *slog.Logger {

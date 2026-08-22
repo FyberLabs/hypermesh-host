@@ -48,7 +48,11 @@ On the device, after the NVIDIA image boots:
 7. `sudo mkdir -p /var/lib/hypermesh && sudo chmod 0700 /var/lib/hypermesh`
 8. `sudo systemctl enable --now hypermesh-agent`
 
-The control plane the agent expects is Panopticon `products/hypermesh` on **:8010**. There is no tunnel allocate HTTP and no lease-start / workload pull yet. The agent applies an empty tunnel (no-op) and will not start a container without an image digest.
+Install `wireguard-tools` so the agent can `wg-quick` an allocated session.
+
+The control plane the agent expects is Panopticon `products/hypermesh` on **:8010**. After enroll it persists `device_secret` in `/var/lib/hypermesh/device.json` (0600). Do not put that secret in `agent.env`, the unit command line, or journald.
+
+Empty `image_digest` on `lease_start` is a recorded no-op until a soak hash exists. Do not invent a catalog image or tokens/sec.
 
 ## Power
 

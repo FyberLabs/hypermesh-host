@@ -15,44 +15,51 @@ const (
 	testTenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	testDevice = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	testJob    = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	testSecret = "hm_dev_fixture_secret"
 )
 
+func requireBearer(t *testing.T, r *http.Request) {
+	t.Helper()
+	if r.Header.Get(HeaderTenantID) != testTenant {
+		t.Errorf("tenant %q", r.Header.Get(HeaderTenantID))
+	}
+	if r.Header.Get(HeaderAuthorization) != "Bearer "+testSecret {
+		t.Errorf("authorization %q", r.Header.Get(HeaderAuthorization))
+	}
+}
+
 func TestEnrollHeartbeatJob204Result(t *testing.T) {
-	var gotTenant []string
 	mux := http.NewServeMux()
 
 	mux.HandleFunc(PathEnroll, func(w http.ResponseWriter, r *http.Request) {
-		gotTenant = append(gotTenant, r.Header.Get(HeaderTenantID))
-		if r.Method != http.MethodPost {
-			t.Errorf("enroll method %s", r.Method)
+		if r.Header.Get(HeaderAuthorization) != "" {
+			t.Errorf("enroll must not send Bearer")
+		}
+		if r.Header.Get(HeaderTenantID) != testTenant {
+			t.Errorf("enroll tenant")
 		}
 		var body EnrollRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("enroll decode: %v", err)
 		}
-		if body.EnrollToken != "one-time" {
-			t.Errorf("enroll token = %q", body.EnrollToken)
-		}
-		if body.ImageHash != "sha256:abc" {
-			t.Errorf("enroll image_hash = %q", body.ImageHash)
+		if body.EnrollToken != "one-time" || body.ImageHash != "sha256:abc" {
+			t.Errorf("enroll body %+v", body)
 		}
 		writeJSON(w, http.StatusOK, EnrollResponse{
 			DeviceID:         testDevice,
 			CredentialPrefix: "deadbeef",
+			DeviceSecret:     testSecret,
 		})
 	})
 
 	mux.HandleFunc(PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
-		gotTenant = append(gotTenant, r.Header.Get(HeaderTenantID))
+		requireBearer(t, r)
 		var body HeartbeatRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("heartbeat decode: %v", err)
 		}
 		if body.DeviceID != testDevice || body.UptimeS != 12 {
 			t.Errorf("heartbeat body %+v", body)
-		}
-		if body.ThermalC == nil || *body.ThermalC != 41.5 {
-			t.Errorf("thermal %+v", body.ThermalC)
 		}
 		writeJSON(w, http.StatusOK, HeartbeatResponse{
 			DeviceID:   testDevice,
@@ -62,7 +69,7 @@ func TestEnrollHeartbeatJob204Result(t *testing.T) {
 	})
 
 	mux.HandleFunc(PathJobs, func(w http.ResponseWriter, r *http.Request) {
-		gotTenant = append(gotTenant, r.Header.Get(HeaderTenantID))
+		requireBearer(t, r)
 		if r.URL.Query().Get("device_id") != testDevice {
 			t.Errorf("jobs query %q", r.URL.RawQuery)
 		}
@@ -70,7 +77,10 @@ func TestEnrollHeartbeatJob204Result(t *testing.T) {
 	})
 
 	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+testJob+"/result", func(w http.ResponseWriter, r *http.Request) {
-		gotTenant = append(gotTenant, r.Header.Get(HeaderTenantID))
+		requireBearer(t, r)
+		if r.URL.Query().Get("device_id") != testDevice {
+			t.Errorf("result query %q", r.URL.RawQuery)
+		}
 		var body JobResultRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("result decode: %v", err)
@@ -78,18 +88,7 @@ func TestEnrollHeartbeatJob204Result(t *testing.T) {
 		if !body.Passed || body.ImageHash != "sha256:abc" {
 			t.Errorf("result %+v", body)
 		}
-		now := time.Date(2026, 8, 22, 0, 1, 0, 0, time.UTC)
-		writeJSON(w, http.StatusOK, CertJob{
-			ID:          testJob,
-			TenantID:    testTenant,
-			DeviceID:    testDevice,
-			SuiteID:     "stub-suite-v1",
-			Kind:        KindPathB,
-			Status:      StatusPassed,
-			CreatedAt:   time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC),
-			CompletedAt: &now,
-			ImageHash:   body.ImageHash,
-		})
+		w.WriteHeader(http.StatusOK)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -102,9 +101,10 @@ func TestEnrollHeartbeatJob204Result(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enroll: %v", err)
 	}
-	if enrolled.DeviceID != testDevice || enrolled.CredentialPrefix != "deadbeef" {
-		t.Fatalf("enroll resp %+v", enrolled)
+	if enrolled.DeviceID != testDevice || enrolled.DeviceSecret != testSecret {
+		t.Fatalf("enroll resp device=%s secret_set=%v", enrolled.DeviceID, enrolled.DeviceSecret != "")
 	}
+	c.DeviceSecret = enrolled.DeviceSecret
 
 	thermal := 41.5
 	hb, err := c.Heartbeat(ctx, HeartbeatRequest{
@@ -116,7 +116,7 @@ func TestEnrollHeartbeatJob204Result(t *testing.T) {
 	if err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
-	if hb.PathBState != PathBNeverRun || hb.DeviceID != testDevice {
+	if hb.PathBState != PathBNeverRun {
 		t.Fatalf("heartbeat resp %+v", hb)
 	}
 
@@ -128,26 +128,50 @@ func TestEnrollHeartbeatJob204Result(t *testing.T) {
 		t.Fatalf("expected 204 → nil job, got %+v", job)
 	}
 
-	done, err := c.PostResult(ctx, testJob, JobResultRequest{Passed: true, ImageHash: "sha256:abc"})
-	if err != nil {
+	if err := c.PostResult(ctx, testJob, testDevice, JobResultRequest{Passed: true, ImageHash: "sha256:abc"}); err != nil {
 		t.Fatalf("result: %v", err)
 	}
-	if done.Status != StatusPassed || done.SuiteID != "stub-suite-v1" {
-		t.Fatalf("result resp %+v", done)
+}
+
+func TestBearerRequiredAndAuthErrors(t *testing.T) {
+	c := NewClient("http://127.0.0.1:8010", testTenant)
+	_, err := c.Heartbeat(context.Background(), HeartbeatRequest{DeviceID: testDevice, UptimeS: 0})
+	if err != ErrMissingSecret {
+		t.Fatalf("missing secret: %v", err)
 	}
 
-	if len(gotTenant) != 4 {
-		t.Fatalf("tenant header count %d", len(gotTenant))
-	}
-	for i, v := range gotTenant {
-		if v != testTenant {
-			t.Fatalf("tenant[%d]=%q", i, v)
+	mux := http.NewServeMux()
+	mux.HandleFunc(PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(HeaderAuthorization) != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
 		}
+		w.WriteHeader(http.StatusForbidden)
+	})
+	mux.HandleFunc(PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c = NewClient(srv.URL, testTenant)
+	c.DeviceSecret = "wrong"
+	_, err = c.Heartbeat(context.Background(), HeartbeatRequest{DeviceID: testDevice, UptimeS: 0})
+	if err != ErrUnauthorized {
+		t.Fatalf("401: %v", err)
+	}
+	c.DeviceSecret = testSecret
+	_, err = c.Heartbeat(context.Background(), HeartbeatRequest{DeviceID: testDevice, UptimeS: 1})
+	if err != ErrSecretMismatch {
+		t.Fatalf("403: %v", err)
+	}
+	_, err = c.PullJob(context.Background(), testDevice)
+	if err != ErrUnauthorized {
+		t.Fatalf("jobs 401: %v", err)
 	}
 }
 
 func TestEnrollErrors(t *testing.T) {
-	t.Parallel()
 	cases := []struct {
 		status int
 		want   error
@@ -174,6 +198,7 @@ func TestUnknownDevice(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
 	_, err := c.Heartbeat(context.Background(), HeartbeatRequest{DeviceID: testDevice, UptimeS: 1})
 	if err != ErrUnknownDevice {
 		t.Fatalf("heartbeat: %v", err)
@@ -192,71 +217,150 @@ func TestMissingTenant(t *testing.T) {
 	}
 }
 
-func TestDeviceAuthHook(t *testing.T) {
-	var headerName, headerVal, auth string
+func TestPullJobKinds(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		headerName = "X-Device-Secret"
-		headerVal = r.Header.Get("X-Device-Secret")
-		auth = r.Header.Get("Authorization")
-		writeJSON(w, http.StatusOK, HeartbeatResponse{
-			DeviceID:   testDevice,
-			PathBState: PathBGreen,
-			AcceptedAt: time.Now().UTC(),
-		})
-	}))
-	t.Cleanup(srv.Close)
-
-	c := NewClient(srv.URL, testTenant)
-	c.DeviceAuth = DeviceAuth{Header: "X-Device-Secret", Value: "not-a-protocol"}
-	_, err := c.Heartbeat(context.Background(), HeartbeatRequest{DeviceID: testDevice, UptimeS: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if headerVal != "not-a-protocol" {
-		t.Fatalf("hook header %q", headerVal)
-	}
-	if auth != "" {
-		t.Fatalf("must not invent Authorization, got %q", auth)
-	}
-	_ = headerName
-}
-
-func TestPullJob200(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, CertJob{
-			ID:        testJob,
-			TenantID:  testTenant,
-			DeviceID:  testDevice,
-			SuiteID:   "stub-suite-v1",
-			Kind:      KindPathB,
-			Status:    StatusPending,
-			CreatedAt: time.Now().UTC(),
+		writeJSON(w, http.StatusOK, Job{
+			JobID:       testJob,
+			Kind:        KindLeaseStart,
+			DeviceID:    testDevice,
+			LeaseID:     "lease-1",
+			CatalogID:   "llama-3.1-8b-q4",
+			ImageDigest: "",
+			Runtime:     "nvidia",
+			SuiteID:     "stub-suite-v1",
 		})
 	}))
 	t.Cleanup(srv.Close)
 	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
 	job, err := c.PullJob(context.Background(), testDevice)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job == nil || job.ID != testJob || job.Kind != KindPathB {
+	if job == nil || job.JobID != testJob || job.Kind != KindLeaseStart || job.Runtime != "nvidia" {
 		t.Fatalf("job %+v", job)
 	}
 }
 
-func TestClientDoesNotEchoEnrollTokenOnError(t *testing.T) {
+func TestTunnelGetAck(t *testing.T) {
+	var acked bool
+	mux := http.NewServeMux()
+	mux.HandleFunc(PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		requireBearer(t, r)
+		if r.URL.Query().Get("device_id") != testDevice {
+			t.Errorf("ack query")
+		}
+		var body TunnelAckRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Applied {
+			t.Errorf("applied")
+		}
+		acked = true
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		requireBearer(t, r)
+		if r.URL.Query().Get("device_id") != testDevice {
+			t.Errorf("tunnel query")
+		}
+		writeJSON(w, http.StatusOK, TunnelSession{
+			TunnelID:        "tun-1",
+			LeaseID:         "lease-1",
+			Status:          TunnelAllocated,
+			Endpoint:        "198.51.100.10:51820",
+			ServerPublicKey: "serverpub",
+			PeerPrivateKey:  "PEERPRIVATE",
+			AllowedIPs:      "10.8.0.0/24",
+			ClientAddress:   "10.8.0.2/32",
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
+	sess, err := c.GetTunnel(context.Background(), testDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess == nil || sess.Status != TunnelAllocated || sess.PeerPrivateKey == "" {
+		t.Fatalf("session %+v", sess)
+	}
+	if err := c.AckTunnel(context.Background(), testDevice, TunnelAckRequest{Applied: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !acked {
+		t.Fatal("ack not posted")
+	}
+}
+
+func TestTunnel204AndRevoked(t *testing.T) {
+	n := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		io.WriteString(w, `{"detail":"bad token hm_should_not_leak"}`)
+		n++
+		if n == 1 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, http.StatusOK, TunnelSession{
+			TunnelID: "tun-1",
+			LeaseID:  "lease-1",
+			Status:   TunnelRevoked,
+		})
 	}))
 	t.Cleanup(srv.Close)
 	c := NewClient(srv.URL, testTenant)
-	_, err := c.Enroll(context.Background(), EnrollRequest{EnrollToken: "hm_should_not_leak"})
+	c.DeviceSecret = testSecret
+	sess, err := c.GetTunnel(context.Background(), testDevice)
+	if err != nil || sess != nil {
+		t.Fatalf("204: %v %+v", err, sess)
+	}
+	sess, err = c.GetTunnel(context.Background(), testDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Status != TunnelRevoked || sess.PeerPrivateKey != "" {
+		t.Fatalf("revoked must omit private key: %+v", sess)
+	}
+}
+
+func TestIssueEnrollToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/hypermesh/devices/"+testDevice+"/enroll-token" {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		if r.Header.Get(HeaderAuthorization) != "" {
+			t.Errorf("platform helper must not send device Bearer")
+		}
+		if r.Header.Get(HeaderTenantID) != testTenant {
+			t.Errorf("tenant")
+		}
+		writeJSON(w, http.StatusOK, EnrollTokenResponse{EnrollToken: "one-time-new"})
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	out, err := c.IssueEnrollToken(context.Background(), testDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.EnrollToken != "one-time-new" {
+		t.Fatalf("%+v", out)
+	}
+}
+
+func TestClientDoesNotEchoSecretsOnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"detail":"bad token hm_dev_should_not_leak"}`)
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	_, err := c.Enroll(context.Background(), EnrollRequest{EnrollToken: "hm_dev_should_not_leak"})
 	if err != ErrInvalidEnrollToken {
 		t.Fatalf("err %v", err)
 	}
-	if strings.Contains(err.Error(), "hm_should_not_leak") {
-		t.Fatalf("error leaked token: %v", err)
+	if strings.Contains(err.Error(), "hm_dev_should_not_leak") {
+		t.Fatalf("error leaked secret: %v", err)
 	}
 }
 

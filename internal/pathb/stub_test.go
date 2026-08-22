@@ -20,7 +20,7 @@ func (f fakeCollect) Collect(context.Context) (telem.Snapshot, error) {
 
 func TestStubPassesWithTelemetry(t *testing.T) {
 	r := Runner{Collector: fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 9}}}
-	got := r.Run(context.Background(), api.CertJob{SuiteID: SuiteStubV1, Kind: api.KindPathB})
+	got := r.Run(context.Background(), api.Job{SuiteID: SuiteStubV1, Kind: api.KindPathB})
 	if !got.Passed || got.ImageHash != "sha256:abc" {
 		t.Fatalf("%+v", got)
 	}
@@ -28,7 +28,7 @@ func TestStubPassesWithTelemetry(t *testing.T) {
 
 func TestUnknownSuiteFails(t *testing.T) {
 	r := Runner{Collector: fakeCollect{snap: telem.Snapshot{UptimeS: 1}}}
-	got := r.Run(context.Background(), api.CertJob{SuiteID: "real-suite-v9"})
+	got := r.Run(context.Background(), api.Job{SuiteID: "real-suite-v9"})
 	if got.Passed {
 		t.Fatalf("unknown suite must fail")
 	}
@@ -36,7 +36,7 @@ func TestUnknownSuiteFails(t *testing.T) {
 
 func TestTelemetryErrorFails(t *testing.T) {
 	r := Runner{Collector: fakeCollect{err: errors.New("no /proc")}}
-	got := r.Run(context.Background(), api.CertJob{SuiteID: SuiteStubV1})
+	got := r.Run(context.Background(), api.Job{SuiteID: SuiteStubV1})
 	if got.Passed {
 		t.Fatalf("expected fail")
 	}
@@ -44,7 +44,7 @@ func TestTelemetryErrorFails(t *testing.T) {
 
 func TestEmptySuiteIDIsStub(t *testing.T) {
 	r := Runner{Collector: fakeCollect{snap: telem.Snapshot{ImageHash: "h"}}}
-	got := r.Run(context.Background(), api.CertJob{Kind: api.KindInstanceCheck})
+	got := r.Run(context.Background(), api.Job{Kind: api.KindInstanceCheck})
 	if !got.Passed || got.ImageHash != "h" {
 		t.Fatalf("%+v", got)
 	}

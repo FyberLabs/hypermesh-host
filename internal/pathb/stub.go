@@ -35,7 +35,7 @@ type Runner struct {
 
 // Run collects host facts. Unknown suite ids fail. Missing telemetry fails.
 // A successful stub does not claim a loaded-model soak.
-func (r Runner) Run(ctx context.Context, job api.CertJob) Result {
+func (r Runner) Run(ctx context.Context, job api.Job) Result {
 	if job.SuiteID != "" && job.SuiteID != SuiteStubV1 {
 		return Result{Passed: false, Reason: fmt.Sprintf("unknown suite %s", job.SuiteID)}
 	}

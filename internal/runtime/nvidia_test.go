@@ -22,13 +22,27 @@ func TestStartArgsUseNVIDIARuntimeNotGPUs(t *testing.T) {
 	}
 }
 
-func TestStartWithoutDigest(t *testing.T) {
+func TestStartEmptyDigestIsNoop(t *testing.T) {
 	n := &NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("docker must not run without a digest")
 		return nil, nil
 	}}
-	_, err := n.Start(context.Background(), Spec{})
-	if err != ErrNoWorkload {
+	h, err := n.Start(context.Background(), Spec{LeaseID: "lease-1", CatalogID: "llama-3.1-8b-q4", Runtime: "nvidia"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == nil || !h.Noop || h.LeaseID != "lease-1" {
+		t.Fatalf("handle %+v", h)
+	}
+	if err := n.Stop(context.Background(), h); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartWrongRuntime(t *testing.T) {
+	n := NewNVIDIA()
+	_, err := n.Start(context.Background(), Spec{ImageDigest: "sha256:x", Runtime: "runc"})
+	if err != ErrWrongRuntime {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -44,12 +58,12 @@ func TestStartStop(t *testing.T) {
 			return []byte{}, nil
 		},
 	}
-	h, err := n.Start(context.Background(), Spec{Name: "lease", ImageDigest: "sha256:img"})
+	h, err := n.Start(context.Background(), Spec{Name: "lease", ImageDigest: "sha256:img", Runtime: "nvidia"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.ContainerID != "cid123" {
-		t.Fatalf("id %q", h.ContainerID)
+	if h.ContainerID != "cid123" || h.Noop {
+		t.Fatalf("id %q noop=%v", h.ContainerID, h.Noop)
 	}
 	if err := n.Stop(context.Background(), h); err != nil {
 		t.Fatal(err)

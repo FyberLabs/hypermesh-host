@@ -1,8 +1,10 @@
 // Package api is the HTTP client for the Hypermesh control-plane agent
 // routes on Panopticon (:8010, prefix /api/v1/hypermesh).
 //
-// There is no tunnel allocate HTTP and no lease-start / workload pull.
-// This package does not invent those endpoints.
+// After enroll, device routes send Authorization: Bearer <device_secret>
+// and X-Tenant-ID, with device_id in the body or query as a cross-check.
+// This package does not invent endpoints beyond the locked agent shapes
+// plus the optional platform enroll-token helper.
 package api
 
 import (
@@ -17,23 +19,12 @@ import (
 	"time"
 )
 
-// DeviceAuth is a hook for a future control-plane device secret header.
-//
-// Docs say the agent uses a device credential after enroll. The control
-// plane currently returns only credential_prefix and does not check Bearer
-// on agent routes. Leave Header empty until the control plane documents
-// a header name. Do not send Bearer on a guess.
-type DeviceAuth struct {
-	Header string
-	Value  string
-}
-
-// Client talks to the four agent routes.
+// Client talks to the locked agent routes.
 type Client struct {
-	BaseURL    string
-	TenantID   string
-	HTTP       *http.Client
-	DeviceAuth DeviceAuth
+	BaseURL      string
+	TenantID     string
+	DeviceSecret string // Authorization: Bearer; never log
+	HTTP         *http.Client
 }
 
 // NewClient returns a client with a 15s HTTP timeout.
@@ -45,29 +36,29 @@ func NewClient(baseURL, tenantID string) *Client {
 	}
 }
 
-// Enroll exchanges a one-time enroll token for a device_id.
-// The caller must not log req.EnrollToken.
+// Enroll exchanges a one-time enroll token for device_id + device_secret.
+// Do not log req.EnrollToken or the returned DeviceSecret.
 func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (EnrollResponse, error) {
 	var out EnrollResponse
-	err := c.doJSON(ctx, http.MethodPost, PathEnroll, nil, req, http.StatusOK, &out)
+	err := c.doJSON(ctx, http.MethodPost, PathEnroll, nil, req, http.StatusOK, &out, false)
 	return out, err
 }
 
-// Heartbeat reports device liveness. uptime_s must be >= 0.
+// Heartbeat reports device liveness. Requires Bearer. uptime_s must be >= 0.
 func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (HeartbeatResponse, error) {
 	if req.UptimeS < 0 {
 		req.UptimeS = 0
 	}
 	var out HeartbeatResponse
-	err := c.doJSON(ctx, http.MethodPost, PathHeartbeat, nil, req, http.StatusOK, &out)
+	err := c.doJSON(ctx, http.MethodPost, PathHeartbeat, nil, req, http.StatusOK, &out, true)
 	return out, err
 }
 
-// PullJob returns the next pending job, or (nil, nil) on 204.
-func (c *Client) PullJob(ctx context.Context, deviceID string) (*CertJob, error) {
+// PullJob returns the next pending job, or (nil, nil) on 204. Requires Bearer.
+func (c *Client) PullJob(ctx context.Context, deviceID string) (*Job, error) {
 	q := url.Values{"device_id": {deviceID}}
-	var out CertJob
-	err := c.doJSON(ctx, http.MethodGet, PathJobs, q, nil, http.StatusOK, &out)
+	var out Job
+	err := c.doJSON(ctx, http.MethodGet, PathJobs, q, nil, http.StatusOK, &out, true)
 	if err == errNoContent {
 		return nil, nil
 	}
@@ -77,19 +68,50 @@ func (c *Client) PullJob(ctx context.Context, deviceID string) (*CertJob, error)
 	return &out, nil
 }
 
-// PostResult reports a stub Path B (or instance-check) outcome.
-func (c *Client) PostResult(ctx context.Context, jobID string, req JobResultRequest) (CertJob, error) {
-	var out CertJob
+// PostResult reports a job outcome. Requires Bearer. device_id is a query cross-check.
+func (c *Client) PostResult(ctx context.Context, jobID, deviceID string, req JobResultRequest) error {
+	q := url.Values{"device_id": {deviceID}}
 	path := fmt.Sprintf(PathJobResult, url.PathEscape(jobID))
-	err := c.doJSON(ctx, http.MethodPost, path, nil, req, http.StatusOK, &out)
+	return c.doJSON(ctx, http.MethodPost, path, q, req, http.StatusOK, nil, true)
+}
+
+// GetTunnel returns the current session, or (nil, nil) on 204. Requires Bearer.
+func (c *Client) GetTunnel(ctx context.Context, deviceID string) (*TunnelSession, error) {
+	q := url.Values{"device_id": {deviceID}}
+	var out TunnelSession
+	err := c.doJSON(ctx, http.MethodGet, PathTunnel, q, nil, http.StatusOK, &out, true)
+	if err == errNoContent {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AckTunnel tells the control plane wg-quick (or equivalent) applied.
+func (c *Client) AckTunnel(ctx context.Context, deviceID string, req TunnelAckRequest) error {
+	q := url.Values{"device_id": {deviceID}}
+	return c.doJSON(ctx, http.MethodPost, PathTunnelAck, q, req, http.StatusOK, nil, true)
+}
+
+// IssueEnrollToken is a platform helper: POST /devices/{id}/enroll-token.
+// Tenant header only. Not used by the agent loop. Do not log the token.
+func (c *Client) IssueEnrollToken(ctx context.Context, deviceID string) (EnrollTokenResponse, error) {
+	var out EnrollTokenResponse
+	path := fmt.Sprintf(PathDeviceEnrollToken, url.PathEscape(deviceID))
+	err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, http.StatusOK, &out, false)
 	return out, err
 }
 
 var errNoContent = fmt.Errorf("no content")
 
-func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, body any, want int, dest any) error {
+func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, body any, want int, dest any, bearer bool) error {
 	if strings.TrimSpace(c.TenantID) == "" {
 		return ErrMissingTenant
+	}
+	if bearer && strings.TrimSpace(c.DeviceSecret) == "" {
+		return ErrMissingSecret
 	}
 
 	u, err := url.Parse(c.BaseURL)
@@ -118,8 +140,8 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if h := strings.TrimSpace(c.DeviceAuth.Header); h != "" && c.DeviceAuth.Value != "" {
-		req.Header.Set(h, c.DeviceAuth.Value)
+	if bearer {
+		req.Header.Set(HeaderAuthorization, "Bearer "+c.DeviceSecret)
 	}
 
 	httpClient := c.HTTP

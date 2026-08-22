@@ -25,25 +25,24 @@ type Config struct {
 	StateDir        string
 	HeartbeatEvery  time.Duration
 	JobEvery        time.Duration
-	// DeviceSecretHeader is empty until the control plane documents one.
-	DeviceSecretHeader string
-	DeviceSecret       string
-	ImageHash          string
+	// DeviceSecret is an optional recovery override. Prefer the value
+	// persisted at 0600 after enroll. Never log it.
+	DeviceSecret string
+	ImageHash    string
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
 // after this returns.
 func FromEnv() Config {
 	return Config{
-		ControlPlaneURL:    envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
-		TenantID:           os.Getenv("HYPERMESH_TENANT_ID"),
-		EnrollToken:        os.Getenv("HYPERMESH_ENROLL_TOKEN"),
-		StateDir:           envOr("HYPERMESH_STATE_DIR", defaultStateDir),
-		HeartbeatEvery:     defaultHeartbeat,
-		JobEvery:           defaultJobInterval,
-		DeviceSecretHeader: os.Getenv("HYPERMESH_DEVICE_SECRET_HEADER"),
-		DeviceSecret:       os.Getenv("HYPERMESH_DEVICE_SECRET"),
-		ImageHash:          os.Getenv("HYPERMESH_IMAGE_HASH"),
+		ControlPlaneURL: envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
+		TenantID:        os.Getenv("HYPERMESH_TENANT_ID"),
+		EnrollToken:     os.Getenv("HYPERMESH_ENROLL_TOKEN"),
+		StateDir:        envOr("HYPERMESH_STATE_DIR", defaultStateDir),
+		HeartbeatEvery:  defaultHeartbeat,
+		JobEvery:        defaultJobInterval,
+		DeviceSecret:    os.Getenv("HYPERMESH_DEVICE_SECRET"),
+		ImageHash:       os.Getenv("HYPERMESH_IMAGE_HASH"),
 	}
 }
 

@@ -4,12 +4,16 @@ import "time"
 
 // Paths under the Hypermesh control-plane prefix.
 const (
-	Prefix         = "/api/v1/hypermesh"
-	PathEnroll     = Prefix + "/agent/enroll"
-	PathHeartbeat  = Prefix + "/agent/heartbeat"
-	PathJobs       = Prefix + "/agent/jobs"
-	PathJobResult  = Prefix + "/agent/jobs/%s/result"
-	HeaderTenantID = "X-Tenant-ID"
+	Prefix                = "/api/v1/hypermesh"
+	PathEnroll            = Prefix + "/agent/enroll"
+	PathHeartbeat         = Prefix + "/agent/heartbeat"
+	PathJobs              = Prefix + "/agent/jobs"
+	PathJobResult         = Prefix + "/agent/jobs/%s/result"
+	PathTunnel            = Prefix + "/agent/tunnel"
+	PathTunnelAck         = Prefix + "/agent/tunnel/ack"
+	PathDeviceEnrollToken = Prefix + "/devices/%s/enroll-token"
+	HeaderTenantID        = "X-Tenant-ID"
+	HeaderAuthorization   = "Authorization"
 )
 
 // EnrollRequest is POST /agent/enroll.
@@ -19,13 +23,11 @@ type EnrollRequest struct {
 }
 
 // EnrollResponse is the 200 body from enroll.
-//
-// The control plane currently returns credential_prefix only. It does not
-// issue a device secret and does not check Bearer on agent routes. Do not
-// treat CredentialPrefix as a credential to send.
+// DeviceSecret (hm_dev_…) is shown once. Persist it; never log it.
 type EnrollResponse struct {
 	DeviceID         string `json:"device_id"`
 	CredentialPrefix string `json:"credential_prefix"`
+	DeviceSecret     string `json:"device_secret"`
 }
 
 // HeartbeatRequest is POST /agent/heartbeat.
@@ -47,46 +49,68 @@ const (
 )
 
 // HeartbeatResponse is the 200 body from heartbeat.
-// The control plane currently persists last_heartbeat_at and last_image_hash.
 type HeartbeatResponse struct {
 	DeviceID   string     `json:"device_id"`
 	PathBState PathBState `json:"path_b_state"`
 	AcceptedAt time.Time  `json:"accepted_at"`
 }
 
-// CertJobKind is the job kind scheduled by the platform.
-type CertJobKind string
+// JobKind is a pulled job kind.
+type JobKind string
 
 const (
-	KindPathB         CertJobKind = "path_b"
-	KindInstanceCheck CertJobKind = "instance_check"
+	KindPathB         JobKind = "path_b"
+	KindInstanceCheck JobKind = "instance_check"
+	KindLeaseStart    JobKind = "lease_start"
+	KindLeaseStop     JobKind = "lease_stop"
 )
 
-// CertJobStatus is the job status.
-type CertJobStatus string
-
-const (
-	StatusPending CertJobStatus = "pending"
-	StatusPassed  CertJobStatus = "passed"
-	StatusFailed  CertJobStatus = "failed"
-)
-
-// CertJob is a Path B or instance-check job. The control plane does not
-// send a suite payload or commands. suite_id defaults to stub-suite-v1.
-type CertJob struct {
-	ID          string        `json:"id"`
-	TenantID    string        `json:"tenant_id"`
-	DeviceID    string        `json:"device_id"`
-	SuiteID     string        `json:"suite_id"`
-	Kind        CertJobKind   `json:"kind"`
-	Status      CertJobStatus `json:"status"`
-	CreatedAt   time.Time     `json:"created_at"`
-	CompletedAt *time.Time    `json:"completed_at"`
-	ImageHash   string        `json:"image_hash"`
+// Job is GET /agent/jobs. One pending job or 204. No suite payload.
+type Job struct {
+	JobID       string  `json:"job_id"`
+	Kind        JobKind `json:"kind"`
+	DeviceID    string  `json:"device_id"`
+	LeaseID     string  `json:"lease_id,omitempty"`
+	CatalogID   string  `json:"catalog_id,omitempty"`
+	ImageDigest string  `json:"image_digest,omitempty"`
+	Runtime     string  `json:"runtime,omitempty"`
+	SuiteID     string  `json:"suite_id,omitempty"`
 }
 
 // JobResultRequest is POST /agent/jobs/{job_id}/result.
 type JobResultRequest struct {
 	Passed    bool   `json:"passed"`
 	ImageHash string `json:"image_hash,omitempty"`
+}
+
+// TunnelStatus is the control-plane session state.
+type TunnelStatus string
+
+const (
+	TunnelAllocated TunnelStatus = "allocated"
+	TunnelRevoked   TunnelStatus = "revoked"
+)
+
+// TunnelSession is GET /agent/tunnel.
+// PeerPrivateKey is present only while status=allocated, and only on this GET.
+// Never log it.
+type TunnelSession struct {
+	TunnelID        string       `json:"tunnel_id"`
+	LeaseID         string       `json:"lease_id"`
+	Status          TunnelStatus `json:"status"`
+	Endpoint        string       `json:"endpoint"`
+	ServerPublicKey string       `json:"server_public_key"`
+	PeerPrivateKey  string       `json:"peer_private_key,omitempty"`
+	AllowedIPs      string       `json:"allowed_ips"`
+	ClientAddress   string       `json:"client_address"`
+}
+
+// TunnelAckRequest is POST /agent/tunnel/ack after wg-quick (or equivalent).
+type TunnelAckRequest struct {
+	Applied bool `json:"applied"`
+}
+
+// EnrollTokenResponse is POST /devices/{device_id}/enroll-token (platform).
+type EnrollTokenResponse struct {
+	EnrollToken string `json:"enroll_token"`
 }
