@@ -1,0 +1,18 @@
+[Unit]
+Description=Hypermesh host agent
+Documentation=https://github.com/FyberLabs/hypermesh-host
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/hypermesh/agent.env
+ExecStart=/usr/local/bin/hypermesh-agent
+Restart=on-failure
+RestartSec=5
+# Enroll tokens and any future device secret live in agent.env (mode 0600),
+# not on the unit command line and not in journal extra fields.
+
+[Install]
+WantedBy=multi-user.target
