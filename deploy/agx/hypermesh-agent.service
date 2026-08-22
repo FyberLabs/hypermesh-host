@@ -1,0 +1,19 @@
+[Unit]
+Description=Hypermesh host agent
+Documentation=https://github.com/FyberLabs/hypermesh-host
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/hypermesh/agent.env
+ExecStart=/usr/local/bin/hypermesh-agent
+Restart=on-failure
+RestartSec=5
+# Enroll token may be in agent.env (mode 0600) for first boot only.
+# device_secret lives in $HYPERMESH_STATE_DIR/device.json (0600), not agent.env.
+# Do not put secrets on the unit command line or in journal extra fields.
+
+[Install]
+WantedBy=multi-user.target
