@@ -5,3 +5,4 @@
 *.exe
 .env
 agent.env
+deploy/agx/workload/model.gguf

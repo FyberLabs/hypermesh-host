@@ -41,10 +41,13 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	}
 	src := telem.Default()
 	return &Agent{
-		cfg:     cfg,
-		client:  api.NewClient(cfg.ControlPlaneURL, cfg.TenantID),
-		telem:   src,
-		pathb:   pathb.Runner{Collector: src},
+		cfg:    cfg,
+		client: api.NewClient(cfg.ControlPlaneURL, cfg.TenantID),
+		telem:  src,
+		pathb: pathb.Runner{
+			Collector: src,
+			Endpoint:  cfg.CompletionsEndpoint(),
+		},
 		runtime: runtime.NewNVIDIA(),
 		tunnels: tunnel.NewRunner(),
 		log:     log,
@@ -107,10 +110,10 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		return nil
 	}
 	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) == "" {
-		return fmt.Errorf("hypermesh: device_id on disk but no device_secret; this device cannot re-enroll — mint a token with POST /api/v1/hypermesh/devices/{device_id}/enroll-token")
+		return fmt.Errorf("hypermesh: this box has an id on disk but no secret; it cannot enroll again — ask for a new enroll-token")
 	}
 	if strings.TrimSpace(a.cfg.EnrollToken) == "" {
-		return fmt.Errorf("hypermesh: no device_id+secret on disk and no enroll token")
+		return fmt.Errorf("hypermesh: this box has no saved identity and no enroll token")
 	}
 
 	snap, err := a.telem.Collect(ctx)
@@ -124,10 +127,10 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		ImageHash:   image,
 	})
 	if err != nil {
-		return fmt.Errorf("hypermesh: enroll: %w", err)
+		return fmt.Errorf("hypermesh: could not enroll this box: %w", err)
 	}
 	if strings.TrimSpace(resp.DeviceSecret) == "" {
-		return fmt.Errorf("hypermesh: enroll returned no device_secret")
+		return fmt.Errorf("hypermesh: enroll did not return a secret")
 	}
 	st = State{
 		DeviceID:         resp.DeviceID,
@@ -261,6 +264,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		CatalogID:   job.CatalogID,
 		ImageDigest: job.ImageDigest,
 		Runtime:     job.Runtime,
+		HostPort:    a.cfg.PublishPort(),
 	})
 	if err != nil {
 		reason := "runtime start failed"

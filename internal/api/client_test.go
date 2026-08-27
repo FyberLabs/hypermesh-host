@@ -227,7 +227,7 @@ func TestPullJobKinds(t *testing.T) {
 			CatalogID:   "llama-3.1-8b-q4",
 			ImageDigest: "",
 			Runtime:     "nvidia",
-			SuiteID:     "stub-suite-v1",
+			SuiteID:     "thin-v1",
 		})
 	}))
 	t.Cleanup(srv.Close)
