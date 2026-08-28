@@ -324,6 +324,110 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 	})
 }
 
+func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
+	var mu sync.Mutex
+	acks, gets := 0, 0
+
+	samePeer := func(tun, lease string) api.TunnelSession {
+		return api.TunnelSession{
+			TunnelID:        tun,
+			LeaseID:         lease,
+			Status:          api.TunnelAllocated,
+			Endpoint:        "198.51.100.10:51820",
+			ServerPublicKey: "serverpub",
+			PeerPrivateKey:  "PEERPRIVATE",
+			AllowedIPs:      "10.8.0.0/24",
+			ClientAddress:   "10.8.0.2/32",
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body api.TunnelAckRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Applied {
+			t.Errorf("ack applied=false")
+		}
+		mu.Lock()
+		acks++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		gets++
+		n := gets
+		mu.Unlock()
+		if n == 1 {
+			writeJSON(w, http.StatusOK, samePeer("tun-1", "lease-1"))
+			return
+		}
+		writeJSON(w, http.StatusOK, samePeer("tun-2", "lease-2"))
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+
+	var ops []string
+	a.tunnels = &tunnel.Runner{
+		ConfigDir: t.TempDir(),
+		Quick: func(_ context.Context, args ...string) error {
+			mu.Lock()
+			ops = append(ops, args[0])
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	waitLoop(t, a, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return gets >= 2 && acks >= 1
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	ups, downs := 0, 0
+	for _, op := range ops {
+		switch op {
+		case "up":
+			ups++
+		case "down":
+			downs++
+		}
+	}
+	if ups != 1 {
+		t.Fatalf("same host peer must wg-quick up once, ops=%v", ops)
+	}
+	if downs != 0 {
+		t.Fatalf("lease/tunnel ticket change must not teardown, ops=%v", ops)
+	}
+	if acks < 1 {
+		t.Fatal("expected at least one ack")
+	}
+}
+
 func TestEmptyAndUnknownKindFail(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")

@@ -11,6 +11,7 @@ import (
 func allocated() Session {
 	return Session{
 		TunnelID:        "tun-1",
+		LeaseID:         "lease-1",
 		Status:          "allocated",
 		Endpoint:        "198.51.100.10:51820",
 		ServerPublicKey: "serverpub",
@@ -31,7 +32,8 @@ func TestApplyWritesConfigAndCallsUp(t *testing.T) {
 			return nil
 		},
 	}
-	if err := r.Apply(context.Background(), allocated()); err != nil {
+	sess := allocated()
+	if err := r.Apply(context.Background(), sess); err != nil {
 		t.Fatal(err)
 	}
 	if len(ops) != 1 || ops[0] != "up" {
@@ -49,8 +51,21 @@ func TestApplyWritesConfigAndCallsUp(t *testing.T) {
 		t.Fatalf("conf mode %o", fi.Mode().Perm())
 	}
 	text := string(raw)
-	if !strings.Contains(text, "PrivateKey = PEERPRIVATE") || !strings.Contains(text, idPrefix+"tun-1") {
+	if !strings.Contains(text, "PrivateKey = PEERPRIVATE") {
 		t.Fatalf("config contents incomplete")
+	}
+	if strings.Contains(text, "tun-1") || strings.Contains(text, "lease-1") {
+		t.Fatal("conf must not treat ticket ids as a new peer")
+	}
+	marker, err := os.ReadFile(filepath.Join(dir, appliedFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(marker), "PEERPRIVATE") {
+		t.Fatal("applied marker must not store the key")
+	}
+	if strings.TrimSpace(string(marker)) != PeerFingerprint(sess) {
+		t.Fatalf("applied marker should be the host-peer fingerprint")
 	}
 }
 
@@ -75,6 +90,94 @@ func TestApplyIdempotentSkipsSecondUp(t *testing.T) {
 	}
 	if ups != 1 {
 		t.Fatalf("wg-quick up count %d", ups)
+	}
+}
+
+func TestApplySamePeerDifferentTicketsSkipsUp(t *testing.T) {
+	dir := t.TempDir()
+	var ops []string
+	r := &Runner{
+		ConfigDir: dir,
+		Quick: func(_ context.Context, args ...string) error {
+			ops = append(ops, args[0])
+			return nil
+		},
+	}
+	ctx := context.Background()
+	first := allocated()
+	second := allocated()
+	second.TunnelID = "tun-2"
+	second.LeaseID = "lease-2"
+	if err := r.Apply(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Apply(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 || ops[0] != "up" {
+		t.Fatalf("ticket change must not bounce the host peer: %v", ops)
+	}
+}
+
+func TestApplyRestartDoesNotBounceIdenticalPeer(t *testing.T) {
+	dir := t.TempDir()
+	var ups int
+	quick := func(_ context.Context, args ...string) error {
+		if args[0] == "up" {
+			ups++
+		}
+		return nil
+	}
+	ctx := context.Background()
+	if err := (&Runner{ConfigDir: dir, Quick: quick}).Apply(ctx, allocated()); err != nil {
+		t.Fatal(err)
+	}
+	again := allocated()
+	again.TunnelID = "tun-restart"
+	again.LeaseID = "lease-restart"
+	if err := (&Runner{ConfigDir: dir, Quick: quick}).Apply(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	if ups != 1 {
+		t.Fatalf("restart must not re-up an identical host peer: ups=%d", ups)
+	}
+}
+
+func TestApplyChangedEndpointReUps(t *testing.T) {
+	dir := t.TempDir()
+	var ops []string
+	r := &Runner{
+		ConfigDir: dir,
+		Quick: func(_ context.Context, args ...string) error {
+			ops = append(ops, args[0])
+			return nil
+		},
+	}
+	ctx := context.Background()
+	if err := r.Apply(ctx, allocated()); err != nil {
+		t.Fatal(err)
+	}
+	next := allocated()
+	next.Endpoint = "198.51.100.99:51820"
+	if err := r.Apply(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 3 || ops[0] != "up" || ops[1] != "down" || ops[2] != "up" {
+		t.Fatalf("peer field change should down then up: %v", ops)
+	}
+}
+
+func TestPeerFingerprintIgnoresTickets(t *testing.T) {
+	a := allocated()
+	b := allocated()
+	b.TunnelID = "other-tun"
+	b.LeaseID = "other-lease"
+	if PeerFingerprint(a) != PeerFingerprint(b) {
+		t.Fatal("tunnel_id and lease_id must not change the host-peer fingerprint")
+	}
+	b.Endpoint = "203.0.113.1:51820"
+	if PeerFingerprint(a) == PeerFingerprint(b) {
+		t.Fatal("endpoint change must change the fingerprint")
 	}
 }
 

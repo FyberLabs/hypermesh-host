@@ -61,7 +61,7 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 | `path_b` | thin-v1: collect image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` is up, POST a pinned probe and require a real choice. If that endpoint is down, telem still passes and inference is recorded as skipped. |
 | `instance_check` | thin-v1: must hit that completions endpoint and fail if there is no real `choices[0].message.content`. This is the container-answers gate. |
 | `lease_start` | `image_digest` must be `repo@digest`. `docker pull` then `docker --runtime=nvidia -p 8080:8080 --name hypermesh-<lease_id>`. Empty digest or bare `sha256:hex` → `passed=false`. Host port is `HYPERMESH_LISTEN_PORT` (default 8080). Empty/unknown `kind` → `passed=false`. |
-| `lease_stop` | Stop the container named for that lease. Tunnel teardown waits for GET tunnel `status=revoked`. |
+| `lease_stop` | Stop the container named for that lease. Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
 
 Result body stays `{"passed", "image_hash?"}`. The probe and the completion text are never logged and never placed in the result.
 
@@ -69,9 +69,11 @@ Result body stays `{"passed", "image_hash?"}`. The probe and the completion text
 
 Control plane allocates on paid→starting. GET 200 is the current session or 204 none. No `listen_port` on the GET.
 
-Allocated: `peer_private_key` is only on that GET. This box writes a 0600 wg-quick config, `wg-quick up`, then POST ack `{"applied":true}`. Apply the fields it is given (Fyber router; planned `wg.test.hyperme.sh:51820`). Apply is idempotent: if conf + applied marker already match this `tunnel_id`, `wg-quick up` is skipped. The key is never logged. Do not invent a lab peer.
+One WireGuard peer per **host**, not per lease. `lease_id` / `tunnel_id` on the GET are tickets on that same peer.
 
-Revoked or 204: `wg-quick down` and shred `/etc/wireguard/hypermesh.conf` so the peer key does not stay on disk.
+Allocated: `peer_private_key` is only on that GET. This box writes a 0600 wg-quick config, `wg-quick up`, then POST ack `{"applied":true}`. Apply the fields it is given (Fyber router; planned `wg.test.hyperme.sh:51820`). `wg-quick up` runs only when `endpoint`, `server_public_key`, `peer_private_key`, `client_address`, or `allowed_ips` change. A restart that sees the same fingerprint does not bounce the iface. The key is never logged. Do not invent a lab peer.
+
+Revoked (host peer revoked) or 204 (no host session): `wg-quick down` and shred `/etc/wireguard/hypermesh.conf` so the peer key does not stay on disk. Do not teardown because `lease_id` changed. `lease_start` / `lease_stop` do not `wg-quick` down/up.
 
 The container is reachable at the WG `client_address` on port 8080. The router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
 

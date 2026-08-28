@@ -28,7 +28,7 @@ type Agent struct {
 	log     *slog.Logger
 	state   State
 	lease   *runtime.Handle
-	applied string // last allocated tunnel_id we applied
+	applied string // fingerprint of the host peer we last acked (not tunnel_id)
 }
 
 // New builds an agent. log may be nil.
@@ -186,10 +186,7 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	}
 	switch sess.Status {
 	case api.TunnelAllocated:
-		if a.applied == sess.TunnelID {
-			return nil
-		}
-		if err := a.tunnels.Apply(ctx, tunnel.Session{
+		ts := tunnel.Session{
 			TunnelID:        sess.TunnelID,
 			LeaseID:         sess.LeaseID,
 			Status:          string(sess.Status),
@@ -198,21 +195,27 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 			PeerPrivateKey:  sess.PeerPrivateKey,
 			AllowedIPs:      sess.AllowedIPs,
 			ClientAddress:   sess.ClientAddress,
-		}); err != nil {
+		}
+		// lease_id / tunnel_id are tickets on the same host peer.
+		// Apply is a no-op unless the peer fields change.
+		if err := a.tunnels.Apply(ctx, ts); err != nil {
 			return err
 		}
-		if err := a.client.AckTunnel(ctx, a.state.DeviceID, api.TunnelAckRequest{Applied: true}); err != nil {
-			return err
+		fp := tunnel.PeerFingerprint(ts)
+		if a.applied != fp {
+			if err := a.client.AckTunnel(ctx, a.state.DeviceID, api.TunnelAckRequest{Applied: true}); err != nil {
+				return err
+			}
+			a.applied = fp
+			a.log.Info("host peer applied", "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
 		}
-		a.applied = sess.TunnelID
-		a.log.Info("tunnel applied", "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
 		return nil
 	case api.TunnelRevoked:
 		if err := a.tunnels.Teardown(ctx); err != nil {
 			return err
 		}
 		a.applied = ""
-		a.log.Info("tunnel revoked, torn down", "tunnel_id", sess.TunnelID)
+		a.log.Info("host peer revoked, torn down", "tunnel_id", sess.TunnelID)
 		return nil
 	default:
 		return fmt.Errorf("hypermesh: unknown tunnel status %s", sess.Status)
@@ -300,7 +303,7 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	}
 	a.lease = nil
 	_ = a.saveLease(nil)
-	// Tunnel teardown waits for GET /agent/tunnel status=revoked.
+	// Host WireGuard peer stays up. Teardown only on GET revoked or 204.
 	a.log.Info("lease_stop", "lease_id", job.LeaseID)
 	snap, _ := a.telem.Collect(ctx)
 	return pathb.Result{Passed: true, ImageHash: firstNonEmpty(a.cfg.ImageHash, snap.ImageHash), Reason: "lease_stop"}

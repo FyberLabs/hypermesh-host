@@ -68,7 +68,7 @@ After enroll, this box persists the secret in `/var/lib/hypermesh/device.json` (
 
 ### WireGuard
 
-Install `wireguard-tools`. When a session is allocated, this box applies the fields it is given (endpoint, keys, allowed_ips, client_address), writes a 0600 wg-quick config, `wg-quick up`, then acks. Planned router endpoint is `wg.test.hyperme.sh:51820`. There is no `listen_port` on the GET. Do not invent a lab peer. The peer private key is never logged and is shredded on teardown. A person on this box should never need to see that key.
+Install `wireguard-tools`. One WireGuard peer per host, not per lease. When a session is allocated, this box applies the fields it is given (endpoint, keys, allowed_ips, client_address), writes a 0600 wg-quick config, `wg-quick up`, then acks. A later GET with a different `lease_id` / `tunnel_id` but the same peer fields is a ticket on that tunnel — no second `wg-quick up`. `wg-quick` down/up does not run on `lease_start` or `lease_stop`. Teardown only when GET is `revoked` (host peer revoked) or 204 (no host session). Planned router endpoint is `wg.test.hyperme.sh:51820`. There is no `listen_port` on the GET. Do not invent a lab peer. The peer private key is never logged and is shredded on teardown. A person on this box should never need to see that key. Chat stays on `client_address:8080`.
 
 ### Workload
 
