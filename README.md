@@ -58,7 +58,7 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 
 | kind | What this box does |
 |---|---|
-| `path_b` | thin-v1: collect image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` is up, POST a pinned probe and require a real choice. If that endpoint is down, telem still passes and inference is recorded as skipped. |
+| `path_b` | thin-v1: collect image hash / uptime / thermal. If this box rebooted since the last successful path_b, POST `passed=false` (host log reason: `reboot`). First run records boot identity and does not fail just for being first. If `http://127.0.0.1:8080/v1/chat/completions` is up, POST a pinned probe and require a real choice. If that endpoint is down, telem still passes and inference is recorded as skipped. |
 | `instance_check` | thin-v1: must hit that completions endpoint and fail if there is no real `choices[0].message.content`. This is the container-answers gate. |
 | `lease_start` | `image_digest` must be `repo@digest`. `docker pull` then `docker --runtime=nvidia -p 8080:8080 --name hypermesh-<lease_id>`. Empty digest or bare `sha256:hex` → `passed=false`. Host port is `HYPERMESH_LISTEN_PORT` (default 8080). Empty/unknown `kind` → `passed=false`. |
 | `lease_stop` | Stop the container named for that lease. Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
@@ -107,7 +107,7 @@ Orin NX 16GB, not AGX. Separate image, different nvpmodel table (`MAXN_SUPER`), 
 ```
 cmd/agent           process
 internal/api        locked HTTP client (agent routes + optional enroll-token helper)
-internal/pathb      thin-v1 (telem + optional local completions)
+internal/pathb      thin-v1 (telem + optional local completions; path_b fails on reboot)
 internal/runtime    NVIDIA Container Runtime start/stop
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime

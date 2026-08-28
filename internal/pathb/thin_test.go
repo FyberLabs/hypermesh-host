@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +148,149 @@ func TestEmptySuiteIDIsThinV1(t *testing.T) {
 	if !got.Passed || got.ImageHash != "h" {
 		t.Fatalf("%+v", got)
 	}
+}
+
+func TestPathBFailsWhenBootIDChanges(t *testing.T) {
+	r := downRunner(t)
+	r.Store = FileStore{Dir: t.TempDir()}
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 40, BootID: "boot-aaa"}}
+
+	first := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})
+	if !first.Passed || first.ImageHash != "sha256:abc" {
+		t.Fatalf("first run must record boot_id and not fail: %+v", first)
+	}
+
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 3, BootID: "boot-bbb"}}
+	got := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})
+	if got.Passed {
+		t.Fatalf("path_b must fail when boot_id changed: %+v", got)
+	}
+	if got.Reason != "reboot" {
+		t.Fatalf("host log reason must be reboot, got %q", got.Reason)
+	}
+	if got.ImageHash != "sha256:abc" {
+		t.Fatalf("result body still has image_hash: %+v", got)
+	}
+	assertNoProbeLeak(t, got.Reason)
+}
+
+func TestPathBSameBootIDKeepsTelemInference(t *testing.T) {
+	r := downRunner(t)
+	r.Store = FileStore{Dir: t.TempDir()}
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 9, BootID: "boot-same"}}
+
+	first := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})
+	if !first.Passed || !strings.Contains(first.Reason, "skipped") {
+		t.Fatalf("same boot first run: %+v", first)
+	}
+
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 12, BootID: "boot-same"}}
+	got := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})
+	if !got.Passed || got.ImageHash != "sha256:abc" {
+		t.Fatalf("same boot_id keeps telem pass: %+v", got)
+	}
+	if !strings.Contains(got.Reason, "skipped") {
+		t.Fatalf("same boot_id keeps inference skipped: %q", got.Reason)
+	}
+	assertNoProbeLeak(t, got.Reason)
+}
+
+func TestPathBSameBootIDWithCompletions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": "ready"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	r := Runner{
+		Collector: fakeCollect{snap: telem.Snapshot{ImageHash: "h", UptimeS: 8, BootID: "boot-same"}},
+		Endpoint:  srv.URL,
+		Store:     FileStore{Dir: t.TempDir()},
+	}
+	first := r.Run(context.Background(), api.Job{Kind: api.KindPathB, SuiteID: SuiteThinV1})
+	if !first.Passed || first.Reason != "thin-v1" {
+		t.Fatalf("%+v", first)
+	}
+
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "h", UptimeS: 9, BootID: "boot-same"}}
+	got := r.Run(context.Background(), api.Job{Kind: api.KindPathB, SuiteID: SuiteThinV1})
+	if !got.Passed || got.Reason != "thin-v1" {
+		t.Fatalf("same boot_id keeps inference: %+v", got)
+	}
+	assertNoProbeLeak(t, got.Reason)
+}
+
+func TestPathBFirstRunRecordsBootID(t *testing.T) {
+	dir := t.TempDir()
+	r := downRunner(t)
+	r.Store = FileStore{Dir: dir}
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "h", UptimeS: 7, BootID: "first-boot"}}
+	got := r.Run(context.Background(), api.Job{Kind: api.KindPathB, SuiteID: SuiteThinV1})
+	if !got.Passed {
+		t.Fatalf("first run must not fail: %+v", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, bootFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "first-boot") {
+		t.Fatalf("boot identity not recorded: %s", raw)
+	}
+	fi, err := os.Stat(filepath.Join(dir, bootFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("boot.json is not a secret; got mode %o", fi.Mode().Perm())
+	}
+}
+
+func TestPathBUptimeBackwardsIsReboot(t *testing.T) {
+	now := time.Unix(1_700_000_100, 0)
+	r := downRunner(t)
+	r.Store = FileStore{Dir: t.TempDir()}
+	r.Now = func() time.Time { return now }
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "h", UptimeS: 80}}
+
+	first := r.Run(context.Background(), api.Job{Kind: api.KindPathB, SuiteID: SuiteThinV1})
+	if !first.Passed {
+		t.Fatalf("first fallback run: %+v", first)
+	}
+
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "h", UptimeS: 4}}
+	got := r.Run(context.Background(), api.Job{Kind: api.KindPathB, SuiteID: SuiteThinV1})
+	if got.Passed || got.Reason != "reboot" {
+		t.Fatalf("uptime going backwards is a reboot: %+v", got)
+	}
+}
+
+func TestInstanceCheckIgnoresBootIDChange(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": "ready"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	store := FileStore{Dir: t.TempDir()}
+	r := Runner{
+		Collector: fakeCollect{snap: telem.Snapshot{ImageHash: "h", UptimeS: 10, BootID: "boot-aaa"}},
+		Endpoint:  srv.URL,
+		Store:     store,
+	}
+	_ = r.Run(context.Background(), api.Job{Kind: api.KindPathB, SuiteID: SuiteThinV1})
+
+	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "h", UptimeS: 2, BootID: "boot-bbb"}}
+	got := r.Run(context.Background(), api.Job{Kind: api.KindInstanceCheck, SuiteID: SuiteThinV1})
+	if !got.Passed || got.ImageHash != "h" {
+		t.Fatalf("instance_check still needs a real completion, not a reboot gate: %+v", got)
+	}
+	assertNoProbeLeak(t, got.Reason)
 }
 
 func assertNoProbeLeak(t *testing.T, s string) {

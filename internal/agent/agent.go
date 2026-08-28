@@ -47,6 +47,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		pathb: pathb.Runner{
 			Collector: src,
 			Endpoint:  cfg.CompletionsEndpoint(),
+			Store:     pathb.FileStore{Dir: cfg.StateDir},
 		},
 		runtime: runtime.NewNVIDIA(),
 		tunnels: tunnel.NewRunner(),

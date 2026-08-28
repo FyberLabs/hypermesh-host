@@ -25,6 +25,9 @@ type Snapshot struct {
 	UptimeS   int64
 	ThermalC  *float64
 	Nvpmodel  string
+	// BootID is /proc/sys/kernel/random/boot_id when that file exists.
+	// Empty means the caller should fall back to boot time from uptime.
+	BootID string
 }
 
 // Source reads host files and optional nvpmodel. Tests inject paths.
@@ -34,6 +37,7 @@ type Source struct {
 	TegraRelease  string
 	OSRelease     string
 	UptimePath    string
+	BootIDPath    string
 	ThermalRoot   string
 	NvpmodelBin   string
 	LookPath      func(string) (string, error)
@@ -48,6 +52,7 @@ func Default() Source {
 		TegraRelease:  "/etc/nv_tegra_release",
 		OSRelease:     "/etc/os-release",
 		UptimePath:    "/proc/uptime",
+		BootIDPath:    "/proc/sys/kernel/random/boot_id",
 		ThermalRoot:   "/sys/class/thermal",
 		NvpmodelBin:   "nvpmodel",
 	}
@@ -70,7 +75,20 @@ func (s Source) Collect(ctx context.Context) (Snapshot, error) {
 		UptimeS:   up,
 		ThermalC:  s.thermal(),
 		Nvpmodel:  s.nvpmodel(ctx),
+		BootID:    s.bootID(),
 	}, nil
+}
+
+func (s Source) bootID() string {
+	path := s.BootIDPath
+	if path == "" {
+		path = "/proc/sys/kernel/random/boot_id"
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func (s Source) imageHash() string {

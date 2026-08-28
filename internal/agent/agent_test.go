@@ -688,6 +688,32 @@ func TestPathBStillPassesWhenCompletionsDown(t *testing.T) {
 	assertNoPromptInLogs(t, logBuf.String(), got.Reason)
 }
 
+func TestPathBFailsWhenBootIDChanged(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var logBuf strings.Builder
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+
+	if err := os.WriteFile(filepath.Join(dir, "boot.json"), []byte(`{"boot_id":"previous-boot","uptime_s":99}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-pathb",
+		Kind:     api.KindPathB,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if got.Passed || got.Reason != "reboot" {
+		t.Fatalf("path_b must fail on reboot: %+v", got)
+	}
+	assertNoPromptInLogs(t, logBuf.String(), got.Reason)
+}
+
 func TestDefaultControlPlaneURL(t *testing.T) {
 	t.Setenv("HYPERMESH_CONTROL_PLANE_URL", "")
 	t.Setenv("HYPERMESH_LISTEN_PORT", "")
@@ -766,8 +792,13 @@ func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
+	boot := filepath.Join(dir, "proc-boot-id")
+	if err := os.WriteFile(boot, []byte("test-boot-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	a.telem = telem.Source{
 		UptimePath: uptime,
+		BootIDPath: boot,
 		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	a.pathb.Collector = a.telem
