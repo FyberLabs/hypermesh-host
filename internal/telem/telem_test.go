@@ -73,6 +73,48 @@ func TestImageHashFromTegraRelease(t *testing.T) {
 	}
 }
 
+func TestBootIDFromProcFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "uptime"), []byte("4.2 1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	boot := filepath.Join(dir, "boot_id")
+	if err := os.WriteFile(boot, []byte("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := Source{
+		UptimePath: filepath.Join(dir, "uptime"),
+		BootIDPath: boot,
+		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
+	}
+	snap, err := s.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.BootID != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Fatalf("boot_id %q", snap.BootID)
+	}
+}
+
+func TestMissingBootIDFileOK(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "uptime"), []byte("1.0 1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := Source{
+		UptimePath: filepath.Join(dir, "uptime"),
+		BootIDPath: filepath.Join(dir, "missing-boot-id"),
+		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
+	}
+	snap, err := s.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.BootID != "" {
+		t.Fatalf("boot_id should be absent, got %q", snap.BootID)
+	}
+}
+
 func TestMissingThermalAndNvpmodelOK(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "uptime"), []byte("0.0 0.0\n"), 0o644); err != nil {

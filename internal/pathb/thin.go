@@ -53,17 +53,25 @@ type Runner struct {
 	Endpoint string
 	// HTTP is optional. Tests inject a short-timeout client.
 	HTTP *http.Client
+	// Store holds last-seen boot identity in the state dir. Not a secret.
+	// Nil skips the reboot gate (tests that only care about telem/inference).
+	Store Store
+	// Now is optional. Tests freeze wall time for the uptime fallback.
+	Now func() time.Time
 }
 
 // Run collects host facts, then optionally probes the local completions
 // endpoint.
 //
-// path_b: telemetry is required. A down endpoint still passes so enroll
-// and green are not deadlocked before lease_start; inference is recorded
-// as skipped.
+// path_b: telemetry is required. If this box rebooted since the last
+// successful path_b, POST passed=false (host log reason: reboot). A down
+// endpoint still passes so enroll and green are not deadlocked before
+// lease_start; inference is recorded as skipped. First run (no prior
+// boot_id) records the id and does not fail just for being first.
 //
 // instance_check: the container-answers gate. It must receive a real
-// completion (non-empty choices[0].message.content) or it fails.
+// completion (non-empty choices[0].message.content) or it fails. Boot
+// identity is not a gate here.
 //
 // Unknown suite ids fail. Empty suite_id is thin-v1.
 func (r Runner) Run(ctx context.Context, job api.Job) Result {
@@ -71,12 +79,19 @@ func (r Runner) Run(ctx context.Context, job api.Job) Result {
 		return Result{Passed: false, Reason: fmt.Sprintf("unknown suite %s", job.SuiteID)}
 	}
 
-	hash, telemOK := r.telem(ctx)
+	snap, telemOK := r.telem(ctx)
+	hash := snap.ImageHash
 	if !telemOK && job.Kind != api.KindInstanceCheck {
 		if r.Collector == nil {
 			return Result{Passed: false, Reason: "no telemetry collector"}
 		}
 		return Result{Passed: false, Reason: "telemetry unavailable"}
+	}
+
+	if job.Kind != api.KindInstanceCheck && telemOK {
+		if ok, _ := r.checkBoot(snap); !ok {
+			return Result{Passed: false, ImageHash: hash, Reason: "reboot"}
+		}
 	}
 
 	ok, reachErr := r.complete(ctx)
@@ -97,15 +112,15 @@ func (r Runner) Run(ctx context.Context, job api.Job) Result {
 	return Result{Passed: true, ImageHash: hash, Reason: "thin-v1"}
 }
 
-func (r Runner) telem(ctx context.Context) (string, bool) {
+func (r Runner) telem(ctx context.Context) (telem.Snapshot, bool) {
 	if r.Collector == nil {
-		return "", false
+		return telem.Snapshot{}, false
 	}
 	snap, err := r.Collector.Collect(ctx)
 	if err != nil {
-		return "", false
+		return telem.Snapshot{}, false
 	}
-	return snap.ImageHash, true
+	return snap, true
 }
 
 func (r Runner) endpoint() string {
