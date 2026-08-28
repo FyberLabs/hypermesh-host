@@ -1,5 +1,5 @@
 [Unit]
-Description=Hypermesh host agent
+Description=Hypermesh on this box
 Documentation=https://github.com/FyberLabs/hypermesh-host
 After=network-online.target docker.service
 Wants=network-online.target

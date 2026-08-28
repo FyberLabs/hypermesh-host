@@ -26,6 +26,16 @@ func TestStartArgsUseNVIDIARuntimeNotGPUs(t *testing.T) {
 	if args[len(args)-1] != testRef {
 		t.Fatalf("ref last: %v", args)
 	}
+	if !contains(args, "-p") || !contains(args, "8080:8080") {
+		t.Fatalf("must publish 8080:8080: %v", args)
+	}
+}
+
+func TestStartArgsCustomHostPort(t *testing.T) {
+	args := StartArgs(Spec{LeaseID: "lease-9", HostPort: "9090"}, testRef)
+	if !contains(args, "9090:8080") || contains(args, "8080:8080") {
+		t.Fatalf("custom host port: %v", args)
+	}
 }
 
 func TestImageRef(t *testing.T) {
@@ -103,6 +113,9 @@ func TestStartPullThenRunStop(t *testing.T) {
 	}
 	if !contains(seen[1], "hypermesh-lease-a") {
 		t.Fatalf("name: %v", seen[1])
+	}
+	if !contains(seen[1], "--runtime=nvidia") || !contains(seen[1], "-p") || !contains(seen[1], "8080:8080") {
+		t.Fatalf("nvidia + publish: %v", seen[1])
 	}
 }
 

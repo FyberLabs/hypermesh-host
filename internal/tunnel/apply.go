@@ -1,9 +1,11 @@
 // Package tunnel applies a WireGuard (or equivalent) session allocated
-// by the control plane. No custom overlay.
+// by the control plane. One peer per host, not per lease. No custom overlay.
 package tunnel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +16,6 @@ import (
 )
 
 const (
-	idPrefix     = "# hypermesh-tunnel-id: "
 	appliedFile  = "hypermesh.applied"
 	defaultIface = "hypermesh"
 )
@@ -29,6 +30,7 @@ var (
 )
 
 // Session is the locked GET /agent/tunnel body. Never log PeerPrivateKey.
+// TunnelID and LeaseID are tickets on the host peer, not a new peer.
 type Session struct {
 	TunnelID        string
 	LeaseID         string
@@ -83,9 +85,30 @@ func (r *Runner) appliedPath() string {
 	return filepath.Join(r.configDir(), appliedFile)
 }
 
+// PeerFingerprint hashes the host-peer fields. tunnel_id and lease_id are
+// tickets and are not included. Never log the inputs.
+func PeerFingerprint(s Session) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(s.Endpoint))
+	b.WriteByte(0)
+	b.WriteString(strings.TrimSpace(s.ServerPublicKey))
+	b.WriteByte(0)
+	b.WriteString(strings.TrimSpace(s.PeerPrivateKey))
+	b.WriteByte(0)
+	b.WriteString(strings.TrimSpace(s.ClientAddress))
+	b.WriteByte(0)
+	b.WriteString(strings.TrimSpace(s.AllowedIPs))
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
 // Apply writes the wg-quick config and brings the interface up.
-// If conf + applied marker already match this tunnel_id, wg-quick up is skipped
-// so a restart or a failed ack does not error on a second up.
+//
+// One host peer: wg-quick up runs only when endpoint, server_public_key,
+// peer_private_key, client_address, or allowed_ips change. A new tunnel_id
+// or lease_id on the same peer is a ticket and does not bounce the iface.
+// The applied marker stores that fingerprint so a restart does not re-up
+// an identical peer. The key is never written to the marker.
 func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -96,11 +119,16 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if strings.TrimSpace(sess.PeerPrivateKey) == "" {
 		return ErrMissingPrivateKey
 	}
-	if sess.TunnelID != "" && r.alreadyApplied(sess.TunnelID) {
+	if r.alreadyApplied(sess) {
 		return nil
 	}
 	if err := os.MkdirAll(r.configDir(), 0o700); err != nil {
 		return err
+	}
+	if _, err := os.Stat(r.confPath()); err == nil {
+		if err := r.quick(ctx, "down", r.confPath()); err != nil && !missingIface(err) {
+			return err
+		}
 	}
 	body := wgQuickConfig(sess)
 	if err := os.WriteFile(r.confPath(), []byte(body), 0o600); err != nil {
@@ -109,10 +137,12 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if err := r.quick(ctx, "up", r.confPath()); err != nil {
 		return err
 	}
-	return r.saveApplied(sess.TunnelID)
+	return r.saveApplied(PeerFingerprint(sess))
 }
 
 // Teardown runs wg-quick down and shreds the conf so the peer key does not stay on disk.
+// Call only when GET is 204 (no host session) or status=revoked (host peer revoked).
+// Do not call because lease_id or tunnel_id changed.
 func (r *Runner) Teardown(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -129,14 +159,11 @@ func (r *Runner) Teardown(ctx context.Context) error {
 	return shredErr
 }
 
-func (r *Runner) alreadyApplied(tunnelID string) bool {
-	if tunnelID == "" {
+func (r *Runner) alreadyApplied(sess Session) bool {
+	if r.loadApplied() != PeerFingerprint(sess) {
 		return false
 	}
-	if r.loadApplied() != tunnelID {
-		return false
-	}
-	return r.confHasTunnelID(tunnelID)
+	return r.confMatchesPeer(sess)
 }
 
 func (r *Runner) hasLocal() bool {
@@ -149,25 +176,35 @@ func (r *Runner) hasLocal() bool {
 	return false
 }
 
-func (r *Runner) confHasTunnelID(id string) bool {
+func (r *Runner) confMatchesPeer(s Session) bool {
 	raw, err := os.ReadFile(r.confPath())
 	if err != nil {
 		return false
 	}
-	want := strings.TrimSpace(idPrefix + id)
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.TrimSpace(line) == want {
-			return true
-		}
+	text := string(raw)
+	if !strings.Contains(text, "PrivateKey = "+s.PeerPrivateKey) {
+		return false
 	}
-	return false
+	if s.ClientAddress != "" && !strings.Contains(text, "Address = "+s.ClientAddress) {
+		return false
+	}
+	if s.ServerPublicKey != "" && !strings.Contains(text, "PublicKey = "+s.ServerPublicKey) {
+		return false
+	}
+	if s.Endpoint != "" && !strings.Contains(text, "Endpoint = "+s.Endpoint) {
+		return false
+	}
+	if s.AllowedIPs != "" && !strings.Contains(text, "AllowedIPs = "+s.AllowedIPs) {
+		return false
+	}
+	return true
 }
 
-func (r *Runner) saveApplied(id string) error {
-	if id == "" {
+func (r *Runner) saveApplied(fp string) error {
+	if fp == "" {
 		return nil
 	}
-	return os.WriteFile(r.appliedPath(), []byte(id+"\n"), 0o600)
+	return os.WriteFile(r.appliedPath(), []byte(fp+"\n"), 0o600)
 }
 
 func (r *Runner) loadApplied() string {
@@ -220,11 +257,7 @@ func shredFile(path string) error {
 
 func wgQuickConfig(s Session) string {
 	var b strings.Builder
-	if s.TunnelID != "" {
-		b.WriteString(idPrefix)
-		b.WriteString(s.TunnelID)
-		b.WriteString("\n")
-	}
+	b.WriteString("# hypermesh host peer\n")
 	b.WriteString("[Interface]\n")
 	b.WriteString("PrivateKey = ")
 	b.WriteString(s.PeerPrivateKey)

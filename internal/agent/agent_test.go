@@ -105,7 +105,7 @@ func TestLoopEnrollBearerPersistAndPathB(t *testing.T) {
 			JobID:    testJob,
 			Kind:     api.KindPathB,
 			DeviceID: testDevice,
-			SuiteID:  "stub-suite-v1",
+			SuiteID:  "thin-v1",
 		})
 	})
 	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+testJob+"/result", func(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +324,110 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 	})
 }
 
+func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
+	var mu sync.Mutex
+	acks, gets := 0, 0
+
+	samePeer := func(tun, lease string) api.TunnelSession {
+		return api.TunnelSession{
+			TunnelID:        tun,
+			LeaseID:         lease,
+			Status:          api.TunnelAllocated,
+			Endpoint:        "198.51.100.10:51820",
+			ServerPublicKey: "serverpub",
+			PeerPrivateKey:  "PEERPRIVATE",
+			AllowedIPs:      "10.8.0.0/24",
+			ClientAddress:   "10.8.0.2/32",
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body api.TunnelAckRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Applied {
+			t.Errorf("ack applied=false")
+		}
+		mu.Lock()
+		acks++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		gets++
+		n := gets
+		mu.Unlock()
+		if n == 1 {
+			writeJSON(w, http.StatusOK, samePeer("tun-1", "lease-1"))
+			return
+		}
+		writeJSON(w, http.StatusOK, samePeer("tun-2", "lease-2"))
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+
+	var ops []string
+	a.tunnels = &tunnel.Runner{
+		ConfigDir: t.TempDir(),
+		Quick: func(_ context.Context, args ...string) error {
+			mu.Lock()
+			ops = append(ops, args[0])
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	waitLoop(t, a, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return gets >= 2 && acks >= 1
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	ups, downs := 0, 0
+	for _, op := range ops {
+		switch op {
+		case "up":
+			ups++
+		case "down":
+			downs++
+		}
+	}
+	if ups != 1 {
+		t.Fatalf("same host peer must wg-quick up once, ops=%v", ops)
+	}
+	if downs != 0 {
+		t.Fatalf("lease/tunnel ticket change must not teardown, ops=%v", ops)
+	}
+	if acks < 1 {
+		t.Fatal("expected at least one ack")
+	}
+}
+
 func TestEmptyAndUnknownKindFail(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
@@ -497,8 +601,120 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	if !strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "--gpus") {
 		t.Fatalf("docker args %v", calls[1])
 	}
+	if !strings.Contains(joined, "-p") || !strings.Contains(joined, "8080:8080") {
+		t.Fatalf("port publish %v", calls[1])
+	}
 	if !strings.Contains(joined, "hypermesh-lease-2") || !strings.Contains(joined, ref) {
 		t.Fatalf("name/ref %v", calls[1])
+	}
+}
+
+func TestInstanceCheckFailsWhenEndpointDown(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var logBuf strings.Builder
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-check",
+		Kind:     api.KindInstanceCheck,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if got.Passed {
+		t.Fatalf("instance_check must fail when completions are down: %+v", got)
+	}
+	assertNoPromptInLogs(t, logBuf.String(), got.Reason)
+}
+
+func TestInstanceCheckPassesOnFakeCompletions(t *testing.T) {
+	const completion = "UNIQUE_COMPLETION_XYZ"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": completion}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var logBuf strings.Builder
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	a.pathb.Endpoint = srv.URL
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-check",
+		Kind:     api.KindInstanceCheck,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if !got.Passed {
+		t.Fatalf("instance_check should pass with a real choice: %+v", got)
+	}
+	out := logBuf.String() + " " + got.Reason
+	assertNoPromptInLogs(t, out, got.Reason)
+	if strings.Contains(out, completion) {
+		t.Fatal("completion text leaked into logs")
+	}
+}
+
+func TestPathBStillPassesWhenCompletionsDown(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var logBuf strings.Builder
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-pathb",
+		Kind:     api.KindPathB,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if !got.Passed {
+		t.Fatalf("path_b must still pass telem when inference is down: %+v", got)
+	}
+	assertNoPromptInLogs(t, logBuf.String(), got.Reason)
+}
+
+func TestDefaultControlPlaneURL(t *testing.T) {
+	t.Setenv("HYPERMESH_CONTROL_PLANE_URL", "")
+	t.Setenv("HYPERMESH_LISTEN_PORT", "")
+	t.Setenv("HYPERMESH_COMPLETIONS_URL", "")
+	cfg := FromEnv()
+	if cfg.ControlPlaneURL != "https://api.test.hyperme.sh" {
+		t.Fatalf("default control plane %q", cfg.ControlPlaneURL)
+	}
+	if cfg.PublishPort() != "8080" {
+		t.Fatalf("default listen port %q", cfg.PublishPort())
+	}
+	if cfg.CompletionsEndpoint() != "http://127.0.0.1:8080/v1/chat/completions" {
+		t.Fatalf("default completions %q", cfg.CompletionsEndpoint())
+	}
+}
+
+func assertNoPromptInLogs(t *testing.T, parts ...string) {
+	t.Helper()
+	joined := strings.Join(parts, "\n")
+	for _, leak := range []string{
+		"Reply with the single word ready.",
+		"Reply with",
+		"renter",
+	} {
+		if strings.Contains(joined, leak) {
+			t.Fatalf("prompt leaked into logs/reason: %q in %q", leak, joined)
+		}
 	}
 }
 

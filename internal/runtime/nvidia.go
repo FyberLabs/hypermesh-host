@@ -31,6 +31,11 @@ var (
 	ErrNoLeaseID = errors.New("hypermesh: lease_start requires lease_id")
 )
 
+// DefaultListenPort is the host port published to the container's 8080
+// (OpenAI-shaped POST /v1/chat/completions). The Fyber router proxies to
+// http://<client_address>:8080.
+const DefaultListenPort = "8080"
+
 // Spec is a leased workload from a lease_start job.
 // ImageDigest must be repo@digest (the locked job field). No extra CP fields.
 type Spec struct {
@@ -38,6 +43,8 @@ type Spec struct {
 	CatalogID   string
 	ImageDigest string
 	Runtime     string
+	// HostPort is published as -p <HostPort>:8080. Empty uses DefaultListenPort.
+	HostPort string
 }
 
 // Handle is a started container.
@@ -96,9 +103,19 @@ func PullArgs(ref string) []string {
 	return []string{"pull", ref}
 }
 
+func publishSpec(hostPort string) string {
+	p := strings.TrimSpace(hostPort)
+	if p == "" {
+		p = DefaultListenPort
+	}
+	return p + ":8080"
+}
+
 // StartArgs is the docker run argv for a resolved repo@digest.
+// Publishes container 8080 on the host so the WG client_address can reach
+// /v1/chat/completions. The process inside must listen on 0.0.0.0:8080.
 func StartArgs(spec Spec, ref string) []string {
-	args := []string{"run", "-d", "--runtime=nvidia"}
+	args := []string{"run", "-d", "--runtime=nvidia", "-p", publishSpec(spec.HostPort)}
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
 		args = append(args, "--name", name)
 	}

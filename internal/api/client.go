@@ -1,5 +1,6 @@
 // Package api is the HTTP client for the Hypermesh control-plane agent
-// routes on Panopticon (:8010, prefix /api/v1/hypermesh).
+// routes (prefix /api/v1/hypermesh). Tests compile against httptest.
+// The deployed test base URL is https://api.test.hyperme.sh.
 //
 // After enroll, device routes send Authorization: Bearer <device_secret>
 // and X-Tenant-ID, with device_id in the body or query as a cross-check.
