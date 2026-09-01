@@ -66,6 +66,9 @@ const (
 )
 
 // Job is GET /agent/jobs. One pending job or 204. No suite payload.
+// Runtime stays "nvidia" for oci cuda-jetson. Backend is optional
+// (cuda-jetson | cuda-sm87 | llama-cpp-cpu | llama-cpp-vulkan | hip-rocm).
+// Omitted = cuda-jetson. Do not overload Runtime. disk-io is not in the enum.
 type Job struct {
 	JobID       string  `json:"job_id"`
 	Kind        JobKind `json:"kind"`
@@ -74,6 +77,7 @@ type Job struct {
 	CatalogID   string  `json:"catalog_id,omitempty"`
 	ImageDigest string  `json:"image_digest,omitempty"`
 	Runtime     string  `json:"runtime,omitempty"`
+	Backend     string  `json:"backend,omitempty"`
 	SuiteID     string  `json:"suite_id,omitempty"`
 }
 

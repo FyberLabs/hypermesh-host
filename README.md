@@ -54,7 +54,7 @@ If this box already has an id on disk but lost the secret, it cannot enroll agai
 
 ### Jobs
 
-Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`, `catalog_id`, `image_digest`, `runtime`, `suite_id`.
+Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`, `catalog_id`, `image_digest`, `runtime`, `backend`, `suite_id`.
 
 | kind | What this box does |
 |---|---|
@@ -62,6 +62,8 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 | `instance_check` | thin-v1: must hit that completions endpoint and fail if there is no real `choices[0].message.content`. This is the container-answers gate. |
 | `lease_start` | `image_digest` must be `repo@digest`. `docker pull` then `docker --runtime=nvidia -p 8080:8080 --name hypermesh-<lease_id>`. Empty digest or bare `sha256:hex` → `passed=false`. Host port is `HYPERMESH_LISTEN_PORT` (default 8080). Empty/unknown `kind` → `passed=false`. |
 | `lease_stop` | Stop the container named for that lease. Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
+
+Optional `backend` on `lease_start`: `cuda-jetson` | `cuda-sm87` | `llama-cpp-cpu` | `llama-cpp-vulkan` | `hip-rocm`. Omitted = `cuda-jetson` (alias `cuda-sm87`). This box is AGX first: that path is `docker --runtime=nvidia`. `runtime` stays `nvidia`. Stubs and unknown (including `disk-io`, which is not in the enum) POST `passed=false` on `lease_start` and `path_b` (`This image does not run <backend>.`) until a later image. `instance_check` on a stub does the same and does not probe.
 
 Result body stays `{"passed", "image_hash?"}`. The probe and the completion text are never logged and never placed in the result.
 
