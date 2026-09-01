@@ -609,6 +609,135 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	}
 }
 
+func TestLeaseStartBackends(t *testing.T) {
+	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cases := []struct {
+		name       string
+		backend    string
+		wantPass   bool
+		wantDocker bool
+		wantReason string
+	}{
+		{name: "omitted", backend: "", wantPass: true, wantDocker: true, wantReason: "lease_start"},
+		{name: "cuda-jetson", backend: "cuda-jetson", wantPass: true, wantDocker: true, wantReason: "lease_start"},
+		{name: "cuda-sm87", backend: "cuda-sm87", wantPass: true, wantDocker: true, wantReason: "lease_start"},
+		{name: "llama-cpp-cpu", backend: "llama-cpp-cpu", wantPass: false, wantDocker: false, wantReason: "this image does not run CPU GGUF"},
+		{name: "llama-cpp-vulkan", backend: "llama-cpp-vulkan", wantPass: false, wantDocker: false, wantReason: "Vulkan RADV not on this image (not 7945HX 610M)"},
+		{name: "hip-rocm", backend: "hip-rocm", wantPass: false, wantDocker: false, wantReason: "HIP/ROCm not on this image"},
+		{name: "disk-io", backend: "disk-io", wantPass: false, wantDocker: false, wantReason: "not a certified runtime"},
+		{name: "unknown", backend: "not-a-backend", wantPass: false, wantDocker: false, wantReason: "unknown backend"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			uptime := filepath.Join(dir, "uptime")
+			_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+			var dockerCalls [][]string
+			a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+			a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				dockerCalls = append(dockerCalls, append([]string{}, args...))
+				return []byte("cid\n"), nil
+			}}
+			got := a.runJob(context.Background(), api.Job{
+				JobID:       "j-backend",
+				Kind:        api.KindLeaseStart,
+				DeviceID:    testDevice,
+				LeaseID:     "lease-b",
+				CatalogID:   "llama-3.1-8b-q4",
+				ImageDigest: ref,
+				Runtime:     "nvidia",
+				Backend:     tc.backend,
+			})
+			if got.Passed != tc.wantPass || got.Reason != tc.wantReason {
+				t.Fatalf("result %+v want pass=%v reason=%q", got, tc.wantPass, tc.wantReason)
+			}
+			if tc.wantDocker {
+				if len(dockerCalls) < 2 || dockerCalls[0][0] != "pull" || dockerCalls[0][1] != ref {
+					t.Fatalf("expected nvidia pull, calls=%v", dockerCalls)
+				}
+				joined := strings.Join(dockerCalls[1], " ")
+				if !strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "--gpus") {
+					t.Fatalf("docker args %v", dockerCalls[1])
+				}
+			} else if len(dockerCalls) != 0 {
+				t.Fatalf("stub must not call docker, calls=%v", dockerCalls)
+			}
+		})
+	}
+}
+
+func TestLeaseStartCUDAJetsonEmptyDigestStillFails(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var dockerCalls int
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		dockerCalls++
+		return []byte("cid\n"), nil
+	}}
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-empty",
+		Kind:     api.KindLeaseStart,
+		DeviceID: testDevice,
+		LeaseID:  "lease-1",
+		Runtime:  "nvidia",
+		Backend:  "cuda-jetson",
+	})
+	if got.Passed || got.Reason != "no image_digest; no soak image" {
+		t.Fatalf("empty digest must still fail: %+v", got)
+	}
+	if dockerCalls != 0 {
+		t.Fatalf("empty digest must not invoke docker, calls=%d", dockerCalls)
+	}
+}
+
+func TestHeartbeatLogsNVIDIABackend(t *testing.T) {
+	var mu sync.Mutex
+	var heartbeats int
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		heartbeats++
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var logBuf strings.Builder
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	a.tunnels = &fakeTunnel{}
+
+	waitLoop(t, a, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return heartbeats >= 1
+	})
+	out := logBuf.String()
+	if !strings.Contains(out, "backend=cuda-sm87") {
+		t.Fatalf("heartbeat must log cuda-sm87, got %q", out)
+	}
+	for _, leak := range []string{"tok/s", "TOPS", "tokens/sec"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("do not invent %s: %q", leak, out)
+		}
+	}
+}
+
 func TestInstanceCheckFailsWhenEndpointDown(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")

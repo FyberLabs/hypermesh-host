@@ -240,6 +240,29 @@ func TestPullJobKinds(t *testing.T) {
 	if job == nil || job.JobID != testJob || job.Kind != KindLeaseStart || job.Runtime != "nvidia" {
 		t.Fatalf("job %+v", job)
 	}
+	if job.Backend != "" {
+		t.Fatalf("omitted backend must stay empty: %+v", job)
+	}
+}
+
+func TestJobBackendJSON(t *testing.T) {
+	var j Job
+	if err := json.Unmarshal([]byte(`{"job_id":"j","kind":"lease_start","device_id":"d","runtime":"nvidia","backend":"cuda-jetson"}`), &j); err != nil {
+		t.Fatal(err)
+	}
+	if j.Backend != "cuda-jetson" || j.Runtime != "nvidia" {
+		t.Fatalf("%+v", j)
+	}
+	raw, err := json.Marshal(Job{JobID: "j", Kind: KindLeaseStart, Runtime: "nvidia"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "backend") {
+		t.Fatalf("omitempty leaked backend: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"runtime":"nvidia"`) {
+		t.Fatalf("runtime must stay nvidia: %s", raw)
+	}
 }
 
 func TestTunnelGetAck(t *testing.T) {

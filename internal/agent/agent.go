@@ -166,6 +166,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		"device_id", hb.DeviceID,
 		"path_b_state", hb.PathBState,
 		"nvpmodel", snap.Nvpmodel,
+		"backend", runtime.NVIDIALogLabel,
 	)
 	return nil
 }
@@ -231,7 +232,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	if job == nil {
 		return nil
 	}
-	a.log.Info("got job", "job_id", job.JobID, "kind", job.Kind, "suite_id", job.SuiteID, "lease_id", job.LeaseID)
+	a.log.Info("got job", "job_id", job.JobID, "kind", job.Kind, "suite_id", job.SuiteID, "lease_id", job.LeaseID, "backend", jobBackendLog(*job))
 
 	res := a.runJob(ctx, *job)
 	if err := a.client.PostResult(ctx, job.JobID, a.state.DeviceID, api.JobResultRequest{
@@ -240,7 +241,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason)
+	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))
 	return nil
 }
 
@@ -260,6 +261,10 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) pathb.Result {
 }
 
 func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
+	if path, reason := runtime.ResolveBackend(job.Backend); path != runtime.NVIDIAContainer {
+		a.log.Info("lease_start stub", "backend", runtime.LogLabel(job.Backend), "reason", reason)
+		return pathb.Result{Passed: false, Reason: reason}
+	}
 	if strings.TrimSpace(job.ImageDigest) == "" {
 		return pathb.Result{Passed: false, Reason: "no image_digest; no soak image"}
 	}
@@ -288,8 +293,15 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	}
 	snap, _ := a.telem.Collect(ctx)
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
-	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.NVIDIALogLabel)
 	return pathb.Result{Passed: true, ImageHash: image, Reason: "lease_start"}
+}
+
+func jobBackendLog(job api.Job) string {
+	if job.Kind == api.KindLeaseStart {
+		return runtime.LogLabel(job.Backend)
+	}
+	return runtime.NVIDIALogLabel
 }
 
 func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
