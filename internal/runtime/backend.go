@@ -2,58 +2,60 @@ package runtime
 
 import "strings"
 
-// Optional lease_start backend. This is a compile-time switch only.
-//
-// runtime stays "nvidia" for the OCI cuda-jetson path. Do not overload
-// that locked field. Loaders stay oci|gguf. This image is AGX first:
-// empty, cuda-jetson, and cuda-sm87 use docker --runtime=nvidia.
-// Other names POST passed=false until a later image. Do not implement
-// llama.cpp, Vulkan, HIP, or SSD here.
+// lease_start backend enum (host-runtimes.md). runtime stays "nvidia"
+// for oci cuda-jetson. Do not overload that locked field. Loaders stay
+// oci|gguf. disk-io is not in this enum (unknown → fail).
 const (
 	BackendCUDAJetson     = "cuda-jetson"
 	BackendCUDASM87       = "cuda-sm87"
 	BackendLlamaCppCPU    = "llama-cpp-cpu"
 	BackendLlamaCppVulkan = "llama-cpp-vulkan"
 	BackendHIPROCm        = "hip-rocm"
-	BackendDiskIO         = "disk-io"
 )
 
-// NVIDIALogLabel is the log-only backend name on this AGX image.
-// Heartbeat and Path B telem may print this. No tok/s or TOPS.
-const NVIDIALogLabel = BackendCUDASM87
+// NVIDIALogLabel is the log-only name on this AGX image (omitted = cuda-jetson).
+// Heartbeat and Path B telem may print this. No tok/s. TOPS is not tok/s.
+const NVIDIALogLabel = BackendCUDAJetson
 
-// Path says whether lease_start may call docker --runtime=nvidia.
+// Path says whether this box may call docker --runtime=nvidia.
 type Path int
 
 const (
 	// NVIDIAContainer is docker --runtime=nvidia, repo@digest. Phase 1 AGX.
 	NVIDIAContainer Path = iota
-	// StubFail is a no-op. POST passed=false. Do not start a container.
+	// StubFail is a compile-time no-op. POST passed=false. Do not start work.
 	StubFail
 )
 
-// ResolveBackend classifies the optional lease_start backend.
-// Empty, cuda-jetson, and cuda-sm87 are the existing NVIDIA path.
-func ResolveBackend(backend string) (Path, string) {
+// NormalizeBackend maps omitted and cuda-sm87 to cuda-jetson.
+func NormalizeBackend(backend string) string {
 	switch strings.TrimSpace(backend) {
 	case "", BackendCUDAJetson, BackendCUDASM87:
-		return NVIDIAContainer, ""
-	case BackendLlamaCppCPU:
-		return StubFail, "this image does not run CPU GGUF"
-	case BackendLlamaCppVulkan:
-		return StubFail, "Vulkan RADV not on this image (not 7945HX 610M)"
-	case BackendHIPROCm:
-		// Do not set HSA_OVERRIDE. Do not target gfx1036.
-		return StubFail, "HIP/ROCm not on this image"
-	case BackendDiskIO:
-		// Not a Hypermesh runtime. Same fail as unknown, own reason.
-		return StubFail, "not a certified runtime"
+		return BackendCUDAJetson
 	default:
-		return StubFail, "unknown backend"
+		return strings.TrimSpace(backend)
 	}
 }
 
-// LogLabel is the host-log backend name. NVIDIA path logs cuda-sm87.
+// FailReason is the customer-safe stub/unknown string (host-runtimes.md).
+func FailReason(backend string) string {
+	return "This image does not run " + strings.TrimSpace(backend) + "."
+}
+
+// ResolveBackend classifies the optional backend.
+// Omitted and cuda-sm87 are cuda-jetson (NVIDIA container path).
+// Stubs and unknown POST passed=false. Do not set HSA_OVERRIDE.
+func ResolveBackend(backend string) (Path, string) {
+	name := strings.TrimSpace(backend)
+	switch name {
+	case "", BackendCUDAJetson, BackendCUDASM87:
+		return NVIDIAContainer, ""
+	default:
+		return StubFail, FailReason(name)
+	}
+}
+
+// LogLabel is the host-log backend name. NVIDIA path logs cuda-jetson.
 func LogLabel(backend string) string {
 	path, _ := ResolveBackend(backend)
 	if path == NVIDIAContainer {

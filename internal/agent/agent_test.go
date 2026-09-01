@@ -621,11 +621,11 @@ func TestLeaseStartBackends(t *testing.T) {
 		{name: "omitted", backend: "", wantPass: true, wantDocker: true, wantReason: "lease_start"},
 		{name: "cuda-jetson", backend: "cuda-jetson", wantPass: true, wantDocker: true, wantReason: "lease_start"},
 		{name: "cuda-sm87", backend: "cuda-sm87", wantPass: true, wantDocker: true, wantReason: "lease_start"},
-		{name: "llama-cpp-cpu", backend: "llama-cpp-cpu", wantPass: false, wantDocker: false, wantReason: "this image does not run CPU GGUF"},
-		{name: "llama-cpp-vulkan", backend: "llama-cpp-vulkan", wantPass: false, wantDocker: false, wantReason: "Vulkan RADV not on this image (not 7945HX 610M)"},
-		{name: "hip-rocm", backend: "hip-rocm", wantPass: false, wantDocker: false, wantReason: "HIP/ROCm not on this image"},
-		{name: "disk-io", backend: "disk-io", wantPass: false, wantDocker: false, wantReason: "not a certified runtime"},
-		{name: "unknown", backend: "not-a-backend", wantPass: false, wantDocker: false, wantReason: "unknown backend"},
+		{name: "llama-cpp-cpu", backend: "llama-cpp-cpu", wantPass: false, wantDocker: false, wantReason: "This image does not run llama-cpp-cpu."},
+		{name: "llama-cpp-vulkan", backend: "llama-cpp-vulkan", wantPass: false, wantDocker: false, wantReason: "This image does not run llama-cpp-vulkan."},
+		{name: "hip-rocm", backend: "hip-rocm", wantPass: false, wantDocker: false, wantReason: "This image does not run hip-rocm."},
+		{name: "disk-io", backend: "disk-io", wantPass: false, wantDocker: false, wantReason: "This image does not run disk-io."},
+		{name: "unknown", backend: "not-a-backend", wantPass: false, wantDocker: false, wantReason: "This image does not run not-a-backend."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -728,13 +728,78 @@ func TestHeartbeatLogsNVIDIABackend(t *testing.T) {
 		return heartbeats >= 1
 	})
 	out := logBuf.String()
-	if !strings.Contains(out, "backend=cuda-sm87") {
-		t.Fatalf("heartbeat must log cuda-sm87, got %q", out)
+	if !strings.Contains(out, "backend=cuda-jetson") {
+		t.Fatalf("heartbeat must log cuda-jetson, got %q", out)
 	}
 	for _, leak := range []string{"tok/s", "TOPS", "tokens/sec"} {
 		if strings.Contains(out, leak) {
 			t.Fatalf("do not invent %s: %q", leak, out)
 		}
+	}
+}
+
+func TestStubBackendFailsPathBAndInstanceCheck(t *testing.T) {
+	const completion = "UNIQUE_COMPLETION_STUB"
+	var probes int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probes++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": completion}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.pathb.Endpoint = srv.URL
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("stub must not call docker")
+		return nil, nil
+	}}
+
+	backends := []string{"llama-cpp-cpu", "llama-cpp-vulkan", "hip-rocm", "disk-io"}
+	kinds := []api.JobKind{api.KindPathB, api.KindInstanceCheck}
+	for _, kind := range kinds {
+		for _, backend := range backends {
+			got := a.runJob(context.Background(), api.Job{
+				JobID:    "j-stub",
+				Kind:     kind,
+				DeviceID: testDevice,
+				SuiteID:  "thin-v1",
+				Runtime:  "nvidia",
+				Backend:  backend,
+			})
+			want := "This image does not run " + backend + "."
+			if got.Passed || got.Reason != want {
+				t.Fatalf("%s %s: %+v want %q", kind, backend, got, want)
+			}
+		}
+	}
+	if probes != 0 {
+		t.Fatalf("stub instance_check must not probe, probes=%d", probes)
+	}
+}
+
+func TestPathBOmittedBackendStillRunsThinV1(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-pathb",
+		Kind:     api.KindPathB,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if !got.Passed {
+		t.Fatalf("omitted backend is cuda-jetson; path_b telem must still pass: %+v", got)
 	}
 }
 

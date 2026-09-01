@@ -8,30 +8,46 @@ func TestResolveBackendNVIDIAPath(t *testing.T) {
 		if path != NVIDIAContainer || reason != "" {
 			t.Fatalf("%q: path=%v reason=%q", name, path, reason)
 		}
-		if LogLabel(name) != NVIDIALogLabel {
+		if NormalizeBackend(name) != BackendCUDAJetson {
+			t.Fatalf("%q normalize %q", name, NormalizeBackend(name))
+		}
+		if LogLabel(name) != BackendCUDAJetson {
 			t.Fatalf("%q log label %q", name, LogLabel(name))
 		}
 	}
 }
 
-func TestResolveBackendStubs(t *testing.T) {
-	cases := []struct {
-		backend string
-		reason  string
-	}{
-		{"llama-cpp-cpu", "this image does not run CPU GGUF"},
-		{"llama-cpp-vulkan", "Vulkan RADV not on this image (not 7945HX 610M)"},
-		{"hip-rocm", "HIP/ROCm not on this image"},
-		{"disk-io", "not a certified runtime"},
-		{"not-a-backend", "unknown backend"},
+func TestResolveBackendStubsAndUnknown(t *testing.T) {
+	cases := []string{
+		"llama-cpp-cpu",
+		"llama-cpp-vulkan",
+		"hip-rocm",
+		"disk-io",
+		"not-a-backend",
 	}
-	for _, tc := range cases {
-		path, reason := ResolveBackend(tc.backend)
-		if path != StubFail || reason != tc.reason {
-			t.Fatalf("%s: path=%v reason=%q want %q", tc.backend, path, reason, tc.reason)
+	for _, backend := range cases {
+		path, reason := ResolveBackend(backend)
+		want := "This image does not run " + backend + "."
+		if path != StubFail || reason != want {
+			t.Fatalf("%s: path=%v reason=%q want %q", backend, path, reason, want)
 		}
-		if LogLabel(tc.backend) != tc.backend {
-			t.Fatalf("%s log label %q", tc.backend, LogLabel(tc.backend))
+		if FailReason(backend) != want {
+			t.Fatalf("FailReason %q", FailReason(backend))
 		}
+	}
+}
+
+func TestFailReasonExact(t *testing.T) {
+	if FailReason("llama-cpp-cpu") != "This image does not run llama-cpp-cpu." {
+		t.Fatal(FailReason("llama-cpp-cpu"))
+	}
+	if FailReason("llama-cpp-vulkan") != "This image does not run llama-cpp-vulkan." {
+		t.Fatal(FailReason("llama-cpp-vulkan"))
+	}
+	if FailReason("hip-rocm") != "This image does not run hip-rocm." {
+		t.Fatal(FailReason("hip-rocm"))
+	}
+	if FailReason("disk-io") != "This image does not run disk-io." {
+		t.Fatal(FailReason("disk-io"))
 	}
 }

@@ -248,6 +248,9 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 func (a *Agent) runJob(ctx context.Context, job api.Job) pathb.Result {
 	switch job.Kind {
 	case api.KindPathB, api.KindInstanceCheck:
+		if res, stub := a.backendStub(job); stub {
+			return res
+		}
 		return a.pathb.Run(ctx, job)
 	case api.KindLeaseStart:
 		return a.leaseStart(ctx, job)
@@ -260,10 +263,20 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) pathb.Result {
 	}
 }
 
+// backendStub fails lease_start / path_b / instance_check on a stub or
+// unknown backend. instance_check must not probe or fake a completion.
+func (a *Agent) backendStub(job api.Job) (pathb.Result, bool) {
+	path, reason := runtime.ResolveBackend(job.Backend)
+	if path == runtime.NVIDIAContainer {
+		return pathb.Result{}, false
+	}
+	a.log.Info("backend stub", "kind", job.Kind, "backend", runtime.LogLabel(job.Backend), "reason", reason)
+	return pathb.Result{Passed: false, Reason: reason}, true
+}
+
 func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
-	if path, reason := runtime.ResolveBackend(job.Backend); path != runtime.NVIDIAContainer {
-		a.log.Info("lease_start stub", "backend", runtime.LogLabel(job.Backend), "reason", reason)
-		return pathb.Result{Passed: false, Reason: reason}
+	if res, stub := a.backendStub(job); stub {
+		return res
 	}
 	if strings.TrimSpace(job.ImageDigest) == "" {
 		return pathb.Result{Passed: false, Reason: "no image_digest; no soak image"}
@@ -298,10 +311,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 }
 
 func jobBackendLog(job api.Job) string {
-	if job.Kind == api.KindLeaseStart {
-		return runtime.LogLabel(job.Backend)
-	}
-	return runtime.NVIDIALogLabel
+	return runtime.LogLabel(job.Backend)
 }
 
 func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
