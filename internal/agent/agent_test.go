@@ -856,10 +856,12 @@ func TestLeaseStopMismatchPostsPassedFalseOnly(t *testing.T) {
 	}
 	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
 	a.tunnels = &fakeTunnel{}
-	a.lease = &runtime.Handle{
+	if err := a.saveLease(&runtime.Handle{
 		Name:        "hypermesh-lease-running",
 		LeaseID:     "lease-running",
 		ContainerID: "cid-local",
+	}); err != nil {
+		t.Fatal(err)
 	}
 	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
 		mu.Lock()
