@@ -319,10 +319,24 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	if h == nil {
 		h = a.loadLease()
 	}
-	if h != nil {
-		if err := a.runtime.Stop(ctx, h); err != nil {
-			return pathb.Result{Passed: false, Reason: "runtime stop failed"}
-		}
+	if h == nil {
+		// Soft no-op: already stopped / no local handle. Do not fail.
+		a.log.Info("lease_stop", "lease_id", job.LeaseID, "reason", "no local handle")
+		snap, _ := a.telem.Collect(ctx)
+		return pathb.Result{Passed: true, ImageHash: firstNonEmpty(a.cfg.ImageHash, snap.ImageHash), Reason: "lease_stop"}
+	}
+
+	// Strict identity before docker stop. Empty job.lease_id is a mismatch
+	// when a handle exists — do not stop whatever is running.
+	jobLease := strings.TrimSpace(job.LeaseID)
+	localLease := strings.TrimSpace(h.LeaseID)
+	if jobLease == "" || jobLease != localLease {
+		a.log.Info("lease_stop refused", "lease_id", job.LeaseID, "local_lease_id", h.LeaseID, "reason", "lease_id mismatch")
+		return pathb.Result{Passed: false, Reason: "lease_id mismatch"}
+	}
+
+	if err := a.runtime.Stop(ctx, h); err != nil {
+		return pathb.Result{Passed: false, Reason: "runtime stop failed"}
 	}
 	a.lease = nil
 	_ = a.saveLease(nil)
