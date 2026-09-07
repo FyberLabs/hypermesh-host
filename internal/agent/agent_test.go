@@ -666,6 +666,232 @@ func TestLeaseStartBackends(t *testing.T) {
 	}
 }
 
+func TestLeaseStopIdentity(t *testing.T) {
+	const localID = "lease-running"
+	handle := runtime.Handle{
+		Name:        "hypermesh-lease-running",
+		LeaseID:     localID,
+		ContainerID: "cid-local",
+	}
+
+	cases := []struct {
+		name       string
+		handle     *runtime.Handle
+		disk       bool
+		jobLease   string
+		wantPass   bool
+		wantReason string
+		wantDocker bool
+		wantKeep   bool
+	}{
+		{
+			name:       "match stops",
+			handle:     &handle,
+			jobLease:   localID,
+			wantPass:   true,
+			wantReason: "lease_stop",
+			wantDocker: true,
+		},
+		{
+			name:       "mismatch refuses",
+			handle:     &handle,
+			jobLease:   "lease-other",
+			wantPass:   false,
+			wantReason: "lease_id mismatch",
+			wantKeep:   true,
+		},
+		{
+			name:       "empty lease_id with handle refuses",
+			handle:     &handle,
+			jobLease:   "",
+			wantPass:   false,
+			wantReason: "lease_id mismatch",
+			wantKeep:   true,
+		},
+		{
+			name:       "whitespace lease_id with handle refuses",
+			handle:     &handle,
+			jobLease:   "   ",
+			wantPass:   false,
+			wantReason: "lease_id mismatch",
+			wantKeep:   true,
+		},
+		{
+			name:       "no handle soft no-op",
+			jobLease:   "lease-anything",
+			wantPass:   true,
+			wantReason: "lease_stop",
+		},
+		{
+			name:       "no handle empty lease_id still no-op",
+			jobLease:   "",
+			wantPass:   true,
+			wantReason: "lease_stop",
+		},
+		{
+			name:       "disk handle mismatch refuses",
+			handle:     &handle,
+			disk:       true,
+			jobLease:   "lease-other",
+			wantPass:   false,
+			wantReason: "lease_id mismatch",
+			wantKeep:   true,
+		},
+		{
+			name:       "disk handle match stops",
+			handle:     &handle,
+			disk:       true,
+			jobLease:   localID,
+			wantPass:   true,
+			wantReason: "lease_stop",
+			wantDocker: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			uptime := filepath.Join(dir, "uptime")
+			if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var dockerCalls [][]string
+			a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+			ft := &fakeTunnel{}
+			a.tunnels = ft
+			a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				dockerCalls = append(dockerCalls, append([]string{}, args...))
+				return []byte("ok\n"), nil
+			}}
+			if tc.handle != nil {
+				h := *tc.handle
+				if tc.disk {
+					if err := a.saveLease(&h); err != nil {
+						t.Fatal(err)
+					}
+					a.lease = nil
+				} else {
+					a.lease = &h
+				}
+			}
+
+			got := a.runJob(context.Background(), api.Job{
+				JobID:    "j-stop",
+				Kind:     api.KindLeaseStop,
+				DeviceID: testDevice,
+				LeaseID:  tc.jobLease,
+			})
+			if got.Passed != tc.wantPass || got.Reason != tc.wantReason {
+				t.Fatalf("result %+v want pass=%v reason=%q", got, tc.wantPass, tc.wantReason)
+			}
+			if tc.wantDocker {
+				if len(dockerCalls) != 1 || dockerCalls[0][0] != "stop" {
+					t.Fatalf("expected docker stop, calls=%v", dockerCalls)
+				}
+			} else if len(dockerCalls) != 0 {
+				t.Fatalf("docker must not run, calls=%v", dockerCalls)
+			}
+			ft.mu.Lock()
+			teardowns := ft.teardowns
+			ft.mu.Unlock()
+			if teardowns != 0 {
+				t.Fatalf("lease_stop must not bounce WireGuard, teardowns=%d", teardowns)
+			}
+
+			kept := a.lease != nil || a.loadLease() != nil
+			if kept != tc.wantKeep {
+				t.Fatalf("handle kept=%v want %v mem=%+v disk=%+v", kept, tc.wantKeep, a.lease, a.loadLease())
+			}
+		})
+	}
+}
+
+func TestLeaseStopMismatchPostsPassedFalseOnly(t *testing.T) {
+	var mu sync.Mutex
+	var posted map[string]any
+	var dockerCalls int
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		done := posted != nil
+		mu.Unlock()
+		if done {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, http.StatusOK, api.Job{
+			JobID:    "j-mismatch",
+			Kind:     api.KindLeaseStop,
+			DeviceID: testDevice,
+			LeaseID:  "lease-other",
+		})
+	})
+	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/j-mismatch/result", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("result body: %v", err)
+		}
+		mu.Lock()
+		posted = body
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	a.tunnels = &fakeTunnel{}
+	if err := a.saveLease(&runtime.Handle{
+		Name:        "hypermesh-lease-running",
+		LeaseID:     "lease-running",
+		ContainerID: "cid-local",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		mu.Lock()
+		dockerCalls++
+		mu.Unlock()
+		return []byte("ok\n"), nil
+	}}
+
+	waitLoop(t, a, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return posted != nil
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if dockerCalls != 0 {
+		t.Fatalf("mismatch must not docker stop, calls=%d", dockerCalls)
+	}
+	passed, _ := posted["passed"].(bool)
+	if passed {
+		t.Fatalf("mismatch must POST passed=false, body=%v", posted)
+	}
+	for _, extra := range []string{"reason", "reason_code", "lease_id", "sell_state", "path_b"} {
+		if _, ok := posted[extra]; ok {
+			t.Fatalf("result body must stay {passed, image_hash?}, extra %s in %v", extra, posted)
+		}
+	}
+}
+
 func TestLeaseStartCUDAJetsonEmptyDigestStillFails(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
