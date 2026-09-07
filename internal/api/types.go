@@ -32,11 +32,12 @@ type EnrollResponse struct {
 
 // HeartbeatRequest is POST /agent/heartbeat.
 type HeartbeatRequest struct {
-	DeviceID        string   `json:"device_id"`
-	ImageHash       string   `json:"image_hash,omitempty"`
-	LoadedModelHash string   `json:"loaded_model_hash,omitempty"`
-	UptimeS         int64    `json:"uptime_s"`
-	ThermalC        *float64 `json:"thermal_c,omitempty"`
+	DeviceID        string    `json:"device_id"`
+	ImageHash       string    `json:"image_hash,omitempty"`
+	LoadedModelHash string    `json:"loaded_model_hash,omitempty"`
+	UptimeS         int64     `json:"uptime_s"`
+	ThermalC        *float64  `json:"thermal_c,omitempty"`
+	SellState       SellState `json:"sell_state,omitempty"`
 }
 
 // PathBState is the control-plane view of Path B.
@@ -48,10 +49,23 @@ const (
 	PathBSuspended PathBState = "suspended"
 )
 
+// SellState is Host-reported sell posture. Not Path B.
+// Do not copy path_b_state into sell_state.
+type SellState string
+
+const (
+	SellSelling  SellState = "selling"
+	SellPaused   SellState = "paused"
+	SellDraining SellState = "draining"
+	SellOff      SellState = "off"
+	SellNA       SellState = "n/a"
+)
+
 // HeartbeatResponse is the 200 body from heartbeat.
 type HeartbeatResponse struct {
 	DeviceID   string     `json:"device_id"`
 	PathBState PathBState `json:"path_b_state"`
+	SellState  SellState  `json:"sell_state,omitempty"`
 	AcceptedAt time.Time  `json:"accepted_at"`
 }
 
@@ -63,6 +77,7 @@ const (
 	KindInstanceCheck JobKind = "instance_check"
 	KindLeaseStart    JobKind = "lease_start"
 	KindLeaseStop     JobKind = "lease_stop"
+	KindSellPause     JobKind = "sell_pause"
 )
 
 // Job is GET /agent/jobs. One pending job or 204. No suite payload.
@@ -79,12 +94,19 @@ type Job struct {
 	Runtime     string  `json:"runtime,omitempty"`
 	Backend     string  `json:"backend,omitempty"`
 	SuiteID     string  `json:"suite_id,omitempty"`
+	Until       string  `json:"until,omitempty"`
 }
 
 // JobResultRequest is POST /agent/jobs/{job_id}/result.
+// Sell fields are omitempty so lease_start / lease_stop / path_b
+// do not leak them. sell_pause must set SellState. passed=true
+// with sell_state=n/a is invalid on the control plane.
 type JobResultRequest struct {
-	Passed    bool   `json:"passed"`
-	ImageHash string `json:"image_hash,omitempty"`
+	Passed    bool      `json:"passed"`
+	ImageHash string    `json:"image_hash,omitempty"`
+	SellState SellState `json:"sell_state,omitempty"`
+	Until     string    `json:"until,omitempty"`
+	DeviceID  string    `json:"device_id,omitempty"`
 }
 
 // TunnelStatus is the control-plane session state.
