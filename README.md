@@ -6,7 +6,7 @@ This box enrolls, heartbeats, applies the allocated WireGuard session, and runs 
 
 ## Status
 
-HTTP matches the locked agent shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty or bare `image_digest` on lease_start POSTs `passed=false` (not a running instance; CP must not go active).
+HTTP matches the locked agent shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop / sell_pause). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty or bare `image_digest` on lease_start POSTs `passed=false` (not a running instance; CP must not go active).
 
 Default / example control plane: **`https://api.test.hyperme.sh`**. Not live yet. Tests compile against `httptest`.
 
@@ -54,7 +54,7 @@ If this box already has an id on disk but lost the secret, it cannot enroll agai
 
 ### Jobs
 
-Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`, `catalog_id`, `image_digest`, `runtime`, `backend`, `suite_id`.
+Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`, `catalog_id`, `image_digest`, `runtime`, `backend`, `suite_id`, `until`.
 
 | kind | What this box does |
 |---|---|
@@ -62,10 +62,13 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 | `instance_check` | thin-v1: must hit that completions endpoint and fail if there is no real `choices[0].message.content`. This is the container-answers gate. |
 | `lease_start` | `image_digest` must be `repo@digest`. `docker pull` then `docker --runtime=nvidia -p 8080:8080 --name hypermesh-<lease_id>`. Empty digest or bare `sha256:hex` → `passed=false`. Host port is `HYPERMESH_LISTEN_PORT` (default 8080). Empty/unknown `kind` → `passed=false`. |
 | `lease_stop` | Stop only when `job.lease_id` matches the local handle. Mismatch (including empty `lease_id` with a handle) POSTs `passed=false` and does not `docker stop`. No handle is a soft no-op (`passed=true`). Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
+| `sell_pause` | Persist local sell posture in `$STATE_DIR/sell.json`. Matching `device_id` sets `sell_state=paused` (optional `until` RFC3339; omit = indefinite). Mismatch POSTs `passed=false` and the current real `sell_state` (usually `selling`) without flipping. Already paused is a no-op `passed=true`. While paused, new `lease_start` is refused (`passed=false`); the current lease is left running. When `until` is reached, posture returns to `selling`. Not `path_b`. |
 
 Optional `backend` on `lease_start`: `cuda-jetson` | `cuda-sm87` | `llama-cpp-cpu` | `llama-cpp-vulkan` | `hip-rocm`. Omitted = `cuda-jetson` (alias `cuda-sm87`). This box is AGX first: that path is `docker --runtime=nvidia`. `runtime` stays `nvidia`. Stubs and unknown (including `disk-io`, which is not in the enum) POST `passed=false` on `lease_start` and `path_b` (`This image does not run <backend>.`) until a later image. `instance_check` on a stub does the same and does not probe.
 
-Result body stays `{"passed", "image_hash?"}`. The probe and the completion text are never logged and never placed in the result.
+Result body for `path_b` / `instance_check` / `lease_start` / `lease_stop` stays `{"passed", "image_hash?"}`. `sell_pause` POSTs `{"passed", "sell_state", "until?", "device_id?"}`. `sell_state` is required on that result (`selling` \| `paused` \| `draining` \| `off` \| `n/a`). This box never POSTs `passed=true` with `sell_state=n/a`. Heartbeat includes current `sell_state` (default after the actuator exists: `selling`). Path B (`path_b_state`) is not sell posture.
+
+The probe and the completion text are never logged and never placed in the result.
 
 ### Tunnel
 

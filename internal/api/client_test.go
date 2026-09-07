@@ -265,6 +265,71 @@ func TestJobBackendJSON(t *testing.T) {
 	}
 }
 
+func TestSellPauseJobAndResultJSON(t *testing.T) {
+	var j Job
+	if err := json.Unmarshal([]byte(`{"job_id":"j","kind":"sell_pause","device_id":"d","until":"2026-09-08T00:00:00Z"}`), &j); err != nil {
+		t.Fatal(err)
+	}
+	if j.Kind != KindSellPause || j.DeviceID != "d" || j.Until != "2026-09-08T00:00:00Z" {
+		t.Fatalf("%+v", j)
+	}
+
+	leaseRaw, err := json.Marshal(JobResultRequest{Passed: true, ImageHash: "sha256:abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"sell_state", "until", "device_id"} {
+		if strings.Contains(string(leaseRaw), leak) {
+			t.Fatalf("lease/path_b result leaked %s: %s", leak, leaseRaw)
+		}
+	}
+
+	pauseRaw, err := json.Marshal(JobResultRequest{
+		Passed:    true,
+		SellState: SellPaused,
+		Until:     "2026-09-08T00:00:00Z",
+		DeviceID:  testDevice,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pauseRaw), `"sell_state":"paused"`) {
+		t.Fatalf("sell_pause result must include sell_state: %s", pauseRaw)
+	}
+	if strings.Contains(string(pauseRaw), `"n/a"`) {
+		t.Fatalf("sell_pause result must not use n/a: %s", pauseRaw)
+	}
+
+	invalid := JobResultRequest{Passed: true, SellState: SellNA}
+	invRaw, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(invRaw), `"passed":true`) || !strings.Contains(string(invRaw), `"n/a"`) {
+		t.Fatalf("fixture %+v raw %s", invalid, invRaw)
+	}
+}
+
+func TestHeartbeatSellStateJSON(t *testing.T) {
+	raw, err := json.Marshal(HeartbeatRequest{DeviceID: testDevice, UptimeS: 1, SellState: SellSelling})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"sell_state":"selling"`) {
+		t.Fatalf("heartbeat must send sell_state: %s", raw)
+	}
+	if strings.Contains(string(raw), "path_b") {
+		t.Fatalf("heartbeat request must not copy path_b into sell: %s", raw)
+	}
+	omitted, err := json.Marshal(HeartbeatRequest{DeviceID: testDevice, UptimeS: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(omitted), "sell_state") {
+		t.Fatalf("omitempty leaked sell_state: %s", omitted)
+	}
+}
+
 func TestTunnelGetAck(t *testing.T) {
 	var acked bool
 	mux := http.NewServeMux()

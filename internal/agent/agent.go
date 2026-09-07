@@ -29,6 +29,7 @@ type Agent struct {
 	state   State
 	lease   *runtime.Handle
 	applied string // fingerprint of the host peer we last acked (not tunnel_id)
+	now     func() time.Time
 }
 
 // New builds an agent. log may be nil.
@@ -153,11 +154,13 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		return err
 	}
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
+	sell := a.effectiveSell()
 	hb, err := a.client.Heartbeat(ctx, api.HeartbeatRequest{
 		DeviceID:  a.state.DeviceID,
 		ImageHash: image,
 		UptimeS:   snap.UptimeS,
 		ThermalC:  snap.ThermalC,
+		SellState: sell.SellState,
 	})
 	if err != nil {
 		return err
@@ -165,6 +168,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	a.log.Info("heartbeat accepted",
 		"device_id", hb.DeviceID,
 		"path_b_state", hb.PathBState,
+		"sell_state", sell.SellState,
 		"nvpmodel", snap.Nvpmodel,
 		"backend", runtime.NVIDIALogLabel,
 	)
@@ -225,6 +229,7 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 }
 
 func (a *Agent) pullAndRun(ctx context.Context) error {
+	_ = a.effectiveSell()
 	job, err := a.client.PullJob(ctx, a.state.DeviceID)
 	if err != nil {
 		return err
@@ -235,31 +240,31 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	a.log.Info("got job", "job_id", job.JobID, "kind", job.Kind, "suite_id", job.SuiteID, "lease_id", job.LeaseID, "backend", jobBackendLog(*job))
 
 	res := a.runJob(ctx, *job)
-	if err := a.client.PostResult(ctx, job.JobID, a.state.DeviceID, api.JobResultRequest{
-		Passed:    res.Passed,
-		ImageHash: res.ImageHash,
-	}); err != nil {
+	if err := a.client.PostResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
 		return err
 	}
 	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))
 	return nil
 }
 
-func (a *Agent) runJob(ctx context.Context, job api.Job) pathb.Result {
+func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
+	_ = a.effectiveSell()
 	switch job.Kind {
 	case api.KindPathB, api.KindInstanceCheck:
 		if res, stub := a.backendStub(job); stub {
-			return res
+			return jobOutcome{Result: res}
 		}
-		return a.pathb.Run(ctx, job)
+		return jobOutcome{Result: a.pathb.Run(ctx, job)}
 	case api.KindLeaseStart:
-		return a.leaseStart(ctx, job)
+		return jobOutcome{Result: a.leaseStart(ctx, job)}
 	case api.KindLeaseStop:
-		return a.leaseStop(ctx, job)
+		return jobOutcome{Result: a.leaseStop(ctx, job)}
+	case api.KindSellPause:
+		return a.sellPause(job)
 	case "":
-		return pathb.Result{Passed: false, Reason: "empty job kind"}
+		return jobOutcome{Result: pathb.Result{Passed: false, Reason: "empty job kind"}}
 	default:
-		return pathb.Result{Passed: false, Reason: "unknown job kind"}
+		return jobOutcome{Result: pathb.Result{Passed: false, Reason: "unknown job kind"}}
 	}
 }
 
@@ -277,6 +282,10 @@ func (a *Agent) backendStub(job api.Job) (pathb.Result, bool) {
 func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if res, stub := a.backendStub(job); stub {
 		return res
+	}
+	if sell := a.effectiveSell(); sell.SellState == api.SellPaused {
+		a.log.Info("lease_start refused", "reason", "sell paused", "sell_state", sell.SellState, "until", sell.Until)
+		return pathb.Result{Passed: false, Reason: "sell paused"}
 	}
 	if strings.TrimSpace(job.ImageDigest) == "" {
 		return pathb.Result{Passed: false, Reason: "no image_digest; no soak image"}
