@@ -9,6 +9,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/FyberLabs/hypermesh-host/internal/agent"
@@ -28,6 +29,17 @@ func main() {
 	flag.StringVar(&cfg.ImageHash, "image-hash", cfg.ImageHash, "optional host image hash override (HYPERMESH_IMAGE_HASH)")
 	flag.StringVar(&cfg.ListenPort, "listen-port", cfg.ListenPort, "host port published to the workload :8080 (HYPERMESH_LISTEN_PORT)")
 	flag.StringVar(&cfg.CompletionsURL, "completions-url", cfg.CompletionsURL, "local OpenAI-shaped completions URL (HYPERMESH_COMPLETIONS_URL)")
+
+	if pre, ownerArgs, ok := splitOwnerArgs(os.Args[1:]); ok {
+		if err := flag.CommandLine.Parse(pre); err != nil {
+			os.Exit(2)
+		}
+		if err := agent.RunOwnerCLI(cfg.StateDir, ownerArgs); err != nil {
+			log.Error("owner command failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 	flag.Parse()
 
 	a, err := agent.New(cfg, log)
@@ -49,4 +61,26 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("stopped")
+}
+
+// splitOwnerArgs finds a bare "owner" subcommand so
+// `hypermesh-agent -state-dir=DIR owner sell-pause` works.
+func splitOwnerArgs(args []string) (pre, rest []string, ok bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return nil, nil, false
+		}
+		if a == "owner" {
+			return args[:i], args[i+1:], true
+		}
+		if strings.HasPrefix(a, "-") {
+			if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && args[i+1] != "owner" {
+				i++
+			}
+			continue
+		}
+		return nil, nil, false
+	}
+	return nil, nil, false
 }

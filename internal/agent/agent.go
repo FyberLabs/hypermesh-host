@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
@@ -30,6 +31,7 @@ type Agent struct {
 	lease   *runtime.Handle
 	applied string // fingerprint of the host peer we last acked (not tunnel_id)
 	now     func() time.Time
+	ownerMu sync.Mutex
 }
 
 // New builds an agent. log may be nil.
@@ -62,6 +64,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	a.lease = a.loadLease()
+	if err := a.startOwner(ctx); err != nil {
+		return err
+	}
 
 	if err := a.heartbeat(ctx); err != nil {
 		a.log.Warn("heartbeat failed", "err", err)

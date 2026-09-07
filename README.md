@@ -6,7 +6,7 @@ This box enrolls, heartbeats, applies the allocated WireGuard session, and runs 
 
 ## Status
 
-HTTP matches the locked agent shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop / sell_pause). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty or bare `image_digest` on lease_start POSTs `passed=false` (not a running instance; CP must not go active).
+HTTP matches the locked agent shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop / sell_pause). H4 adds a **plane-down owner** unix socket on this box (not CP enqueue). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty or bare `image_digest` on lease_start POSTs `passed=false` (not a running instance; CP must not go active).
 
 Default / example control plane: **`https://api.test.hyperme.sh`**. Not live yet. Tests compile against `httptest`.
 
@@ -70,6 +70,40 @@ Result body for `path_b` / `instance_check` / `lease_start` / `lease_stop` stays
 
 The probe and the completion text are never logged and never placed in the result.
 
+### Owner console (plane-down)
+
+H4 v0. Local owner actuators when the control plane is unreachable. **Not** CP job enqueue, **not** Path B, **not** SociACL / WebAuthn / OIDC / privilege_grant.
+
+Auth lock (Chris via First Principles, 2026-09-07): unix socket `$STATE_DIR/owner.sock` (not loopback TCP) + bearer file `$STATE_DIR/owner.token` mode **0600**.
+
+On agent start (after enroll / stored identity): create `owner.token` if missing (32 random bytes, hex, 0600), remove a stale `owner.sock`, listen HTTP on that unix socket (socket file 0600). Every route requires `Authorization: Bearer <token>` matching the file; otherwise **401**.
+
+| Call | Path | Body | Response |
+|---|---|---|---|
+| Pause sell | `POST /v0/sell_pause` | optional `{until?, device_id?}`. Device is this box. `until` is RFC3339. If `device_id` is present it must match the enrolled id. | `{passed, sell_state, until?, device_id?}`. Never `passed=true` with `sell_state=n/a`. Same `sellPause` actuator as the CP job. |
+| Stop lease | `POST /v0/lease_stop` | `{lease_id}` required | `{passed, image_hash?}`. Same H1 identity as the CP `lease_stop` job. |
+
+After each authorized call attempt (pass or fail), this box appends one JSON line to `$STATE_DIR/owner-effects.jsonl`: `ts` (RFC3339), `tool` (`hypermesh.sell_pause` or `hypermesh.lease_stop`), `args`, `passed`, and the relevant fields (`sell_state` / `until` / `lease_id`). Plane-down receipts for Brewnix — not a `fyber.receipt` schema.
+
+CLI (talks to the socket + token file; does not contact the control plane):
+
+```bash
+hypermesh-agent owner sell-pause [--until=RFC3339]
+hypermesh-agent owner lease-stop --lease-id=<id>
+```
+
+`-state-dir` / `HYPERMESH_STATE_DIR` must point at the running agent's state dir.
+
+Equivalent curl:
+
+```bash
+curl --unix-socket "$STATE_DIR/owner.sock" \
+  -H "Authorization: Bearer $(cat "$STATE_DIR/owner.token")" \
+  -H "Content-Type: application/json" \
+  -d '{"until":"2026-09-08T00:00:00Z"}' \
+  http://localhost/v0/sell_pause
+```
+
 ### Tunnel
 
 Control plane allocates on paid→starting. GET 200 is the current session or 204 none. No `listen_port` on the GET.
@@ -116,11 +150,11 @@ internal/pathb      thin-v1 (telem + optional local completions; path_b fails on
 internal/runtime    NVIDIA Container Runtime start/stop
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
-internal/agent      enroll / heartbeat / tunnel / job loop
+internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
 deploy/agx          systemd + first-boot + on-box workload
 deploy/seeed-j4012  placeholder
 ```
 
 ## Out of scope here
 
-Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs.
+Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs. Owner console does not bind loopback/LAN/public TCP, does not enqueue CP jobs, does not add `sell_resume`, a drain mega-job, `reason_code`, `preempt_mode=hard`, Path B, SociACL, WebAuthn, OIDC, or privilege_grant.
