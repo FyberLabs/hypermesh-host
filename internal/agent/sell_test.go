@@ -76,6 +76,8 @@ func TestSellPauseAppliesAndHeartbeatReports(t *testing.T) {
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
 	a.tunnels = &fakeTunnel{}
+	// Fixture until is 2026-09-08T00:00:00Z; freeze before that so expiry is not the test.
+	a.now = func() time.Time { return time.Date(2026, 9, 7, 23, 0, 0, 0, time.UTC) }
 
 	waitLoop(t, a, func() bool {
 		mu.Lock()
