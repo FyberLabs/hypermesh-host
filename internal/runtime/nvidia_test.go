@@ -99,7 +99,7 @@ func TestStartPullThenRunStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.ContainerID != "cid123" || h.Name != "hypermesh-lease-a" {
+	if h.ContainerID != "cid123" || h.Name != "hypermesh-lease-a" || h.Backend != BackendCUDAJetson {
 		t.Fatalf("handle %+v", h)
 	}
 	if err := n.Stop(context.Background(), h); err != nil {

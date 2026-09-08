@@ -84,6 +84,9 @@ const (
 // Runtime stays "nvidia" for oci cuda-jetson. Backend is optional
 // (cuda-jetson | cuda-sm87 | llama-cpp-cpu | llama-cpp-vulkan | hip-rocm).
 // Omitted = cuda-jetson. Do not overload Runtime. disk-io is not in the enum.
+// Default AGX image stub-fails hip-rocm / llama-cpp-cpu / llama-cpp-vulkan.
+// hip-rocm is a real path only on a -tags rocm image; llama-cpp-cpu is
+// Metal only on darwin. llama-cpp-metal is not in the enum.
 type Job struct {
 	JobID       string  `json:"job_id"`
 	Kind        JobKind `json:"kind"`

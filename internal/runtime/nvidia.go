@@ -45,15 +45,19 @@ type Spec struct {
 	Runtime     string
 	// HostPort is published as -p <HostPort>:8080. Empty uses DefaultListenPort.
 	HostPort string
+	// Backend is the lease_start enum (optional). NVIDIA ignores it for argv.
+	Backend string
 }
 
-// Handle is a started container.
+// Handle is a started container or host process.
 type Handle struct {
 	Name        string
 	LeaseID     string
 	CatalogID   string
 	ImageDigest string
 	ContainerID string
+	// Backend is the path that started this handle (omitempty for old lease.json).
+	Backend string `json:"backend,omitempty"`
 }
 
 // NVIDIA talks to docker with --runtime=nvidia.
@@ -155,6 +159,7 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 		CatalogID:   spec.CatalogID,
 		ImageDigest: ref,
 		ContainerID: strings.TrimSpace(string(out)),
+		Backend:     NormalizeBackend(spec.Backend),
 	}, nil
 }
 

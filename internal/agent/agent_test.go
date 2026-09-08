@@ -633,6 +633,18 @@ func TestLeaseStartBackends(t *testing.T) {
 		{name: "unknown", backend: "not-a-backend", wantPass: false, wantDocker: false, wantReason: "This image does not run not-a-backend."},
 	}
 	for _, tc := range cases {
+		if tc.backend == "llama-cpp-cpu" && runtime.MetalImageEnabled() {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Skip("darwin image: llama-cpp-cpu is the Metal lab path")
+			})
+			continue
+		}
+		if tc.backend == "hip-rocm" && runtime.HIPImageEnabled() {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Skip("rocm image: hip-rocm is the HIP path")
+			})
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			uptime := filepath.Join(dir, "uptime")
@@ -959,8 +971,8 @@ func TestHeartbeatLogsNVIDIABackend(t *testing.T) {
 		return heartbeats >= 1
 	})
 	out := logBuf.String()
-	if !strings.Contains(out, "backend=cuda-jetson") {
-		t.Fatalf("heartbeat must log cuda-jetson, got %q", out)
+	if !strings.Contains(out, "backend="+runtime.HostLogLabel()) {
+		t.Fatalf("heartbeat must log %s, got %q", runtime.HostLogLabel(), out)
 	}
 	for _, leak := range []string{"tok/s", "TOPS", "tokens/sec"} {
 		if strings.Contains(out, leak) {
@@ -1211,6 +1223,12 @@ func TestStubBackendFailsPathBAndInstanceCheck(t *testing.T) {
 	kinds := []api.JobKind{api.KindPathB, api.KindInstanceCheck}
 	for _, kind := range kinds {
 		for _, backend := range backends {
+			if backend == "llama-cpp-cpu" && runtime.MetalImageEnabled() {
+				continue
+			}
+			if backend == "hip-rocm" && runtime.HIPImageEnabled() {
+				continue
+			}
 			got := a.runJob(context.Background(), api.Job{
 				JobID:    "j-stub",
 				Kind:     kind,

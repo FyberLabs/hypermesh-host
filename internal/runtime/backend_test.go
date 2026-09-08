@@ -26,6 +26,12 @@ func TestResolveBackendStubsAndUnknown(t *testing.T) {
 		"not-a-backend",
 	}
 	for _, backend := range cases {
+		if backend == BackendLlamaCppCPU && MetalImageEnabled() {
+			continue
+		}
+		if backend == BackendHIPROCm && HIPImageEnabled() {
+			continue
+		}
 		path, reason := ResolveBackend(backend)
 		want := "This image does not run " + backend + "."
 		if path != StubFail || reason != want {
@@ -34,6 +40,18 @@ func TestResolveBackendStubsAndUnknown(t *testing.T) {
 		if FailReason(backend) != want {
 			t.Fatalf("FailReason %q", FailReason(backend))
 		}
+	}
+}
+
+func TestHostLogLabelDefaultAGX(t *testing.T) {
+	if HIPImageEnabled() || MetalImageEnabled() {
+		t.Skip("non-AGX image")
+	}
+	if HostLogLabel() != BackendCUDAJetson {
+		t.Fatalf("AGX host log %q", HostLogLabel())
+	}
+	if !NVIDIAContainer.Runnable() || StubFail.Runnable() {
+		t.Fatal("runnable flags")
 	}
 }
 

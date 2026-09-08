@@ -19,6 +19,8 @@ go test ./...
 go build -o hypermesh-agent ./cmd/agent
 ```
 
+Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
+
 Tests use `net/http/httptest` fixtures of the locked shapes. They do not need a live Panopticon.
 
 ## Run against the test control plane
@@ -64,7 +66,9 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 | `lease_stop` | Stop only when `job.lease_id` matches the local handle. Mismatch (including empty `lease_id` with a handle) POSTs `passed=false` and does not `docker stop`. No handle is a soft no-op (`passed=true`) and may omit `image_hash`; prefer the handle digest or an existing host hash when available. Do not invent a hash. Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
 | `sell_pause` | Persist local sell posture in `$STATE_DIR/sell.json`. Matching `device_id` sets `sell_state=paused` (optional `until` RFC3339; omit = indefinite). Mismatch POSTs `passed=false` and the current real `sell_state` (usually `selling`) without flipping. Already paused is a no-op `passed=true`. While paused, new `lease_start` is refused (`passed=false`); the current lease is left running. When `until` is reached, posture returns to `selling`. Not `path_b`. |
 
-Optional `backend` on `lease_start`: `cuda-jetson` | `cuda-sm87` | `llama-cpp-cpu` | `llama-cpp-vulkan` | `hip-rocm`. Omitted = `cuda-jetson` (alias `cuda-sm87`). This box is AGX first: that path is `docker --runtime=nvidia`. `runtime` stays `nvidia`. Stubs and unknown (including `disk-io`, which is not in the enum) POST `passed=false` on `lease_start` and `path_b` (`This image does not run <backend>.`) until a later image. `instance_check` on a stub does the same and does not probe.
+Optional `backend` on `lease_start`: `cuda-jetson` | `cuda-sm87` | `llama-cpp-cpu` | `llama-cpp-vulkan` | `hip-rocm`. Omitted = `cuda-jetson` (alias `cuda-sm87`). This box is AGX first: that path is `docker --runtime=nvidia`. `runtime` stays `nvidia`. On the default AGX / Jetson image, stubs and unknown (including `disk-io`, which is not in the enum) POST `passed=false` on `lease_start` and `path_b` (`This image does not run <backend>.`). `instance_check` on a stub does the same and does not probe.
+
+A later **ROCm** host image (`go build -tags rocm`, not this AGX overlay) may take `hip-rocm`; see [deploy/rocm/README.md](deploy/rocm/README.md). A **darwin** binary may take `llama-cpp-cpu` as the Metal lab runner; Jetson Linux still stubs it. See [deploy/mac/README.md](deploy/mac/README.md). `llama-cpp-vulkan` stays a stub on every image. `llama-cpp-metal` is not in the enum (unknown → the same fail string). Do not set `HSA_OVERRIDE`. Do not invent gfx names. TOPS is not tok/s. Cert still means Fyber-published hashes. Path A/B stay Jetson-first.
 
 Result body for `path_b` / `instance_check` / `lease_start` / `lease_stop` stays `{"passed", "image_hash?"}`. `path_b` / `instance_check` / `lease_start` with `passed=true` must include a non-empty `image_hash` (the digest Panopticon stamps). Empty `image_hash` fails that job only. `sell_pause` POSTs `{"passed", "sell_state", "until?", "device_id?"}`. `sell_state` is required on that result (`selling` \| `paused` \| `draining` \| `off` \| `n/a`). This box never POSTs `passed=true` with `sell_state=n/a`. Heartbeat includes current `sell_state` (default after the actuator exists: `selling`) and `loaded_model_hash` when a lease is running. Path B (`path_b_state`) is not sell posture.
 
@@ -151,12 +155,14 @@ Prep path (docs + overlay stubs, not factory automation): [deploy/seeed-j4012/RE
 cmd/agent           process
 internal/api        locked HTTP client (agent routes + optional enroll-token helper)
 internal/pathb      thin-v1 (telem + optional local completions; path_b fails on reboot)
-internal/runtime    NVIDIA Container Runtime start/stop
+internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (gated)
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
 deploy/agx          systemd + first-boot + on-box workload (Path A, cottage now)
 deploy/seeed-j4012  Path B prep (docs + overlay stubs; does not block AGX)
+deploy/rocm         AMD ROCm host-image notes (scaffold; not Path A/B)
+deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 ```
 
 ## Out of scope here
