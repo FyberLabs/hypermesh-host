@@ -350,6 +350,10 @@ func TestPathBUnchangedAndNotUsedAsSell(t *testing.T) {
 	if !passed {
 		t.Fatalf("path_b should still pass telem: %v", posted)
 	}
+	hash, _ := posted["image_hash"].(string)
+	if strings.TrimSpace(hash) == "" {
+		t.Fatalf("path_b passed=true must include image_hash: %v", posted)
+	}
 	for _, extra := range []string{"sell_state", "until"} {
 		if _, ok := posted[extra]; ok {
 			t.Fatalf("path_b result must not include %s: %v", extra, posted)

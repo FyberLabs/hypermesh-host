@@ -566,11 +566,13 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 			Runtime:     "nvidia",
 		})
 	})
+	var postedHash string
 	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/j-dig/result", func(w http.ResponseWriter, r *http.Request) {
 		var body api.JobResultRequest
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
 		passed = body.Passed
+		postedHash = body.ImageHash
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
@@ -606,6 +608,9 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	}
 	if !strings.Contains(joined, "hypermesh-lease-2") || !strings.Contains(joined, ref) {
 		t.Fatalf("name/ref %v", calls[1])
+	}
+	if postedHash != ref {
+		t.Fatalf("lease_start result image_hash %q want repo@digest %q", postedHash, ref)
 	}
 }
 
@@ -964,6 +969,221 @@ func TestHeartbeatLogsNVIDIABackend(t *testing.T) {
 	}
 }
 
+func TestHeartbeatLoadedModelHashFromLease(t *testing.T) {
+	const digest = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	cases := []struct {
+		name   string
+		memory bool
+		disk   bool
+	}{
+		{name: "memory handle", memory: true},
+		{name: "disk handle", disk: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got api.HeartbeatRequest
+			mux := http.NewServeMux()
+			mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Errorf("heartbeat decode: %v", err)
+				}
+				writeJSON(w, http.StatusOK, api.HeartbeatResponse{
+					DeviceID:   testDevice,
+					PathBState: api.PathBGreen,
+					AcceptedAt: time.Now().UTC(),
+				})
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+
+			dir := t.TempDir()
+			uptime := filepath.Join(dir, "uptime")
+			if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			a := newTestAgent(t, srv.URL, dir, uptime, "", "")
+			a.state.DeviceID = testDevice
+			a.client.DeviceSecret = testSecret
+			h := &runtime.Handle{
+				Name:        "hypermesh-lease-1",
+				LeaseID:     "lease-1",
+				ImageDigest: digest,
+				ContainerID: "cid-1",
+			}
+			if tc.memory {
+				a.lease = h
+			}
+			if tc.disk {
+				if err := a.saveLease(h); err != nil {
+					t.Fatal(err)
+				}
+				a.lease = nil
+			}
+
+			if err := a.heartbeat(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got.LoadedModelHash != digest {
+				t.Fatalf("loaded_model_hash %q want handle ImageDigest %q", got.LoadedModelHash, digest)
+			}
+		})
+	}
+}
+
+func TestHeartbeatOmitsLoadedModelHashWithoutLease(t *testing.T) {
+	cases := []struct {
+		name   string
+		handle *runtime.Handle
+	}{
+		{name: "no lease"},
+		{name: "empty digest", handle: &runtime.Handle{LeaseID: "lease-1", ImageDigest: "   "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw []byte
+			mux := http.NewServeMux()
+			mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+				var err error
+				raw, err = io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read body: %v", err)
+				}
+				writeJSON(w, http.StatusOK, api.HeartbeatResponse{
+					DeviceID:   testDevice,
+					PathBState: api.PathBGreen,
+					AcceptedAt: time.Now().UTC(),
+				})
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+
+			dir := t.TempDir()
+			uptime := filepath.Join(dir, "uptime")
+			if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			a := newTestAgent(t, srv.URL, dir, uptime, "", "")
+			a.state.DeviceID = testDevice
+			a.client.DeviceSecret = testSecret
+			a.lease = tc.handle
+
+			if err := a.heartbeat(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var got api.HeartbeatRequest
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.LoadedModelHash != "" {
+				t.Fatalf("loaded_model_hash must be empty, got %q", got.LoadedModelHash)
+			}
+			if strings.Contains(string(raw), "loaded_model_hash") {
+				t.Fatalf("omitempty must omit loaded_model_hash: %s", raw)
+			}
+		})
+	}
+}
+
+func TestLeaseStartResultImageHashIsRepoDigest(t *testing.T) {
+	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("cid\n"), nil
+	}}
+	got := a.runJob(context.Background(), api.Job{
+		JobID:       "j-hash",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-hash",
+		CatalogID:   "llama-3.1-8b-q4",
+		ImageDigest: ref,
+		Runtime:     "nvidia",
+	})
+	if !got.Passed || got.ImageHash != ref {
+		t.Fatalf("lease_start must POST handle ImageDigest as image_hash: %+v", got)
+	}
+	body := jobResultBody(api.KindLeaseStart, got)
+	if body.ImageHash != ref || !body.Passed {
+		t.Fatalf("result body %+v", body)
+	}
+}
+
+func TestPathBPassedRequiresNonEmptyImageHash(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-pathb-hash",
+		Kind:     api.KindPathB,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if !got.Passed || strings.TrimSpace(got.ImageHash) == "" {
+		t.Fatalf("path_b passed=true requires non-empty image_hash: %+v", got)
+	}
+}
+
+func TestPathBFailsWhenEmptyTelemAndNoLease(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.cfg.ImageHash = ""
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-pathb-empty",
+		Kind:     api.KindPathB,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if got.Passed || got.Reason != "no image_hash" {
+		t.Fatalf("empty telem + no lease must fail path_b: %+v", got)
+	}
+	if got.ImageHash != "" {
+		t.Fatalf("must not invent image_hash: %+v", got)
+	}
+}
+
+func TestPathBUsesLeaseDigestWhenTelemHashEmpty(t *testing.T) {
+	const digest = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.cfg.ImageHash = ""
+	a.lease = &runtime.Handle{LeaseID: "lease-1", ImageDigest: digest}
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+
+	got := a.runJob(context.Background(), api.Job{
+		JobID:    "j-pathb-lease",
+		Kind:     api.KindPathB,
+		DeviceID: testDevice,
+		SuiteID:  "thin-v1",
+	})
+	if !got.Passed || got.ImageHash != digest {
+		t.Fatalf("path_b must use lease ImageDigest when telem hash is empty: %+v", got)
+	}
+}
+
 func TestStubBackendFailsPathBAndInstanceCheck(t *testing.T) {
 	const completion = "UNIQUE_COMPLETION_STUB"
 	var probes int
@@ -1024,8 +1244,8 @@ func TestPathBOmittedBackendStillRunsThinV1(t *testing.T) {
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
-	if !got.Passed {
-		t.Fatalf("omitted backend is cuda-jetson; path_b telem must still pass: %+v", got)
+	if !got.Passed || strings.TrimSpace(got.ImageHash) == "" {
+		t.Fatalf("omitted backend is cuda-jetson; path_b telem must still pass with image_hash: %+v", got)
 	}
 }
 
@@ -1076,8 +1296,8 @@ func TestInstanceCheckPassesOnFakeCompletions(t *testing.T) {
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
-	if !got.Passed {
-		t.Fatalf("instance_check should pass with a real choice: %+v", got)
+	if !got.Passed || strings.TrimSpace(got.ImageHash) == "" {
+		t.Fatalf("instance_check should pass with a real choice and image_hash: %+v", got)
 	}
 	out := logBuf.String() + " " + got.Reason
 	assertNoPromptInLogs(t, out, got.Reason)
@@ -1102,8 +1322,8 @@ func TestPathBStillPassesWhenCompletionsDown(t *testing.T) {
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
-	if !got.Passed {
-		t.Fatalf("path_b must still pass telem when inference is down: %+v", got)
+	if !got.Passed || strings.TrimSpace(got.ImageHash) == "" {
+		t.Fatalf("path_b must still pass telem with image_hash when inference is down: %+v", got)
 	}
 	assertNoPromptInLogs(t, logBuf.String(), got.Reason)
 }

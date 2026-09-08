@@ -42,7 +42,7 @@ After enroll, these routes send `Authorization: Bearer <device_secret>`, `X-Tena
 
 | Call | Path |
 |---|---|
-| Heartbeat | `POST /api/v1/hypermesh/agent/heartbeat` |
+| Heartbeat | `POST /api/v1/hypermesh/agent/heartbeat` (includes `loaded_model_hash` = running lease `repo@digest` when a handle exists; omitempty otherwise) |
 | Job pull | `GET /api/v1/hypermesh/agent/jobs?device_id=` |
 | Result | `POST /api/v1/hypermesh/agent/jobs/{job_id}/result?device_id=` |
 | Tunnel | `GET /api/v1/hypermesh/agent/tunnel?device_id=` |
@@ -58,15 +58,15 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 
 | kind | What this box does |
 |---|---|
-| `path_b` | thin-v1: collect image hash / uptime / thermal. If this box rebooted since the last successful path_b, POST `passed=false` (host log reason: `reboot`). First run records boot identity and does not fail just for being first. If `http://127.0.0.1:8080/v1/chat/completions` is up, POST a pinned probe and require a real choice. If that endpoint is down, telem still passes and inference is recorded as skipped. |
-| `instance_check` | thin-v1: must hit that completions endpoint and fail if there is no real `choices[0].message.content`. This is the container-answers gate. |
-| `lease_start` | `image_digest` must be `repo@digest`. `docker pull` then `docker --runtime=nvidia -p 8080:8080 --name hypermesh-<lease_id>`. Empty digest or bare `sha256:hex` → `passed=false`. Host port is `HYPERMESH_LISTEN_PORT` (default 8080). Empty/unknown `kind` → `passed=false`. |
-| `lease_stop` | Stop only when `job.lease_id` matches the local handle. Mismatch (including empty `lease_id` with a handle) POSTs `passed=false` and does not `docker stop`. No handle is a soft no-op (`passed=true`). Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
+| `path_b` | thin-v1: collect image hash / uptime / thermal. If this box rebooted since the last successful path_b, POST `passed=false` (host log reason: `reboot`). First run records boot identity and does not fail just for being first. If `http://127.0.0.1:8080/v1/chat/completions` is up, POST a pinned probe and require a real choice. If that endpoint is down, telem still passes and inference is recorded as skipped — but `passed=true` still requires a non-empty `image_hash` (telem/host, else the running lease `ImageDigest`). Empty telem + no lease → `passed=false` (host log reason: `no image_hash`). Do not invent a hash. |
+| `instance_check` | thin-v1: must hit that completions endpoint and fail if there is no real `choices[0].message.content`. This is the container-answers gate. `passed=true` requires a non-empty `image_hash` the same way as `path_b`. |
+| `lease_start` | `image_digest` must be `repo@digest`. `docker pull` then `docker --runtime=nvidia -p 8080:8080 --name hypermesh-<lease_id>`. Empty digest or bare `sha256:hex` → `passed=false`. Success POSTs `image_hash` = the started handle’s `ImageDigest` (`repo@digest` from the job). Empty after start → `passed=false` (do not invent). Host port is `HYPERMESH_LISTEN_PORT` (default 8080). Empty/unknown `kind` → `passed=false`. |
+| `lease_stop` | Stop only when `job.lease_id` matches the local handle. Mismatch (including empty `lease_id` with a handle) POSTs `passed=false` and does not `docker stop`. No handle is a soft no-op (`passed=true`) and may omit `image_hash`; prefer the handle digest or an existing host hash when available. Do not invent a hash. Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
 | `sell_pause` | Persist local sell posture in `$STATE_DIR/sell.json`. Matching `device_id` sets `sell_state=paused` (optional `until` RFC3339; omit = indefinite). Mismatch POSTs `passed=false` and the current real `sell_state` (usually `selling`) without flipping. Already paused is a no-op `passed=true`. While paused, new `lease_start` is refused (`passed=false`); the current lease is left running. When `until` is reached, posture returns to `selling`. Not `path_b`. |
 
 Optional `backend` on `lease_start`: `cuda-jetson` | `cuda-sm87` | `llama-cpp-cpu` | `llama-cpp-vulkan` | `hip-rocm`. Omitted = `cuda-jetson` (alias `cuda-sm87`). This box is AGX first: that path is `docker --runtime=nvidia`. `runtime` stays `nvidia`. Stubs and unknown (including `disk-io`, which is not in the enum) POST `passed=false` on `lease_start` and `path_b` (`This image does not run <backend>.`) until a later image. `instance_check` on a stub does the same and does not probe.
 
-Result body for `path_b` / `instance_check` / `lease_start` / `lease_stop` stays `{"passed", "image_hash?"}`. `sell_pause` POSTs `{"passed", "sell_state", "until?", "device_id?"}`. `sell_state` is required on that result (`selling` \| `paused` \| `draining` \| `off` \| `n/a`). This box never POSTs `passed=true` with `sell_state=n/a`. Heartbeat includes current `sell_state` (default after the actuator exists: `selling`). Path B (`path_b_state`) is not sell posture.
+Result body for `path_b` / `instance_check` / `lease_start` / `lease_stop` stays `{"passed", "image_hash?"}`. `path_b` / `instance_check` / `lease_start` with `passed=true` must include a non-empty `image_hash` (the digest Panopticon stamps). Empty `image_hash` fails that job only. `sell_pause` POSTs `{"passed", "sell_state", "until?", "device_id?"}`. `sell_state` is required on that result (`selling` \| `paused` \| `draining` \| `off` \| `n/a`). This box never POSTs `passed=true` with `sell_state=n/a`. Heartbeat includes current `sell_state` (default after the actuator exists: `selling`) and `loaded_model_hash` when a lease is running. Path B (`path_b_state`) is not sell posture.
 
 The probe and the completion text are never logged and never placed in the result.
 
