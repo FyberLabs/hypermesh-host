@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hypermesh owner</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.45 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.4rem; }
+  p, li { margin: 0.4rem 0; }
+  dl { margin: 0.8rem 0; }
+  dt { font-weight: 600; margin-top: 0.55rem; }
+  dd { margin: 0.15rem 0 0; }
+  label { display: block; margin: 0.55rem 0 0.2rem; font-weight: 600; }
+  input { font: inherit; width: 100%; box-sizing: border-box; padding: 0.3rem 0.4rem; }
+  button { font: inherit; padding: 0.35rem 0.7rem; margin: 0.3rem 0.4rem 0.3rem 0; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 0.85rem; padding: 0.6rem; border: 1px solid currentColor; }
+  .row { margin: 1rem 0; }
+  .err { color: #b00020; }
+  .hint { opacity: 0.8; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <h1>Hypermesh owner</h1>
+  <p class="hint">Unix socket <code>owner.sock</code>. Bearer required. Same actuators as <code>POST /v0/sell_pause</code> and <code>POST /v0/lease_stop</code>. Not a control plane.</p>
+
+  <label for="token">Bearer token</label>
+  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="contents of owner.token">
+
+  <div class="row">
+    <button type="button" id="refresh">Refresh status</button>
+  </div>
+
+  <dl>
+    <dt>device_id</dt><dd id="device_id">—</dd>
+    <dt>sell_state</dt><dd id="sell_state">—</dd>
+    <dt>until</dt><dd id="until_val">—</dd>
+    <dt>lease</dt><dd id="lease">—</dd>
+    <dt>path_b</dt><dd id="path_b">—</dd>
+    <dt>backend</dt><dd id="backend">—</dd>
+  </dl>
+
+  <div class="row">
+    <label for="until">sell_pause until (RFC3339, optional)</label>
+    <input id="until" type="text" placeholder="omit for indefinite">
+    <button type="button" id="pause">Pause sell</button>
+    <button type="button" id="stop">Stop lease</button>
+  </div>
+  <p id="action" class="hint"></p>
+  <p id="err" class="err" hidden></p>
+
+  <p class="hint">Host does not persist control-plane <code>path_b_state</code>. Status is sell, lease, last boot id if stored, and whether the local completions endpoint answers.</p>
+  <pre id="raw">__OWNER_STATUS__</pre>
+
+  <noscript>
+    <p>JavaScript is off. Use <code>hypermesh-agent owner status</code> or <code>curl</code> against the unix socket.</p>
+  </noscript>
+
+<script>
+(function () {
+  var status = {};
+  try {
+    status = JSON.parse(document.getElementById("raw").textContent || "{}");
+  } catch (e) {
+    status = {};
+  }
+
+  function token() {
+    return (document.getElementById("token").value || "").trim();
+  }
+
+  function headers() {
+    return {
+      "Authorization": "Bearer " + token(),
+      "Content-Type": "application/json"
+    };
+  }
+
+  function showErr(msg) {
+    var el = document.getElementById("err");
+    if (!msg) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = msg;
+  }
+
+  function render(s) {
+    status = s || {};
+    document.getElementById("device_id").textContent = status.device_id || "—";
+    document.getElementById("sell_state").textContent = status.sell_state || "—";
+    document.getElementById("until_val").textContent = status.until || "—";
+    document.getElementById("backend").textContent = status.backend || "—";
+    if (status.lease && status.lease.lease_id) {
+      var parts = ["lease_id=" + status.lease.lease_id];
+      if (status.lease.catalog_id) parts.push("catalog_id=" + status.lease.catalog_id);
+      if (status.lease.image_digest) parts.push("image_digest=" + status.lease.image_digest);
+      document.getElementById("lease").textContent = parts.join(" ");
+    } else {
+      document.getElementById("lease").textContent = "none";
+    }
+    var pb = status.path_b || {};
+    var pparts = [
+      "boot_id_present=" + (pb.boot_id_present === true),
+      "completions_up=" + (pb.completions_up === true)
+    ];
+    if (pb.boot_id) pparts.push("boot_id=" + pb.boot_id);
+    document.getElementById("path_b").textContent = pparts.join(" ");
+    document.getElementById("raw").textContent = JSON.stringify(status, null, 2);
+    document.getElementById("stop").disabled = !(status.lease && status.lease.lease_id);
+  }
+
+  function readJSON(r) {
+    return r.text().then(function (t) {
+      var body = null;
+      if (t) {
+        try { body = JSON.parse(t); } catch (e) { body = t; }
+      }
+      if (!r.ok) {
+        throw new Error("HTTP " + r.status);
+      }
+      return body;
+    });
+  }
+
+  function refresh() {
+    showErr("");
+    document.getElementById("action").textContent = "";
+    if (!token()) {
+      showErr("Bearer token required.");
+      return Promise.resolve();
+    }
+    return fetch("/v0/status", { headers: headers() }).then(readJSON).then(render).catch(function (e) {
+      showErr(e.message || String(e));
+    });
+  }
+
+  function pause() {
+    showErr("");
+    if (!token()) {
+      showErr("Bearer token required.");
+      return;
+    }
+    var until = (document.getElementById("until").value || "").trim();
+    var body = {};
+    if (until) body.until = until;
+    fetch("/v0/sell_pause", { method: "POST", headers: headers(), body: JSON.stringify(body) })
+      .then(readJSON)
+      .then(function (out) {
+        document.getElementById("action").textContent = "sell_pause passed=" + (out && out.passed);
+        return refresh();
+      })
+      .catch(function (e) { showErr(e.message || String(e)); });
+  }
+
+  function stopLease() {
+    showErr("");
+    if (!token()) {
+      showErr("Bearer token required.");
+      return;
+    }
+    var id = status.lease && status.lease.lease_id;
+    if (!id) {
+      showErr("No lease_id on this host.");
+      return;
+    }
+    fetch("/v0/lease_stop", { method: "POST", headers: headers(), body: JSON.stringify({ lease_id: id }) })
+      .then(readJSON)
+      .then(function (out) {
+        document.getElementById("action").textContent = "lease_stop passed=" + (out && out.passed);
+        return refresh();
+      })
+      .catch(function (e) { showErr(e.message || String(e)); });
+  }
+
+  document.getElementById("refresh").addEventListener("click", refresh);
+  document.getElementById("pause").addEventListener("click", pause);
+  document.getElementById("stop").addEventListener("click", stopLease);
+  render(status);
+})();
+</script>
+</body>
+</html>

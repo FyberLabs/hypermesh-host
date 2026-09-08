@@ -84,6 +84,8 @@ On agent start (after enroll / stored identity): create `owner.token` if missing
 
 | Call | Path | Body | Response |
 |---|---|---|---|
+| Status | `GET /v0/status` | none | JSON only: `{device_id, sell_state, until?, lease, path_b, backend}`. `lease` is `null` or `{lease_id, catalog_id?, image_digest?}` from the local handle. `path_b` is host facts (`boot_id_present`, `boot_id?`, `completions_up`). This box logs CP `path_b_state` on heartbeat and does not persist it — status does not invent that field. `backend` is the log label `cuda-jetson`. No `device_secret`, no WireGuard keys. Does not append `owner-effects.jsonl`. |
+| Console | `GET /` and `GET /v0/console` | none | One HTML page on the same unix socket. Same Bearer. Embeds the current status JSON; the page fetches `/v0/status` and buttons call `sell_pause` / `lease_stop` (`lease_id` from status). |
 | Pause sell | `POST /v0/sell_pause` | optional `{until?, device_id?}`. Device is this box. `until` is RFC3339. If `device_id` is present it must match the enrolled id. | `{passed, sell_state, until?, device_id?}`. Never `passed=true` with `sell_state=n/a`. Same `sellPause` actuator as the CP job. |
 | Stop lease | `POST /v0/lease_stop` | `{lease_id}` required | `{passed, image_hash?}`. Same H1 identity as the CP `lease_stop` job. |
 
@@ -92,15 +94,25 @@ After each authorized call attempt (pass or fail), this box appends one JSON lin
 CLI (talks to the socket + token file; does not contact the control plane):
 
 ```bash
+hypermesh-agent owner status
+hypermesh-agent owner console
 hypermesh-agent owner sell-pause [--until=RFC3339]
 hypermesh-agent owner lease-stop --lease-id=<id>
 ```
 
-`-state-dir` / `HYPERMESH_STATE_DIR` must point at the running agent's state dir.
+`status` prints `GET /v0/status`. `console` prints unix-socket instructions (Bearer via curl / CLI bridge; this box does not bind TCP). `-state-dir` / `HYPERMESH_STATE_DIR` must point at the running agent's state dir.
 
 Equivalent curl:
 
 ```bash
+curl --unix-socket "$STATE_DIR/owner.sock" \
+  -H "Authorization: Bearer $(cat "$STATE_DIR/owner.token")" \
+  http://localhost/v0/status
+
+curl --unix-socket "$STATE_DIR/owner.sock" \
+  -H "Authorization: Bearer $(cat "$STATE_DIR/owner.token")" \
+  http://localhost/v0/console
+
 curl --unix-socket "$STATE_DIR/owner.sock" \
   -H "Authorization: Bearer $(cat "$STATE_DIR/owner.token")" \
   -H "Content-Type: application/json" \

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -18,7 +19,14 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/pathb"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
+
+//go:embed console.html
+var ownerConsoleFS embed.FS
+
+const ownerStatusPlaceholder = "__OWNER_STATUS__"
 
 const (
 	ownerTokenFile   = "owner.token"
@@ -61,6 +69,30 @@ type ownerLeaseStopRequest struct {
 type ownerLeaseStopResponse struct {
 	Passed    bool   `json:"passed"`
 	ImageHash string `json:"image_hash,omitempty"`
+}
+
+// ownerStatusResponse is GET /v0/status. JSON only. No secrets.
+type ownerStatusResponse struct {
+	DeviceID  string            `json:"device_id"`
+	SellState api.SellState     `json:"sell_state"`
+	Until     string            `json:"until,omitempty"`
+	Lease     *ownerLeaseStatus `json:"lease"`
+	PathB     ownerPathBStatus  `json:"path_b"`
+	Backend   string            `json:"backend"`
+}
+
+type ownerLeaseStatus struct {
+	LeaseID     string `json:"lease_id"`
+	CatalogID   string `json:"catalog_id,omitempty"`
+	ImageDigest string `json:"image_digest,omitempty"`
+}
+
+// ownerPathBStatus is what this box actually stores or can probe.
+// CP heartbeat path_b_state is logged only and is not invented here.
+type ownerPathBStatus struct {
+	BootIDPresent bool   `json:"boot_id_present"`
+	BootID        string `json:"boot_id,omitempty"`
+	CompletionsUp bool   `json:"completions_up"`
 }
 
 func ownerTokenPath(dir string) string   { return filepath.Join(dir, ownerTokenFile) }
@@ -141,6 +173,9 @@ func (a *Agent) startOwner(ctx context.Context) error {
 
 func (a *Agent) ownerHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v0/status", a.handleOwnerStatus)
+	mux.HandleFunc("/v0/console", a.handleOwnerConsole)
+	mux.HandleFunc("/", a.handleOwnerConsole)
 	mux.HandleFunc("/v0/sell_pause", a.handleOwnerSellPause)
 	mux.HandleFunc("/v0/lease_stop", a.handleOwnerLeaseStop)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +199,97 @@ func (a *Agent) ownerAuthorized(r *http.Request) bool {
 	}
 	tok := strings.TrimSpace(strings.TrimPrefix(got, pfx))
 	return subtle.ConstantTimeCompare([]byte(tok), []byte(want)) == 1
+}
+
+func (a *Agent) handleOwnerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	encodeJSON(w, http.StatusOK, a.ownerStatus(r.Context()))
+}
+
+func (a *Agent) handleOwnerConsole(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	page, err := ownerConsoleFS.ReadFile("console.html")
+	if err != nil {
+		http.Error(w, "console unavailable", http.StatusInternalServerError)
+		return
+	}
+	raw, err := json.Marshal(a.ownerStatus(r.Context()))
+	if err != nil {
+		http.Error(w, "status unavailable", http.StatusInternalServerError)
+		return
+	}
+	html := strings.Replace(string(page), ownerStatusPlaceholder, string(raw), 1)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, html)
+}
+
+func (a *Agent) ownerStatus(ctx context.Context) ownerStatusResponse {
+	sell := a.effectiveSell()
+	out := ownerStatusResponse{
+		DeviceID:  strings.TrimSpace(a.state.DeviceID),
+		SellState: sell.SellState,
+		Until:     sell.Until,
+		Backend:   runtime.NVIDIALogLabel,
+		PathB:     a.ownerPathB(ctx),
+	}
+	if h := a.localLease(); h != nil && strings.TrimSpace(h.LeaseID) != "" {
+		out.Lease = &ownerLeaseStatus{
+			LeaseID:     strings.TrimSpace(h.LeaseID),
+			CatalogID:   strings.TrimSpace(h.CatalogID),
+			ImageDigest: strings.TrimSpace(h.ImageDigest),
+		}
+	}
+	return out
+}
+
+func (a *Agent) ownerPathB(ctx context.Context) ownerPathBStatus {
+	pb := ownerPathBStatus{
+		CompletionsUp: a.completionsReachable(ctx),
+	}
+	rec := a.lastBootRecord()
+	id := strings.TrimSpace(rec.BootID)
+	if id != "" {
+		pb.BootIDPresent = true
+		pb.BootID = id
+	}
+	return pb
+}
+
+func (a *Agent) lastBootRecord() pathb.Record {
+	if a.pathb.Store == nil {
+		return pathb.Record{}
+	}
+	rec, err := a.pathb.Store.Load()
+	if err != nil {
+		return pathb.Record{}
+	}
+	return rec
+}
+
+func (a *Agent) completionsReachable(ctx context.Context) bool {
+	u := strings.TrimSpace(a.cfg.CompletionsEndpoint())
+	if u == "" {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+	return true
 }
 
 func (a *Agent) handleOwnerSellPause(w http.ResponseWriter, r *http.Request) {
@@ -284,9 +410,13 @@ func runOwnerCLI(stateDir string, args []string, out io.Writer) error {
 		return fmt.Errorf("hypermesh: state dir is required")
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("hypermesh: usage: hypermesh-agent owner sell-pause [--until=RFC3339] | lease-stop --lease-id=ID")
+		return fmt.Errorf("hypermesh: usage: hypermesh-agent owner status | console | sell-pause [--until=RFC3339] | lease-stop --lease-id=ID")
 	}
 	switch args[0] {
+	case "status":
+		return ownerCLIDo(stateDir, http.MethodGet, "/v0/status", nil, out)
+	case "console":
+		return runOwnerConsoleHelp(stateDir, out)
 	case "sell-pause":
 		fs := flag.NewFlagSet("sell-pause", flag.ContinueOnError)
 		until := fs.String("until", "", "optional RFC3339 pause end")
@@ -294,7 +424,7 @@ func runOwnerCLI(stateDir string, args []string, out io.Writer) error {
 			return err
 		}
 		body := ownerSellPauseRequest{Until: strings.TrimSpace(*until)}
-		return ownerCLIRequest(stateDir, "/v0/sell_pause", body, out)
+		return ownerCLIDo(stateDir, http.MethodPost, "/v0/sell_pause", body, out)
 	case "lease-stop":
 		fs := flag.NewFlagSet("lease-stop", flag.ContinueOnError)
 		leaseID := fs.String("lease-id", "", "lease id to stop")
@@ -304,20 +434,40 @@ func runOwnerCLI(stateDir string, args []string, out io.Writer) error {
 		if strings.TrimSpace(*leaseID) == "" {
 			return fmt.Errorf("hypermesh: --lease-id is required")
 		}
-		return ownerCLIRequest(stateDir, "/v0/lease_stop", ownerLeaseStopRequest{LeaseID: *leaseID}, out)
+		return ownerCLIDo(stateDir, http.MethodPost, "/v0/lease_stop", ownerLeaseStopRequest{LeaseID: *leaseID}, out)
 	default:
 		return fmt.Errorf("hypermesh: unknown owner command %q", args[0])
 	}
 }
 
-func ownerCLIRequest(stateDir, path string, body any, out io.Writer) error {
+func runOwnerConsoleHelp(stateDir string, out io.Writer) error {
+	if out == nil {
+		out = io.Discard
+	}
+	sock := ownerSockPath(stateDir)
+	tok := ownerTokenPath(stateDir)
+	_, _ = fmt.Fprintf(out, "Hypermesh owner console is unix-socket only (not TCP).\n\n")
+	_, _ = fmt.Fprintf(out, "  socket: %s\n", sock)
+	_, _ = fmt.Fprintf(out, "  token:  %s (mode 0600)\n\n", tok)
+	_, _ = fmt.Fprintf(out, "Status:\n  hypermesh-agent -state-dir=%s owner status\n\n", stateDir)
+	_, _ = fmt.Fprintf(out, "Page (Bearer required):\n")
+	_, _ = fmt.Fprintf(out, "  curl --unix-socket %q \\\n", sock)
+	_, _ = fmt.Fprintf(out, "    -H \"Authorization: Bearer $(cat %s)\" \\\n", tok)
+	_, _ = fmt.Fprintf(out, "    http://localhost/v0/console\n\n")
+	_, _ = fmt.Fprintf(out, "Same page at GET /.\n")
+	return nil
+}
+
+func ownerCLIDo(stateDir, method, path string, body any, out io.Writer) error {
 	token, err := readOwnerToken(stateDir)
 	if err != nil {
 		return fmt.Errorf("hypermesh: owner token: %w", err)
 	}
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(body); err != nil {
-		return err
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			return err
+		}
 	}
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -328,12 +478,14 @@ func ownerCLIRequest(stateDir, path string, body any, out io.Writer) error {
 		},
 		Timeout: 10 * time.Second,
 	}
-	req, err := http.NewRequest(http.MethodPost, "http://owner"+path, &buf)
+	req, err := http.NewRequest(method, "http://owner"+path, &buf)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("hypermesh: owner socket: %w", err)
