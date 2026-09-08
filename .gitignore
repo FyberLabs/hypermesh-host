@@ -6,3 +6,4 @@
 .env
 agent.env
 deploy/agx/workload/model.gguf
+deploy/seeed-j4012/workload/model.gguf

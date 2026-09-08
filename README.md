@@ -137,9 +137,13 @@ AGX 64GB nvpmodel default is **30W (id 2)**. Report nvpmodel. Do not default MAX
 
 Details: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service). On-box workload image: [deploy/agx/workload/README.md](deploy/agx/workload/README.md) (`ghcr.io/fyberlabs/hypermesh-test`, built on the AGX, pin sha256 after build).
 
-### Path B — Seeed Super J4012 (later)
+### Path B — Seeed Super J4012 (first marketed NX class)
 
-Orin NX 16GB, not AGX. Separate image, different nvpmodel table (`MAXN_SUPER`), factory via Seeed massflash. Do not mix flash XML. Placeholder: [deploy/seeed-j4012/README.md](deploy/seeed-j4012/README.md).
+Orin NX 16GB, Seeed Super J4012. **Does not block AGX cottage.** Separate image, Seeed mfi massflash, NX Super nvpmodel (`MAXN_SUPER`). Do not mix AGX flash XML or the AGX nvpmodel table.
+
+Seeed pin is **one** of: mfi **JP6.2 / L4T 36.4.3** or **JP7.2.0 / L4T 39.2.0**. Not NVIDIA **7.2.1 / 39.2.1**. Not AGX **6.2.3 / 36.5.2**. Do not silently dual-pin.
+
+Prep path (docs + overlay stubs, not factory automation): [deploy/seeed-j4012/README.md](deploy/seeed-j4012/README.md). Flash outline: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). On-box workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012; target name `ghcr.io/fyberlabs/hypermesh-test`; Fyber publishes the digest later; do not GHCR pull; empty `image_digest` fails `lease_start` only). Suite stays `thin-v1`. Path B `passed=true` needs a non-empty `image_hash`.
 
 ## Layout
 
@@ -151,8 +155,8 @@ internal/runtime    NVIDIA Container Runtime start/stop
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
-deploy/agx          systemd + first-boot + on-box workload
-deploy/seeed-j4012  placeholder
+deploy/agx          systemd + first-boot + on-box workload (Path A, cottage now)
+deploy/seeed-j4012  Path B prep (docs + overlay stubs; does not block AGX)
 ```
 
 ## Out of scope here
