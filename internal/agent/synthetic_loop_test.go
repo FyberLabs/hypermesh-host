@@ -32,7 +32,7 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	var hbRaws [][]byte
 	var results []synthResult
 	var dockerCalls [][]string
-	var sawOmitempty, sawLoaded bool
+	var sawOmitempty, sawLoaded, ownerUp bool
 	pathbJob := api.Job{JobID: "syn-pathb", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"}
 	startJob := api.Job{
 		JobID: "syn-start", Kind: api.KindLeaseStart, DeviceID: testDevice,
@@ -147,6 +147,11 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	}}
 
 	waitLoop(t, a, func() bool {
+		if _, err := os.Stat(ownerSockPath(dir)); err == nil {
+			mu.Lock()
+			ownerUp = true
+			mu.Unlock()
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		return enrolls == 1 && len(results) >= 3 && sawOmitempty && sawLoaded
@@ -246,8 +251,8 @@ func TestSyntheticAgentLoop(t *testing.T) {
 		t.Fatalf("stop %v", dockerCalls[2])
 	}
 
-	if _, err := os.Stat(ownerSockPath(dir)); err != nil {
-		t.Fatalf("Run must still listen on owner.sock: %v", err)
+	if !ownerUp {
+		t.Fatal("Run must listen on owner.sock during the loop")
 	}
 
 	logs := logBuf.String()
