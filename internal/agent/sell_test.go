@@ -76,6 +76,8 @@ func TestSellPauseAppliesAndHeartbeatReports(t *testing.T) {
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
 	a.tunnels = &fakeTunnel{}
+	// Fixture until is 2026-09-08T00:00:00Z; freeze before that so expiry is not the test.
+	a.now = func() time.Time { return time.Date(2026, 9, 7, 23, 0, 0, 0, time.UTC) }
 
 	waitLoop(t, a, func() bool {
 		mu.Lock()
@@ -349,6 +351,10 @@ func TestPathBUnchangedAndNotUsedAsSell(t *testing.T) {
 	passed, _ := posted["passed"].(bool)
 	if !passed {
 		t.Fatalf("path_b should still pass telem: %v", posted)
+	}
+	hash, _ := posted["image_hash"].(string)
+	if strings.TrimSpace(hash) == "" {
+		t.Fatalf("path_b passed=true must include image_hash: %v", posted)
 	}
 	for _, extra := range []string{"sell_state", "until"} {
 		if _, ok := posted[extra]; ok {

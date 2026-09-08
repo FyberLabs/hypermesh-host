@@ -161,11 +161,12 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
 	sell := a.effectiveSell()
 	hb, err := a.client.Heartbeat(ctx, api.HeartbeatRequest{
-		DeviceID:  a.state.DeviceID,
-		ImageHash: image,
-		UptimeS:   snap.UptimeS,
-		ThermalC:  snap.ThermalC,
-		SellState: sell.SellState,
+		DeviceID:        a.state.DeviceID,
+		ImageHash:       image,
+		LoadedModelHash: a.leaseImageDigest(),
+		UptimeS:         snap.UptimeS,
+		ThermalC:        snap.ThermalC,
+		SellState:       sell.SellState,
 	})
 	if err != nil {
 		return err
@@ -259,7 +260,7 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 		if res, stub := a.backendStub(job); stub {
 			return jobOutcome{Result: res}
 		}
-		return jobOutcome{Result: a.pathb.Run(ctx, job)}
+		return jobOutcome{Result: a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))}
 	case api.KindLeaseStart:
 		return jobOutcome{Result: a.leaseStart(ctx, job)}
 	case api.KindLeaseStop:
@@ -314,14 +315,17 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		}
 		return pathb.Result{Passed: false, Reason: reason}
 	}
+	digest := strings.TrimSpace(h.ImageDigest)
+	if digest == "" {
+		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
+		return pathb.Result{Passed: false, Reason: "no image_hash"}
+	}
 	a.lease = h
 	if err := a.saveLease(h); err != nil {
 		a.log.Warn("lease record not saved", "err", err)
 	}
-	snap, _ := a.telem.Collect(ctx)
-	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
 	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.NVIDIALogLabel)
-	return pathb.Result{Passed: true, ImageHash: image, Reason: "lease_start"}
+	return pathb.Result{Passed: true, ImageHash: digest, Reason: "lease_start"}
 }
 
 func jobBackendLog(job api.Job) string {
@@ -335,9 +339,10 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	}
 	if h == nil {
 		// Soft no-op: already stopped / no local handle. Do not fail.
+		// Prefer an existing hash; do not invent one.
 		a.log.Info("lease_stop", "lease_id", job.LeaseID, "reason", "no local handle")
 		snap, _ := a.telem.Collect(ctx)
-		return pathb.Result{Passed: true, ImageHash: firstNonEmpty(a.cfg.ImageHash, snap.ImageHash), Reason: "lease_stop"}
+		return pathb.Result{Passed: true, ImageHash: a.preferredImageHash(nil, snap), Reason: "lease_stop"}
 	}
 
 	// Strict identity before docker stop. Empty job.lease_id is a mismatch
@@ -357,7 +362,46 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	// Host WireGuard peer stays up. Teardown only on GET revoked or 204.
 	a.log.Info("lease_stop", "lease_id", job.LeaseID)
 	snap, _ := a.telem.Collect(ctx)
-	return pathb.Result{Passed: true, ImageHash: firstNonEmpty(a.cfg.ImageHash, snap.ImageHash), Reason: "lease_stop"}
+	return pathb.Result{Passed: true, ImageHash: a.preferredImageHash(h, snap), Reason: "lease_stop"}
+}
+
+func (a *Agent) localLease() *runtime.Handle {
+	if a.lease != nil {
+		return a.lease
+	}
+	return a.loadLease()
+}
+
+func (a *Agent) leaseImageDigest() string {
+	h := a.localLease()
+	if h == nil {
+		return ""
+	}
+	return strings.TrimSpace(h.ImageDigest)
+}
+
+// requireImageHash enforces the Product lock: path_b / instance_check
+// passed=true must POST a non-empty image_hash. Use telem/host hash, else
+// the running lease ImageDigest. Do not invent a hash.
+func (a *Agent) requireImageHash(kind api.JobKind, res pathb.Result) pathb.Result {
+	if !res.Passed {
+		return res
+	}
+	hash := strings.TrimSpace(firstNonEmpty(res.ImageHash, a.cfg.ImageHash, a.leaseImageDigest()))
+	if hash == "" {
+		a.log.Info(string(kind)+" refused", "reason", "no image_hash")
+		return pathb.Result{Passed: false, Reason: "no image_hash"}
+	}
+	res.ImageHash = hash
+	return res
+}
+
+func (a *Agent) preferredImageHash(h *runtime.Handle, snap telem.Snapshot) string {
+	digest := ""
+	if h != nil {
+		digest = strings.TrimSpace(h.ImageDigest)
+	}
+	return firstNonEmpty(digest, a.cfg.ImageHash, snap.ImageHash)
 }
 
 func firstNonEmpty(vs ...string) string {

@@ -222,6 +222,8 @@ func TestOwnerLeaseStopMatchMismatchSameAsH1(t *testing.T) {
 
 func TestOwnerCLISellPause(t *testing.T) {
 	a := newOwnerTestAgent(t)
+	// Fixture until is 2026-09-08T00:00:00Z; freeze before that so expiry is not the test.
+	a.now = func() time.Time { return time.Date(2026, 9, 7, 23, 0, 0, 0, time.UTC) }
 	startTestOwner(t, a)
 
 	var out bytes.Buffer
