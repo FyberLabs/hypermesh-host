@@ -25,6 +25,8 @@ type Agent struct {
 	telem   telem.Source
 	pathb   pathb.Runner
 	runtime *runtime.NVIDIA
+	hip     *runtime.HIP
+	metal   *runtime.Metal
 	tunnels tunnel.Applier
 	log     *slog.Logger
 	state   State
@@ -53,6 +55,8 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 			Store:     pathb.FileStore{Dir: cfg.StateDir},
 		},
 		runtime: runtime.NewNVIDIA(),
+		hip:     runtime.NewHIP(),
+		metal:   runtime.NewMetal(),
 		tunnels: tunnel.NewRunner(),
 		log:     log,
 	}, nil
@@ -176,7 +180,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		"path_b_state", hb.PathBState,
 		"sell_state", sell.SellState,
 		"nvpmodel", snap.Nvpmodel,
-		"backend", runtime.NVIDIALogLabel,
+		"backend", runtime.HostLogLabel(),
 	)
 	return nil
 }
@@ -278,7 +282,7 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 // unknown backend. instance_check must not probe or fake a completion.
 func (a *Agent) backendStub(job api.Job) (pathb.Result, bool) {
 	path, reason := runtime.ResolveBackend(job.Backend)
-	if path == runtime.NVIDIAContainer {
+	if path.Runnable() {
 		return pathb.Result{}, false
 	}
 	a.log.Info("backend stub", "kind", job.Kind, "backend", runtime.LogLabel(job.Backend), "reason", reason)
@@ -296,12 +300,14 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if strings.TrimSpace(job.ImageDigest) == "" {
 		return pathb.Result{Passed: false, Reason: "no image_digest; no soak image"}
 	}
-	h, err := a.runtime.Start(ctx, runtime.Spec{
+	path, _ := runtime.ResolveBackend(job.Backend)
+	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
 		LeaseID:     job.LeaseID,
 		CatalogID:   job.CatalogID,
 		ImageDigest: job.ImageDigest,
 		Runtime:     job.Runtime,
 		HostPort:    a.cfg.PublishPort(),
+		Backend:     job.Backend,
 	})
 	if err != nil {
 		reason := "runtime start failed"
@@ -324,12 +330,48 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if err := a.saveLease(h); err != nil {
 		a.log.Warn("lease record not saved", "err", err)
 	}
-	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.NVIDIALogLabel)
+	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.LogLabel(job.Backend), "runner", runnerLog(path))
 	return pathb.Result{Passed: true, ImageHash: digest, Reason: "lease_start"}
 }
 
 func jobBackendLog(job api.Job) string {
 	return runtime.LogLabel(job.Backend)
+}
+
+func runnerLog(path runtime.Path) string {
+	switch path {
+	case runtime.HIPROCm:
+		return runtime.BackendHIPROCm
+	case runtime.LlamaCppHost:
+		return runtime.MetalRunnerLabel
+	default:
+		return runtime.NVIDIALogLabel
+	}
+}
+
+func (a *Agent) starterFor(path runtime.Path) runtime.Starter {
+	switch path {
+	case runtime.HIPROCm:
+		if a.hip != nil {
+			return a.hip
+		}
+		return runtime.NewHIP()
+	case runtime.LlamaCppHost:
+		if a.metal != nil {
+			return a.metal
+		}
+		return runtime.NewMetal()
+	default:
+		return a.runtime
+	}
+}
+
+func (a *Agent) stopHandle(ctx context.Context, h *runtime.Handle) error {
+	path, _ := runtime.ResolveBackend("")
+	if h != nil && strings.TrimSpace(h.Backend) != "" {
+		path, _ = runtime.ResolveBackend(h.Backend)
+	}
+	return a.starterFor(path).Stop(ctx, h)
 }
 
 func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
@@ -354,7 +396,7 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: "lease_id mismatch"}
 	}
 
-	if err := a.runtime.Stop(ctx, h); err != nil {
+	if err := a.stopHandle(ctx, h); err != nil {
 		return pathb.Result{Passed: false, Reason: "runtime stop failed"}
 	}
 	a.lease = nil
