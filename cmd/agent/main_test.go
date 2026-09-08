@@ -10,6 +10,8 @@ func TestSplitOwnerArgs(t *testing.T) {
 		want    []string
 	}{
 		{in: []string{"owner", "sell-pause"}, wantOK: true, wantPre: []string{}, want: []string{"sell-pause"}},
+		{in: []string{"-state-dir=./state", "owner", "status"}, wantOK: true, wantPre: []string{"-state-dir=./state"}, want: []string{"status"}},
+		{in: []string{"owner", "console"}, wantOK: true, wantPre: []string{}, want: []string{"console"}},
 		{in: []string{"-state-dir=./state", "owner", "lease-stop", "--lease-id=abc"}, wantOK: true, wantPre: []string{"-state-dir=./state"}, want: []string{"lease-stop", "--lease-id=abc"}},
 		{in: []string{"-state-dir", "./state", "owner", "sell-pause", "--until=2026-09-08T00:00:00Z"}, wantOK: true, wantPre: []string{"-state-dir", "./state"}, want: []string{"sell-pause", "--until=2026-09-08T00:00:00Z"}},
 		{in: []string{"-control-plane-url", "https://api.test.hyperme.sh"}, wantOK: false},

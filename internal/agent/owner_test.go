@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
@@ -48,14 +49,31 @@ func TestOwnerUnauthorized401(t *testing.T) {
 	cases := []struct {
 		name   string
 		header string
+		method string
+		path   string
 	}{
 		{name: "missing"},
 		{name: "wrong", header: "Bearer not-the-token"},
 		{name: "not-bearer", header: "Basic abc"},
+		{name: "status-missing", method: http.MethodGet, path: "/v0/status"},
+		{name: "console-wrong", method: http.MethodGet, path: "/v0/console", header: "Bearer not-the-token"},
+		{name: "root-missing", method: http.MethodGet, path: "/"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := ownerDo(t, a.cfg.StateDir, http.MethodPost, "/v0/sell_pause", tc.header, map[string]any{})
+			method := tc.method
+			if method == "" {
+				method = http.MethodPost
+			}
+			path := tc.path
+			if path == "" {
+				path = "/v0/sell_pause"
+			}
+			var body any
+			if method == http.MethodPost {
+				body = map[string]any{}
+			}
+			resp := ownerDo(t, a.cfg.StateDir, method, path, tc.header, body)
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusUnauthorized {
 				t.Fatalf("status %d", resp.StatusCode)
@@ -398,4 +416,215 @@ func TestOwnerReusesExistingToken(t *testing.T) {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
+func TestOwnerStatusJSONNoSecrets(t *testing.T) {
+	a := newOwnerTestAgent(t)
+	a.state.DeviceSecret = testSecret
+	now := time.Date(2026, 9, 7, 22, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return now }
+	if err := a.saveSell(SellPosture{SellState: api.SellPaused, Until: "2026-09-08T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	a.lease = &runtime.Handle{
+		Name:        "hypermesh-lease-running",
+		LeaseID:     "lease-running",
+		CatalogID:   "llama-3.1-8b-q4",
+		ImageDigest: "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ContainerID: "cid-local",
+	}
+	store := pathb.FileStore{Dir: a.cfg.StateDir}
+	if err := store.Save(pathb.Record{BootID: "boot-from-store", UptimeS: 12}); err != nil {
+		t.Fatal(err)
+	}
+	comp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	t.Cleanup(comp.Close)
+	a.cfg.CompletionsURL = comp.URL + "/v1/chat/completions"
+	startTestOwner(t, a)
+
+	resp := ownerDoAuth(t, a, http.MethodGet, "/v0/status", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("content-type %q", ct)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOwnerStatusSafe(t, raw)
+	var body ownerStatusResponse
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("json %s: %v", raw, err)
+	}
+	if body.DeviceID != testDevice || body.SellState != api.SellPaused || body.Until != "2026-09-08T00:00:00Z" {
+		t.Fatalf("sell %+v", body)
+	}
+	if body.Lease == nil || body.Lease.LeaseID != "lease-running" || body.Lease.CatalogID != "llama-3.1-8b-q4" {
+		t.Fatalf("lease %+v", body.Lease)
+	}
+	if body.Lease.ImageDigest == "" || strings.Contains(body.Lease.ImageDigest, "peer_private") {
+		t.Fatalf("image_digest %q", body.Lease.ImageDigest)
+	}
+	if !body.PathB.BootIDPresent || body.PathB.BootID != "boot-from-store" {
+		t.Fatalf("path_b %+v", body.PathB)
+	}
+	if !body.PathB.CompletionsUp {
+		t.Fatal("completions endpoint was up")
+	}
+	if body.Backend != runtime.NVIDIALogLabel {
+		t.Fatalf("backend %q", body.Backend)
+	}
+	if _, err := os.Stat(ownerEffectsPath(a.cfg.StateDir)); !os.IsNotExist(err) {
+		t.Fatal("GET /v0/status must not write effects")
+	}
+}
+
+func TestOwnerStatusHonestPathBWithoutBootOrCompletions(t *testing.T) {
+	a := newOwnerTestAgent(t)
+	a.cfg.CompletionsURL = "http://127.0.0.1:1/v1/chat/completions"
+	startTestOwner(t, a)
+
+	resp := ownerDoAuth(t, a, http.MethodGet, "/v0/status", nil)
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOwnerStatusSafe(t, raw)
+	var body ownerStatusResponse
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Lease != nil {
+		t.Fatalf("no handle: lease=%+v", body.Lease)
+	}
+	if body.PathB.BootIDPresent || body.PathB.BootID != "" {
+		t.Fatalf("no boot store: %+v", body.PathB)
+	}
+	if body.PathB.CompletionsUp {
+		t.Fatal("completions must be down")
+	}
+	if body.SellState != api.SellSelling {
+		t.Fatalf("default sell %+v", body)
+	}
+	if strings.Contains(string(raw), "path_b_state") {
+		t.Fatalf("must not invent path_b_state: %s", raw)
+	}
+}
+
+func TestOwnerStatusMethodNotAllowed(t *testing.T) {
+	a := newOwnerTestAgent(t)
+	startTestOwner(t, a)
+	resp := ownerDoAuth(t, a, http.MethodPost, "/v0/status", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+func TestOwnerConsoleHTML(t *testing.T) {
+	a := newOwnerTestAgent(t)
+	a.state.DeviceSecret = testSecret
+	a.lease = &runtime.Handle{LeaseID: "lease-html", CatalogID: "llama-3.1-8b-q4"}
+	startTestOwner(t, a)
+
+	for _, path := range []string{"/", "/v0/console"} {
+		resp := ownerDoAuth(t, a, http.MethodGet, path, nil)
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("%s status %d", path, resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			resp.Body.Close()
+			t.Fatalf("%s content-type %q", path, ct)
+		}
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := string(raw)
+		assertOwnerNoSecrets(t, raw)
+		if !strings.Contains(page, "Hypermesh owner") {
+			t.Fatalf("%s missing title", path)
+		}
+		if !strings.Contains(page, "/v0/status") || !strings.Contains(page, "/v0/sell_pause") || !strings.Contains(page, "/v0/lease_stop") {
+			t.Fatalf("%s missing actuator paths", path)
+		}
+		if !strings.Contains(page, testDevice) || !strings.Contains(page, "lease-html") {
+			t.Fatalf("%s missing embedded status", path)
+		}
+		if strings.Contains(page, ownerStatusPlaceholder) {
+			t.Fatalf("%s left placeholder", path)
+		}
+	}
+}
+
+func TestOwnerCLIStatusAndConsole(t *testing.T) {
+	a := newOwnerTestAgent(t)
+	startTestOwner(t, a)
+
+	var statusOut bytes.Buffer
+	if err := runOwnerCLI(a.cfg.StateDir, []string{"status"}, &statusOut); err != nil {
+		t.Fatal(err)
+	}
+	assertOwnerStatusSafe(t, statusOut.Bytes())
+	var body ownerStatusResponse
+	if err := json.Unmarshal(statusOut.Bytes(), &body); err != nil {
+		t.Fatalf("cli status %q: %v", statusOut.String(), err)
+	}
+	if body.DeviceID != testDevice || body.SellState != api.SellSelling {
+		t.Fatalf("cli status %+v", body)
+	}
+
+	var help bytes.Buffer
+	if err := runOwnerCLI(a.cfg.StateDir, []string{"console"}, &help); err != nil {
+		t.Fatal(err)
+	}
+	text := help.String()
+	if !strings.Contains(text, "unix-socket") || !strings.Contains(text, ownerSockPath(a.cfg.StateDir)) {
+		t.Fatalf("console help %q", text)
+	}
+	if !strings.Contains(text, "owner status") || !strings.Contains(text, "/v0/console") {
+		t.Fatalf("console help missing recipe %q", text)
+	}
+	if strings.Contains(text, testSecret) {
+		t.Fatal("console help leaked device secret")
+	}
+	tok, err := readOwnerToken(a.cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text, tok) {
+		t.Fatal("console help leaked owner token")
+	}
+}
+
+func assertOwnerStatusSafe(t *testing.T, raw []byte) {
+	t.Helper()
+	assertOwnerNoSecrets(t, raw)
+	if strings.Contains(string(raw), "path_b_state") {
+		t.Fatalf("must not invent path_b_state: %s", raw)
+	}
+}
+
+func assertOwnerNoSecrets(t *testing.T, raw []byte) {
+	t.Helper()
+	s := string(raw)
+	for _, bad := range []string{
+		testSecret,
+		"hm_dev_",
+		"device_secret",
+		"peer_private_key",
+		"private_key",
+	} {
+		if strings.Contains(s, bad) {
+			t.Fatalf("owner payload leaked %q: %s", bad, s)
+		}
+	}
 }
