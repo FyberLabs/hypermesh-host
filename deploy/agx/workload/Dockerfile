@@ -1,15 +1,34 @@
 # hypermesh-test — GGUF + OpenAI-shaped /v1/chat/completions on :8080
 #
-# Build this ON the Jetson AGX Orin after the JetPack 6.2.3 / L4T 36.5.2 overlay:
-#   sudo docker build --runtime=nvidia -t ghcr.io/fyberlabs/hypermesh-test .
+# JP7 / L4T R39 host — Ubuntu 24.04 + CUDA 13 SBSA (aarch64)
+# Pin a digest in CI after a good on-box build. Do not invent repo@digest here.
+# Do not use JP6 / ubuntu:22.04 / r36.* / l4t-jetpack (gone in 7.x).
+# Do not invent l4t-jetpack:r39.2.1. No whitesscott/l4t-jetpack unless
+# Product explicitly asks.
 #
-# Do not build this on x86 and pretend it is a Jetson image.
-# After a good on-box build, pin the sha256. The host program does not invent a digest.
+# Hardware Research / Product lock default (compile llama.cpp in-image):
+#   nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04
+# Runtime alternative (copy a prebuilt binary only; not this recipe):
+#   nvcr.io/nvidia/cuda:13.2.1-runtime-ubuntu24.04
+# Matches JetPack 7.2 host CUDA 13.2.1. Tag was registry-listed
+# (linux/amd64 + linux/arm64). Not an on-box pull; unverified-until-AGX-build.
 #
-# If this box is on JetPack 7.x and this JP6 image will not run: stop.
-# Do not silently run a JP7 image next to this one.
+# Build this ON AGX64-1 after the JetPack 7.2.1 / L4T R39.2.1 overlay:
+#   sudo docker build --runtime=nvidia --platform linux/arm64 \
+#     -t ghcr.io/fyberlabs/hypermesh-test .
+# Runtime: docker run --runtime=nvidia ...
+# Arch: sm_87, cmake -DCMAKE_CUDA_ARCHITECTURES=87
+#
+# Fallback only if 13.2.1 driver-allowlist rejects on-box:
+#   FROM nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
+#   and docker build/run -e NVIDIA_DISABLE_REQUIRE=true
+# That is an on-box rescue, not a second default FROM.
+#
+# Plain cuda:*-ubuntu24.04 does not ship Jetson cuDNN/TensorRT.
+# llama.cpp CUDA decode usually does not need TRT. Only add packages
+# from repo.download.nvidia.com/jetson r39.2 if a workload needs them.
 
-FROM ubuntu:22.04
+FROM nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -21,12 +40,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# CUDA toolkit comes from the AGX host via --runtime=nvidia at build time.
+# Toolkit is in the NGC CUDA devel image. Host driver still comes from
+# the AGX via --runtime=nvidia at build and at run (not x86 --gpus).
 ARG CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
 
-# Orin is SM 8.7. Override LLAMA_CPP_REF if you need a different llama.cpp tag.
+# AGX Orin is SM 8.7. Override LLAMA_CPP_REF if you need a different llama.cpp tag.
 ARG LLAMA_CPP_REF=b4690
 WORKDIR /src
 RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov/llama.cpp.git \
@@ -37,8 +57,10 @@ RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov
     && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server \
     && rm -rf /src
 
-# Weights are not in git. Copy model.gguf onto this box, then rebuild.
-# Missing file fails the build honestly.
+# Weights are not in git. On AGX64-1 the GGUF is already at
+# /home/chris/hypermesh/workload/model.gguf — copy or link it next to this
+# Dockerfile as model.gguf, then rebuild. Do not commit the weights.
+# Missing file fails the build honestly. Catalog id stays llama-3.1-8b-q4.
 COPY model.gguf /models/model.gguf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh

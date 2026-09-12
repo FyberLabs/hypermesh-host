@@ -4,12 +4,12 @@ First certified box: NVIDIA Jetson AGX Orin 64GB, module **P3701-0005**, board `
 
 ## JetPack pin (locked)
 
-This slice assumes **JetPack 6.2.3 / L4T 36.5.2** (Ubuntu 22.04 sample rootfs, kernel 5.15, CUDA 12).
+This slice assumes **JetPack 7.2.1 / L4T R39.2.1** (Ubuntu 24.04.5 sample rootfs, kernel 6.8, CUDA 13). AGX64-1 stays on this pin.
 
-- If the box is already 6.2.3: overlay only (steps below).
-- If not: flash `jetson-agx-orin-devkit` to 6.2.3 / 36.5.2, then overlay. Chris reviews the flash.
-- JetPack 7.2.1 / L4T r39.2.1 is a later pin, when JP7 images exist. Do not pull a CUDA 13 image on this box.
-- If someone later finds the box on 7.x and the JP6 OCI image will not run: **stop**. Do not silently run both.
+- If the box is already 7.2.1 / R39.2.1: overlay only (steps below).
+- If not: flash `jetson-agx-orin-devkit` to 7.2.1 / 39.2.1, then overlay. Chris reviews the flash.
+- Do **not** keep or dual-pin a JetPack 6.2.3 / L4T 36.5.2 image for this box.
+- If someone later finds a leftover JP6 OCI image and it will not run: **stop**. Do not silently run both.
 
 Confirm what is actually flashed before you build or start a workload:
 
@@ -17,11 +17,11 @@ Confirm what is actually flashed before you build or start a workload:
 cat /etc/nv_tegra_release
 ```
 
-Expect R36 / REVISION 5.2.
+Expect R39 / REVISION 2.1.
 
-## Flash (only if the box is not already 6.2.3)
+## Flash (only if the box is not already 7.2.1)
 
-Use NVIDIA SDK Manager or `Linux_for_Tegra` for `jetson-agx-orin-devkit`. Do not use Seeed Super J4012 / Orin NX flash XML on this module.
+Use NVIDIA SDK Manager or `Linux_for_Tegra` for `jetson-agx-orin-devkit`. Do not use Seeed Super J4012 / Orin NX flash XML on this module. Do not mix the Seeed nvpmodel table.
 
 Headless, before flash, create the default user so the OEM wizard does not start:
 
@@ -74,15 +74,19 @@ Install `wireguard-tools`. One WireGuard peer per host, not per lease. When a se
 
 `lease_start` with `repo@digest` runs `docker pull` then `docker --runtime=nvidia -p 8080:8080` (host port configurable via `HYPERMESH_LISTEN_PORT`). The container must listen on `0.0.0.0:8080` and serve OpenAI-shaped `POST /v1/chat/completions`. The Fyber router is the only customer HTTPS path; it proxies to `http://<client_address>:8080/v1/chat/completions`.
 
-Empty `image_digest` POSTs `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. Do not invent a registry digest. Catalog id stays `llama-3.1-8b-q4`.
+Empty `image_digest` POSTs `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. Do not invent a registry digest. Host will not invent `image_hash` / `repo@digest`. Catalog id stays `llama-3.1-8b-q4`.
 
-Build the on-box image after overlay: [workload/README.md](workload/README.md). Target name `ghcr.io/fyberlabs/hypermesh-test`. Do not build that image on x86. Pin the sha256 after the on-box build.
+Path B suite telem hash (`image_hash` from `HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, or a hash of `/etc/nv_tegra_release` / `/etc/os-release`) is **not** the catalog `file_hash`.
+
+Build the on-box image after overlay: [workload/README.md](workload/README.md). Target name `ghcr.io/fyberlabs/hypermesh-test`. Do not build that image on x86. Verify on the AGX with `--runtime=nvidia --platform linux/arm64`. Pin the sha256 after the on-box build (CI may pin a digest then; Host will not invent one). The FROM tag is Hardware Research / Product lock default `nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04` (compile in-image; matches host CUDA 13.2.1; Orin sm_87) and stays **unverified-until-AGX-build** until someone on this box pulls it and the build succeeds. Runtime alternative `13.2.1-runtime-ubuntu24.04` is for a copy-a-binary recipe only. L4T major MUST match the host (r39). Do not invent `l4t-jetpack:r39.2.1`. Do not use `l4t-jetpack` / `r36.*` / `ubuntu:22.04` / JP6. If 13.2.1 hits the driver-allowlist gap on-box, keep **13.0.0 only** as the documented fallback (`13.0.0-devel-ubuntu24.04` with `-e NVIDIA_DISABLE_REQUIRE=true`) — rescue, not a second default.
+
+**GGUF is still required** before `instance_check` / completions. On AGX64-1 the weights are already at `/home/chris/hypermesh/workload/model.gguf`. Copy or symlink that file to `deploy/agx/workload/model.gguf` (not in git). Missing weights fail the image build honestly. Without that running image, the completions endpoint has nothing to serve.
 
 ### thin-v1
 
 `path_b` collects image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, `path_b` still passes the hardware telem part so enroll/green is not stuck before `lease_start`, and records that inference was skipped.
 
-`instance_check` must hit that endpoint and fail if there is no real completion. That is the “container answers” gate.
+`instance_check` must hit that endpoint and fail if there is no real completion. That is the “container answers” gate. It still needs the GGUF-backed image running.
 
 Result body stays `{passed, image_hash?}`. The probe and the completion text are not logged.
 
@@ -90,7 +94,7 @@ Do not quote tokens/sec.
 
 ## Power
 
-AGX Orin 64GB nvpmodel default is **30W (id 2)**. This box reports `nvpmodel -q`. Do not default the box to MAXN + `jetson_clocks`.
+AGX Orin 64GB nvpmodel default is **30W (id 2)**. This box reports `nvpmodel -q`. Do not default the box to MAXN + `jetson_clocks`. Do not apply the Seeed Super J4012 / NX Super nvpmodel table.
 
 ## Catalog
 
