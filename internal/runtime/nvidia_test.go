@@ -253,6 +253,7 @@ func TestStartLeavesNonCreatedContainer(t *testing.T) {
 				return []byte("running\n"), nil
 			case len(args) > 0 && args[0] == "rm":
 				t.Fatal("must not rm a running container")
+				return nil, errors.New("rm running")
 			default:
 				return []byte{}, nil
 			}
