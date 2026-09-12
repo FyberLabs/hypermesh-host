@@ -138,12 +138,12 @@ The container is reachable at the WG `client_address` on port 8080. The router i
 
 Module **P3701-0005**, board `jetson-agx-orin-devkit`. Overlay APP only.
 
-This slice assumes **JetPack 6.2.3 / L4T 36.5.2** (Ubuntu 22.04 sample rootfs, kernel 5.15, CUDA 12).
+This slice assumes **JetPack 7.2.1 / L4T R39.2.1** (Ubuntu 24.04.5 sample rootfs, kernel 6.8, CUDA 13). AGX64-1 stays on this pin.
 
-- If the box is already 6.2.3: overlay only.
-- If not: flash `jetson-agx-orin-devkit` to 6.2.3 / 36.5.2, then overlay. Chris reviews.
-- JetPack 7.2.1 / L4T r39.2.1 is a later pin, when JP7 images exist. Do not pull a CUDA 13 image on this box.
-- If the box is later found on 7.x and the JP6 OCI image will not run: stop. Do not silently run both.
+- If the box is already 7.2.1 / R39.2.1: overlay only.
+- If not: flash `jetson-agx-orin-devkit` to 7.2.1 / 39.2.1, then overlay. Chris reviews.
+- Do not keep or dual-pin a JetPack 6.2.3 / L4T 36.5.2 image for this box.
+- If a leftover JP6 OCI image will not run: stop. Do not silently run both.
 
 On the flash host: `l4t_create_default_user.sh`. On the device: `multi-user.target`. Do not purge `gdm3` or `nvidia-l4t-3d-core`. Do not overwrite `/etc/nv_boot_control.conf`.
 
@@ -157,7 +157,7 @@ Details: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx
 
 Orin NX 16GB, Seeed Super J4012. **Does not block AGX cottage.** Separate image, Seeed mfi massflash, NX Super nvpmodel (`MAXN_SUPER`). Do not mix AGX flash XML or the AGX nvpmodel table.
 
-Seeed pin is **one** of: mfi **JP6.2 / L4T 36.4.3** or **JP7.2.0 / L4T 39.2.0**. Not NVIDIA **7.2.1 / 39.2.1**. Not AGX **6.2.3 / 36.5.2**. Do not silently dual-pin.
+Seeed pin is **one** of: mfi **JP6.2 / L4T 36.4.3** or **JP7.2.0 / L4T 39.2.0**. Not NVIDIA / AGX Path A **7.2.1 / 39.2.1**. Do not silently dual-pin.
 
 Prep path (docs + overlay stubs, not factory automation): [deploy/seeed-j4012/README.md](deploy/seeed-j4012/README.md). Flash outline: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). On-box workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012; target name `ghcr.io/fyberlabs/hypermesh-test`; Fyber publishes the digest later; do not GHCR pull; empty `image_digest` fails `lease_start` only). Suite stays `thin-v1`. Path B `passed=true` needs a non-empty `image_hash`.
 

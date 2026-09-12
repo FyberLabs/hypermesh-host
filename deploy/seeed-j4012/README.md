@@ -15,8 +15,8 @@ Path A (AGX Orin 64GB, P3701-0005, `deploy/agx/`) stays the certified-now cottag
 | Module class | P3701-0005 | Orin NX 16GB |
 | Board | `jetson-agx-orin-devkit` | Seeed Super J4012 / J401 |
 | Flash | NVIDIA `jetson-agx-orin-devkit` | Seeed **mfi / massflash** only |
-| JetPack pin | **NVIDIA JP 6.2.3 / L4T 36.5.2** | Seeed mfi **JP6.2 / 36.4.3** *or* **JP7.2.0 / 39.2.0** — pick **one** |
-| Not this pin | JP7.2.1 / 39.2.1 is a later AGX pin | **Not** NVIDIA **7.2.1 / 39.2.1**. **Not** AGX **6.2.3 / 36.5.2** |
+| JetPack pin | **NVIDIA JP 7.2.1 / L4T 39.2.1** | Seeed mfi **JP6.2 / 36.4.3** *or* **JP7.2.0 / 39.2.0** — pick **one** |
+| Not this pin | Do not flash AGX with a Seeed mfi pin | **Not** NVIDIA / AGX **7.2.1 / 39.2.1** |
 | nvpmodel | AGX table; default 30W (id 2) | NX Super table (`MAXN_SUPER`). Different ids. Do not share. |
 | Image | Overlay APP on a flashed Dev Kit | Separate image. Do not mix flash XML. |
 | Factory | Cottage overlay | Seeed massflash preinstall is a **later** slice |
@@ -34,10 +34,9 @@ Seeed publishes two Super J4012 mfi pins. Choose **one** for the box and the on-
 
 **Not** these pins:
 
-- NVIDIA JetPack **7.2.1 / L4T 39.2.1** (not the Seeed mfi pin)
-- AGX Path A JetPack **6.2.3 / L4T 36.5.2** (cottage; different module)
+- NVIDIA / AGX Path A JetPack **7.2.1 / L4T 39.2.1** (cottage; different module — not the Seeed mfi pin)
 
-If this box is later found on a pin that does not match the image you built: **stop**. Do not silently run a JP6 OCI image on a JP7.2.0 box, or a JP7 image on 36.4.3. Do not silently dual-pin with AGX 6.2.3.
+If this box is later found on a pin that does not match the image you built: **stop**. Do not silently run a JP6 OCI image on a JP7.2.0 box, or a JP7 image on 36.4.3. Do not silently dual-pin with AGX 7.2.1 / 39.2.1.
 
 ```bash
 cat /etc/nv_tegra_release

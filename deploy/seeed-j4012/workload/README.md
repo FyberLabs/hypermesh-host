@@ -10,11 +10,11 @@ Build on **this Super J4012**, against the **one** Seeed pin you flashed (JP6.2 
 
 **Do not** build this on x86 and pretend it is a Jetson image.
 
-**Do not** copy an AGX-built image onto this box. Path A is JP 6.2.3 / 36.5.2 on AGX Orin. That is a different pin and a different module.
+**Do not** copy an AGX-built image onto this box. Path A is JP 7.2.1 / 39.2.1 on AGX Orin. That is a different pin and a different module.
 
-If you chose Seeed JP7.2.0 / 39.2.0 and a JP6 recipe will not run: **stop**. Do not silently run a JP7 image next to a JP6 one. Do not silently dual-pin with NVIDIA 7.2.1 / 39.2.1 or AGX 6.2.3.
+If you chose Seeed JP7.2.0 / 39.2.0 and a JP6 recipe will not run: **stop**. Do not silently run a JP7 image next to a JP6 one. Do not silently dual-pin with NVIDIA / AGX 7.2.1 / 39.2.1.
 
-The Path A recipe in `deploy/agx/workload/` is the AGX 6.2.3 starting point (Ubuntu 22.04, SM 8.7, `llama-server` on :8080). Rebuild it **here**. On JP7.2.0 / 39.2.0, treat that Dockerfile as a recipe to adapt on-box — do not assume CUDA 12 / 22.04 still applies.
+The Path A recipe in `deploy/agx/workload/` is the AGX JP7 starting point (Ubuntu 24.04, CUDA 13 SBSA NGC base, SM 8.7, `llama-server` on :8080). Rebuild it **here**. On Seeed JP6.2 / 36.4.3, treat that Dockerfile as a recipe to adapt on-box — do not assume CUDA 13 / 24.04 still applies.
 
 ```bash
 # On the Super J4012, after first-boot overlay.

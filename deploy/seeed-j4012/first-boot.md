@@ -13,7 +13,7 @@ Pick **one** Seeed Super J4012 pin and stay on it. Do not silently dual-pin.
 | Seeed mfi JetPack **6.2** | **36.4.3** | R36 / REVISION 4.3 |
 | Seeed mfi JetPack **7.2.0** | **39.2.0** | R39 / REVISION 2.0 |
 
-**Not** NVIDIA JetPack **7.2.1 / 39.2.1**. **Not** AGX Path A **6.2.3 / 36.5.2**.
+**Not** NVIDIA / AGX Path A JetPack **7.2.1 / 39.2.1**.
 
 If the box is later found on a pin that does not match the workload you built: **stop**.
 
