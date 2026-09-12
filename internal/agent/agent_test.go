@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -935,6 +936,128 @@ func TestLeaseStartCUDAJetsonEmptyDigestStillFails(t *testing.T) {
 	}
 	if dockerCalls != 0 {
 		t.Fatalf("empty digest must not invoke docker, calls=%d", dockerCalls)
+	}
+}
+
+func TestLeaseStartBareDigestReasonUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var dockerCalls int
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		dockerCalls++
+		return []byte("cid\n"), nil
+	}}
+	got := a.runJob(context.Background(), api.Job{
+		JobID:       "j-bare",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-bare",
+		CatalogID:   "llama-3.1-8b-q4",
+		ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Runtime:     "nvidia",
+	})
+	if got.Passed || got.Reason != "image_digest is not repo@digest" {
+		t.Fatalf("bare digest reason unchanged: %+v", got)
+	}
+	if got.ImageHash != "" {
+		t.Fatalf("must not invent image_hash: %+v", got)
+	}
+	if dockerCalls != 0 {
+		t.Fatalf("bare digest must not invoke docker, calls=%d", dockerCalls)
+	}
+}
+
+func TestLeaseStartDockerErrorAppearsInReason(t *testing.T) {
+	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const hook = "nvidia-cdi-hook cudacompat: slice bounds out of range [:73] with capacity 71"
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var logBuf strings.Builder
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			return []byte(hook + "\n"), errors.New("exit status 1")
+		}
+		if len(args) > 0 && args[0] == "inspect" {
+			return []byte("created\n"), nil
+		}
+		return []byte{}, nil
+	}}
+	got := a.runJob(context.Background(), api.Job{
+		JobID:       "j-cdi",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-cdi",
+		CatalogID:   "llama-3.1-8b-q4",
+		ImageDigest: ref,
+		Runtime:     "nvidia",
+	})
+	if got.Passed {
+		t.Fatalf("start must fail: %+v", got)
+	}
+	if got.ImageHash != "" {
+		t.Fatalf("must not invent image_hash: %+v", got)
+	}
+	if !strings.HasPrefix(got.Reason, "runtime start failed:") {
+		t.Fatalf("reason must wrap Start() err, got %q", got.Reason)
+	}
+	if !strings.Contains(got.Reason, "hypermesh runtime: docker start") || !strings.Contains(got.Reason, "nvidia-cdi-hook") {
+		t.Fatalf("reason missing wrapped docker error: %q", got.Reason)
+	}
+	if got.Reason == "runtime start failed" {
+		t.Fatal("opaque runtime start failed must not be posted")
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, "lease_start failed") || !strings.Contains(logs, "nvidia-cdi-hook") {
+		t.Fatalf("journal must include wrapped Start() error: %s", logs)
+	}
+	body := jobResultBody(api.KindLeaseStart, got)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"reason"`) || strings.Contains(string(raw), "reason_code") {
+		t.Fatalf("HTTP result must stay {passed, image_hash?}: %s", raw)
+	}
+}
+
+func TestLeaseStartLocalImageAfterPullUnauthorized(t *testing.T) {
+	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case len(args) > 0 && args[0] == "pull":
+			return []byte("Error response from daemon: unauthorized"), errors.New("exit status 1")
+		case len(args) >= 2 && args[0] == "image" && args[1] == "inspect":
+			return []byte("sha256:localpin\n"), nil
+		case len(args) > 0 && args[0] == "run":
+			return []byte("cid-local\n"), nil
+		default:
+			t.Fatalf("unexpected docker %v", args)
+			return nil, nil
+		}
+	}}
+	got := a.runJob(context.Background(), api.Job{
+		JobID:       "j-local",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-local",
+		CatalogID:   "llama-3.1-8b-q4",
+		ImageDigest: ref,
+		Runtime:     "nvidia",
+	})
+	if !got.Passed || got.Reason != "lease_start" {
+		t.Fatalf("local pin must not fail Start: %+v", got)
+	}
+	if got.ImageHash != ref {
+		t.Fatalf("must echo job pin, not invent a digest: %+v", got)
 	}
 }
 

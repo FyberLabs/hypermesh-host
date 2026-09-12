@@ -311,15 +311,8 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		Backend:     job.Backend,
 	})
 	if err != nil {
-		reason := "runtime start failed"
-		switch {
-		case errors.Is(err, runtime.ErrNoImage):
-			reason = "no image_digest; no soak image"
-		case errors.Is(err, runtime.ErrBareDigest):
-			reason = "image_digest is not repo@digest"
-		case errors.Is(err, runtime.ErrNoLeaseID):
-			reason = "lease_start requires lease_id"
-		}
+		reason := leaseStartFailReason(err)
+		a.log.Info("lease_start failed", "reason", reason, "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: reason}
 	}
 	digest := strings.TrimSpace(h.ImageDigest)
@@ -333,6 +326,22 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	}
 	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.LogLabel(job.Backend), "runner", runnerLog(path))
 	return pathb.Result{Passed: true, ImageHash: digest, Reason: "lease_start"}
+}
+
+// leaseStartFailReason keeps known sentinels exact. Docker pull/start
+// errors append the wrapped Start() string so the journal and Result.Reason
+// show unauthorized / nvidia-cdi-hook instead of a bare "runtime start failed".
+func leaseStartFailReason(err error) string {
+	switch {
+	case errors.Is(err, runtime.ErrNoImage):
+		return "no image_digest; no soak image"
+	case errors.Is(err, runtime.ErrBareDigest):
+		return "image_digest is not repo@digest"
+	case errors.Is(err, runtime.ErrNoLeaseID):
+		return "lease_start requires lease_id"
+	default:
+		return "runtime start failed: " + err.Error()
+	}
 }
 
 func jobBackendLog(job api.Job) string {

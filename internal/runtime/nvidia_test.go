@@ -135,6 +135,141 @@ func TestStartPullThenRunStop(t *testing.T) {
 	}
 }
 
+func TestStartPullUnauthorizedUsesLocalImage(t *testing.T) {
+	var seen [][]string
+	n := &NVIDIA{
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			seen = append(seen, append([]string{}, args...))
+			switch {
+			case len(args) > 0 && args[0] == "pull":
+				return []byte("Error response from daemon: unauthorized"), errors.New("exit status 1")
+			case len(args) >= 2 && args[0] == "image" && args[1] == "inspect":
+				if args[len(args)-1] != testRef {
+					t.Fatalf("inspect must use job pin, got %v", args)
+				}
+				return []byte("sha256:localpin\n"), nil
+			case len(args) > 0 && args[0] == "run":
+				return []byte("cid-local\n"), nil
+			default:
+				t.Fatalf("unexpected docker %v", args)
+				return nil, nil
+			}
+		},
+	}
+	h, err := n.Start(context.Background(), Spec{LeaseID: "lease-local", ImageDigest: testRef, Runtime: "nvidia"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.ContainerID != "cid-local" || h.ImageDigest != testRef {
+		t.Fatalf("must use job pin, not invent a digest: %+v", h)
+	}
+	if len(seen) != 3 || seen[0][0] != "pull" || seen[1][0] != "image" || seen[2][0] != "run" {
+		t.Fatalf("pull then inspect then run: %+v", seen)
+	}
+}
+
+func TestStartPullFailsWhenImageAbsent(t *testing.T) {
+	n := &NVIDIA{
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if len(args) > 0 && args[0] == "run" {
+				t.Fatal("must not docker run when pin is absent")
+			}
+			if len(args) > 0 && args[0] == "pull" {
+				return []byte("Error response from daemon: unauthorized"), errors.New("exit status 1")
+			}
+			return nil, errors.New("no such image")
+		},
+	}
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-missing", ImageDigest: testRef, Runtime: "nvidia"})
+	if err == nil {
+		t.Fatal("expected pull error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "docker pull") || !strings.Contains(got, "unauthorized") {
+		t.Fatalf("wrapped pull error: %v", err)
+	}
+}
+
+func TestStartRunErrorIncludesDockerOutput(t *testing.T) {
+	n := &NVIDIA{
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if len(args) > 0 && args[0] == "run" {
+				return []byte("nvidia-cdi-hook cudacompat: slice bounds out of range [:73] with capacity 71\n"), errors.New("exit status 1")
+			}
+			if len(args) > 0 && args[0] == "inspect" {
+				return nil, errors.New("no such container")
+			}
+			return []byte{}, nil
+		},
+	}
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-cdi", ImageDigest: testRef, Runtime: "nvidia"})
+	if err == nil {
+		t.Fatal("expected start error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "docker start") || !strings.Contains(got, "nvidia-cdi-hook") || !strings.Contains(got, "slice bounds") {
+		t.Fatalf("wrapped start error: %v", err)
+	}
+}
+
+func TestStartRemovesCreatedLeftover(t *testing.T) {
+	var seen [][]string
+	n := &NVIDIA{
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			seen = append(seen, append([]string{}, args...))
+			switch {
+			case len(args) > 0 && args[0] == "run":
+				return []byte("nvidia-cdi-hook create failed"), errors.New("exit status 1")
+			case len(args) > 0 && args[0] == "inspect":
+				return []byte("Created\n"), nil
+			case len(args) > 0 && args[0] == "rm":
+				if args[len(args)-1] != "hypermesh-lease-cdi" {
+					t.Fatalf("rm target %v", args)
+				}
+				return []byte{}, nil
+			default:
+				return []byte{}, nil
+			}
+		},
+	}
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-cdi", ImageDigest: testRef, Runtime: "nvidia"})
+	if err == nil {
+		t.Fatal("expected start error")
+	}
+	if len(seen) < 4 || seen[0][0] != "pull" || seen[1][0] != "run" || seen[2][0] != "inspect" || seen[3][0] != "rm" {
+		t.Fatalf("run fail must inspect+rm Created leftover: %+v", seen)
+	}
+}
+
+func TestStartLeavesNonCreatedContainer(t *testing.T) {
+	var seen [][]string
+	n := &NVIDIA{
+		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			seen = append(seen, append([]string{}, args...))
+			switch {
+			case len(args) > 0 && args[0] == "run":
+				return []byte("Conflict: name already in use"), errors.New("exit status 125")
+			case len(args) > 0 && args[0] == "inspect":
+				return []byte("running\n"), nil
+			case len(args) > 0 && args[0] == "rm":
+				t.Fatal("must not rm a running container")
+				return nil, errors.New("rm running")
+			default:
+				return []byte{}, nil
+			}
+		},
+	}
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-live", ImageDigest: testRef, Runtime: "nvidia"})
+	if err == nil {
+		t.Fatal("expected start error")
+	}
+	for _, call := range seen {
+		if len(call) > 0 && call[0] == "rm" {
+			t.Fatalf("rm on non-created: %+v", seen)
+		}
+	}
+}
+
 func contains(args []string, want string) bool {
 	for _, a := range args {
 		if a == want {

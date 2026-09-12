@@ -151,6 +151,10 @@ func StartArgs(spec Spec, ref string) []string {
 }
 
 // Start pulls repo@digest then runs it with the NVIDIA runtime.
+// A failed pull is not fatal when that exact pin is already local
+// (private GHCR unauthorized, image present). Do not invent a digest.
+// A failed run removes a leftover Status=Created container so a
+// same-lease retry is not blocked on --name.
 func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if spec.Runtime != "" && spec.Runtime != "nvidia" {
 		return nil, ErrWrongRuntime
@@ -163,8 +167,10 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 		return nil, err
 	}
 	name := ContainerName(spec.LeaseID)
-	if _, err := n.run(ctx, PullArgs(ref)...); err != nil {
-		return nil, fmt.Errorf("hypermesh runtime: docker pull: %w", err)
+	if out, err := n.run(ctx, PullArgs(ref)...); err != nil {
+		if !n.imagePresent(ctx, ref) {
+			return nil, wrapDocker("pull", out, err)
+		}
 	}
 	args := StartArgs(spec, ref)
 	for _, a := range args {
@@ -174,7 +180,8 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	}
 	out, err := n.run(ctx, args...)
 	if err != nil {
-		return nil, fmt.Errorf("hypermesh runtime: docker start: %w", err)
+		n.removeCreated(ctx, name)
+		return nil, wrapDocker("start", out, err)
 	}
 	return &Handle{
 		Name:        name,
@@ -184,6 +191,36 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 		ContainerID: strings.TrimSpace(string(out)),
 		Backend:     NormalizeBackend(spec.Backend),
 	}, nil
+}
+
+// imagePresent is docker image inspect of the exact repo@digest pin.
+func (n *NVIDIA) imagePresent(ctx context.Context, ref string) bool {
+	_, err := n.run(ctx, "image", "inspect", "--format", "{{.Id}}", ref)
+	return err == nil
+}
+
+// removeCreated deletes a named container left in Status=Created after
+// a failed docker run (nvidia-cdi-hook panic). Leave running/exited.
+func (n *NVIDIA) removeCreated(ctx context.Context, name string) {
+	if name == "" || name == "hypermesh-" {
+		return
+	}
+	out, err := n.run(ctx, "inspect", "--format", "{{.State.Status}}", name)
+	if err != nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(string(out)), "created") {
+		return
+	}
+	_, _ = n.run(ctx, "rm", name)
+}
+
+func wrapDocker(op string, out []byte, err error) error {
+	detail := strings.Join(strings.Fields(string(out)), " ")
+	if detail == "" {
+		return fmt.Errorf("hypermesh runtime: docker %s: %w", op, err)
+	}
+	return fmt.Errorf("hypermesh runtime: docker %s: %w: %s", op, err, detail)
 }
 
 // Stop sends docker stop.
