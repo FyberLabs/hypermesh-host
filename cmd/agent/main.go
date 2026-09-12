@@ -29,6 +29,7 @@ func main() {
 	flag.StringVar(&cfg.ImageHash, "image-hash", cfg.ImageHash, "optional host image hash override (HYPERMESH_IMAGE_HASH)")
 	flag.StringVar(&cfg.ListenPort, "listen-port", cfg.ListenPort, "host port published to the workload :8080 (HYPERMESH_LISTEN_PORT)")
 	flag.StringVar(&cfg.CompletionsURL, "completions-url", cfg.CompletionsURL, "local OpenAI-shaped completions URL (HYPERMESH_COMPLETIONS_URL)")
+	flag.StringVar(&cfg.GGUFPath, "gguf-path", cfg.GGUFPath, "host GGUF bind-mounted at /models/model.gguf:ro (HYPERMESH_GGUF_PATH)")
 
 	if pre, ownerArgs, ok := splitOwnerArgs(os.Args[1:]); ok {
 		if err := flag.CommandLine.Parse(pre); err != nil {

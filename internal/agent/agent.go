@@ -307,6 +307,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		ImageDigest: job.ImageDigest,
 		Runtime:     job.Runtime,
 		HostPort:    a.cfg.PublishPort(),
+		GGUFPath:    a.cfg.GGUFHostPath(),
 		Backend:     job.Backend,
 	})
 	if err != nil {

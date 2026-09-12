@@ -36,6 +36,13 @@ var (
 // http://<client_address>:8080.
 const DefaultListenPort = "8080"
 
+// DefaultGGUFPath is the AGX64-1 host weights. Not baked into the image.
+// Override with Spec.GGUFPath / HYPERMESH_GGUF_PATH.
+const DefaultGGUFPath = "/home/chris/hypermesh/workload/model.gguf"
+
+// ContainerGGUFPath is where llama-server looks inside the container.
+const ContainerGGUFPath = "/models/model.gguf"
+
 // Spec is a leased workload from a lease_start job.
 // ImageDigest must be repo@digest (the locked job field). No extra CP fields.
 type Spec struct {
@@ -45,6 +52,9 @@ type Spec struct {
 	Runtime     string
 	// HostPort is published as -p <HostPort>:8080. Empty uses DefaultListenPort.
 	HostPort string
+	// GGUFPath is the host file bind-mounted at ContainerGGUFPath (:ro).
+	// Empty uses DefaultGGUFPath. Do not invent a model or image_hash.
+	GGUFPath string
 	// Backend is the lease_start enum (optional). NVIDIA ignores it for argv.
 	Backend string
 }
@@ -115,11 +125,24 @@ func publishSpec(hostPort string) string {
 	return p + ":8080"
 }
 
+func ggufBind(host string) string {
+	h := strings.TrimSpace(host)
+	if h == "" {
+		h = DefaultGGUFPath
+	}
+	return h + ":" + ContainerGGUFPath + ":ro"
+}
+
 // StartArgs is the docker run argv for a resolved repo@digest.
 // Publishes container 8080 on the host so the WG client_address can reach
 // /v1/chat/completions. The process inside must listen on 0.0.0.0:8080.
+// Bind-mounts the host GGUF at /models/model.gguf:ro (not baked into the image).
 func StartArgs(spec Spec, ref string) []string {
-	args := []string{"run", "-d", "--runtime=nvidia", "-p", publishSpec(spec.HostPort)}
+	args := []string{
+		"run", "-d", "--runtime=nvidia",
+		"-p", publishSpec(spec.HostPort),
+		"-v", ggufBind(spec.GGUFPath),
+	}
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
 		args = append(args, "--name", name)
 	}
