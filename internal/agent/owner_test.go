@@ -220,9 +220,7 @@ func TestOwnerLeaseStopMatchMismatchSameAsH1(t *testing.T) {
 				t.Fatal("match/no-op must echo image_hash")
 			}
 			if tc.wantDocker {
-				if len(dockerCalls) != 1 || dockerCalls[0][0] != "stop" {
-					t.Fatalf("expected docker stop, calls=%v", dockerCalls)
-				}
+				assertDockerStopThenRM(t, dockerCalls, handle.Name)
 			} else if len(dockerCalls) != 0 {
 				t.Fatalf("docker must not run, calls=%v", dockerCalls)
 			}

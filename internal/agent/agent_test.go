@@ -806,9 +806,7 @@ func TestLeaseStopIdentity(t *testing.T) {
 				t.Fatalf("result %+v want pass=%v reason=%q", got, tc.wantPass, tc.wantReason)
 			}
 			if tc.wantDocker {
-				if len(dockerCalls) != 1 || dockerCalls[0][0] != "stop" {
-					t.Fatalf("expected docker stop, calls=%v", dockerCalls)
-				}
+				assertDockerStopThenRM(t, dockerCalls, handle.Name)
 			} else if len(dockerCalls) != 0 {
 				t.Fatalf("docker must not run, calls=%v", dockerCalls)
 			}
@@ -910,6 +908,116 @@ func TestLeaseStopMismatchPostsPassedFalseOnly(t *testing.T) {
 		if _, ok := posted[extra]; ok {
 			t.Fatalf("result body must stay {passed, image_hash?}, extra %s in %v", extra, posted)
 		}
+	}
+}
+
+func assertDockerStopThenRM(t *testing.T, calls [][]string, name string) {
+	t.Helper()
+	if len(calls) != 2 || calls[0][0] != "stop" || calls[1][0] != "rm" {
+		t.Fatalf("expected docker stop then rm, calls=%v", calls)
+	}
+	if name != "" && calls[1][len(calls[1])-1] != name {
+		t.Fatalf("rm target %v want %s", calls[1], name)
+	}
+}
+
+func dockerNameArg(args []string) string {
+	for i, a := range args {
+		if a == "--name" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+func TestLeaseStopThenStartFreesExitedName(t *testing.T) {
+	// Same leftover as AGX64-1 SWAP: stop left hypermesh-<lease_id> Exited,
+	// next lease_start with that lease_id hit docker exit 125.
+	const leaseID = "22b3f0d7-f4dc-4423-8250-58449f15c61d"
+	name := runtime.ContainerName(leaseID)
+	const digest = "example.invalid/hypermesh/workload@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	present := map[string]string{}
+	var dockerCalls [][]string
+	var teardowns int
+
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ft := &fakeTunnel{}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.tunnels = ft
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		dockerCalls = append(dockerCalls, append([]string{}, args...))
+		if len(args) == 0 {
+			return nil, errors.New("empty docker")
+		}
+		switch args[0] {
+		case "pull", "image":
+			return []byte{}, nil
+		case "run":
+			got := dockerNameArg(args)
+			if got == "" {
+				got = name
+			}
+			if _, ok := present[got]; ok {
+				return []byte(`Conflict: The container name "/` + got + `" is already in use`), errors.New("exit status 125")
+			}
+			present[got] = "running"
+			return []byte("cid-reuse\n"), nil
+		case "stop":
+			target := args[len(args)-1]
+			if target == "cid-reuse" || target == name {
+				if _, ok := present[name]; ok {
+					present[name] = "exited"
+				}
+			}
+			return []byte{}, nil
+		case "rm":
+			target := args[len(args)-1]
+			if target == "cid-reuse" || target == name {
+				delete(present, name)
+			} else {
+				delete(present, target)
+			}
+			return []byte{}, nil
+		default:
+			return []byte{}, nil
+		}
+	}}
+
+	startJob := api.Job{
+		JobID: "j-start-1", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: leaseID, CatalogID: "llama-3.1-8b-q4",
+		ImageDigest: digest, Runtime: "nvidia",
+	}
+	first := a.runJob(context.Background(), startJob)
+	if !first.Passed {
+		t.Fatalf("first lease_start %+v", first)
+	}
+	stop := a.runJob(context.Background(), api.Job{
+		JobID: "j-stop-1", Kind: api.KindLeaseStop, DeviceID: testDevice, LeaseID: leaseID,
+	})
+	if !stop.Passed {
+		t.Fatalf("lease_stop %+v", stop)
+	}
+	if stop.ImageHash != digest && stop.ImageHash != "sha256:fixture" {
+		t.Fatalf("lease_stop must not invent a hash: %q", stop.ImageHash)
+	}
+	if _, ok := present[name]; ok {
+		t.Fatalf("matching stop must rm leftover Exited name, leftover=%v", present)
+	}
+	startJob.JobID = "j-start-2"
+	second := a.runJob(context.Background(), startJob)
+	if !second.Passed {
+		t.Fatalf("same lease_id must not collide on leftover Exited name: %+v calls=%v", second, dockerCalls)
+	}
+	ft.mu.Lock()
+	teardowns = ft.teardowns
+	ft.mu.Unlock()
+	if teardowns != 0 {
+		t.Fatalf("lease_stop must not bounce WireGuard, teardowns=%d", teardowns)
 	}
 }
 
