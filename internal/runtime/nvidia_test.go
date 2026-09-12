@@ -29,12 +29,25 @@ func TestStartArgsUseNVIDIARuntimeNotGPUs(t *testing.T) {
 	if !contains(args, "-p") || !contains(args, "8080:8080") {
 		t.Fatalf("must publish 8080:8080: %v", args)
 	}
+	if !contains(args, "-v") || !contains(args, DefaultGGUFPath+":"+ContainerGGUFPath+":ro") {
+		t.Fatalf("must bind-mount default GGUF: %v", args)
+	}
 }
 
 func TestStartArgsCustomHostPort(t *testing.T) {
 	args := StartArgs(Spec{LeaseID: "lease-9", HostPort: "9090"}, testRef)
 	if !contains(args, "9090:8080") || contains(args, "8080:8080") {
 		t.Fatalf("custom host port: %v", args)
+	}
+}
+
+func TestStartArgsGGUFBindMount(t *testing.T) {
+	args := StartArgs(Spec{LeaseID: "lease-9", GGUFPath: "/tmp/custom.gguf"}, testRef)
+	if !contains(args, "-v") || !contains(args, "/tmp/custom.gguf:/models/model.gguf:ro") {
+		t.Fatalf("custom GGUF mount: %v", args)
+	}
+	if contains(args, DefaultGGUFPath+":"+ContainerGGUFPath+":ro") {
+		t.Fatalf("override must replace default GGUF: %v", args)
 	}
 }
 
@@ -116,6 +129,9 @@ func TestStartPullThenRunStop(t *testing.T) {
 	}
 	if !contains(seen[1], "--runtime=nvidia") || !contains(seen[1], "-p") || !contains(seen[1], "8080:8080") {
 		t.Fatalf("nvidia + publish: %v", seen[1])
+	}
+	if !contains(seen[1], "-v") || !contains(seen[1], DefaultGGUFPath+":"+ContainerGGUFPath+":ro") {
+		t.Fatalf("GGUF bind-mount: %v", seen[1])
 	}
 }
 

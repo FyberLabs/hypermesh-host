@@ -1,6 +1,6 @@
 # hypermesh-test (build on the AGX)
 
-OCI wrapper that holds a GGUF and serves OpenAI-shaped `POST /v1/chat/completions` on `0.0.0.0:8080`. The host program publishes that as `docker -p 8080:8080`. The Fyber router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
+OCI wrapper that serves OpenAI-shaped `POST /v1/chat/completions` on `0.0.0.0:8080`. The GGUF is **volume-mounted at run**, not baked into the image (AGX64-1 eMMC cannot hold a 4.9G COPY). The host program publishes that as `docker -p 8080:8080` plus the bind-mount. The Fyber router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
 
 Target name: **`ghcr.io/fyberlabs/hypermesh-test`**.
 
@@ -36,14 +36,7 @@ Plain `cuda:*-ubuntu24.04` does **not** ship Jetson cuDNN / TensorRT. llama.cpp 
 
 ```bash
 # On AGX64-1, after first-boot overlay.
-# GGUF is already on this box. Do not commit it.
-#   /home/chris/hypermesh/workload/model.gguf
-# Copy or link it next to this Dockerfile as model.gguf (catalog id llama-3.1-8b-q4).
-# Missing GGUF fails the docker build honestly. Without that image, instance_check
-# and completions have nothing to hit.
-ln -sfn /home/chris/hypermesh/workload/model.gguf model.gguf
-ls -l model.gguf
-
+# Build does not need weights. Do not COPY model.gguf. Do not commit it.
 sudo docker build --runtime=nvidia --platform linux/arm64 \
   -t ghcr.io/fyberlabs/hypermesh-test .
 
@@ -62,9 +55,17 @@ sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test
 
 `lease_start` still needs `repo@digest` from the control plane. Empty digest stays `passed=false`. Catalog id stays `llama-3.1-8b-q4`.
 
-## GGUF still required
+## GGUF is volume-mounted (not COPY)
 
-`model.gguf` is not in git and this PR does not add it. On AGX64-1 the weights are already at **`/home/chris/hypermesh/workload/model.gguf`**. Copy or symlink that file next to the Dockerfile as `model.gguf` before `docker build`. A missing file fails the build. A built image without that GGUF cannot serve completions; **`instance_check` and `POST /v1/chat/completions` still need this image running with the weights**.
+Do **not** `COPY model.gguf` into the image. On AGX64-1 the weights stay at **`/home/chris/hypermesh/workload/model.gguf`**. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` (`HYPERMESH_GGUF_PATH` overrides the host path). A forgotten mount fails honestly at container start. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
+
+```bash
+# Manual run (same mount the host program adds):
+sudo docker run --runtime=nvidia --platform linux/arm64 \
+  -p 8080:8080 \
+  -v /home/chris/hypermesh/workload/model.gguf:/models/model.gguf:ro \
+  ghcr.io/fyberlabs/hypermesh-test
+```
 
 ## What it serves
 

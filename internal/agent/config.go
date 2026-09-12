@@ -15,6 +15,7 @@ const (
 	defaultJobInterval    = 15 * time.Second
 	defaultListenPort     = "8080"
 	defaultCompletionsURL = "http://127.0.0.1:8080/v1/chat/completions"
+	defaultGGUFPath       = "/home/chris/hypermesh/workload/model.gguf"
 )
 
 var uuidRE = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -37,6 +38,9 @@ type Config struct {
 	// CompletionsURL is the local OpenAI-shaped endpoint thin-v1 probes.
 	// Empty uses http://127.0.0.1:<ListenPort>/v1/chat/completions.
 	CompletionsURL string
+	// GGUFPath is the host file bind-mounted at /models/model.gguf:ro.
+	// Empty uses /home/chris/hypermesh/workload/model.gguf.
+	GGUFPath string
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
@@ -53,6 +57,7 @@ func FromEnv() Config {
 		ImageHash:       os.Getenv("HYPERMESH_IMAGE_HASH"),
 		ListenPort:      envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
 		CompletionsURL:  os.Getenv("HYPERMESH_COMPLETIONS_URL"),
+		GGUFPath:        envOr("HYPERMESH_GGUF_PATH", defaultGGUFPath),
 	}
 }
 
@@ -126,4 +131,12 @@ func (c Config) PublishPort() string {
 		return p
 	}
 	return defaultListenPort
+}
+
+// GGUFHostPath is the host weights file for docker -v ...:/models/model.gguf:ro.
+func (c Config) GGUFHostPath() string {
+	if p := strings.TrimSpace(c.GGUFPath); p != "" {
+		return p
+	}
+	return defaultGGUFPath
 }

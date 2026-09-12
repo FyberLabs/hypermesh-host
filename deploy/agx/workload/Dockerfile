@@ -16,7 +16,9 @@
 # Build this ON AGX64-1 after the JetPack 7.2.1 / L4T R39.2.1 overlay:
 #   sudo docker build --runtime=nvidia --platform linux/arm64 \
 #     -t ghcr.io/fyberlabs/hypermesh-test .
-# Runtime: docker run --runtime=nvidia ...
+# Build does not need weights. Do not COPY model.gguf (eMMC cannot bake 4.9G).
+# Runtime: docker run --runtime=nvidia \
+#   -v /home/chris/hypermesh/workload/model.gguf:/models/model.gguf:ro ...
 # Arch: sm_87, cmake -DCMAKE_CUDA_ARCHITECTURES=87
 #
 # Fallback only if 13.2.1 driver-allowlist rejects on-box:
@@ -57,11 +59,9 @@ RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov
     && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server \
     && rm -rf /src
 
-# Weights are not in git. On AGX64-1 the GGUF is already at
-# /home/chris/hypermesh/workload/model.gguf — copy or link it next to this
-# Dockerfile as model.gguf, then rebuild. Do not commit the weights.
-# Missing file fails the build honestly. Catalog id stays llama-3.1-8b-q4.
-COPY model.gguf /models/model.gguf
+# Weights stay on the host. Catalog id stays llama-3.1-8b-q4.
+# Do not COPY model.gguf. Entrypoint fails if the run-time mount is missing.
+RUN mkdir -p /models
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 

@@ -606,6 +606,9 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	if !strings.Contains(joined, "-p") || !strings.Contains(joined, "8080:8080") {
 		t.Fatalf("port publish %v", calls[1])
 	}
+	if !strings.Contains(joined, "-v") || !strings.Contains(joined, runtime.DefaultGGUFPath+":"+runtime.ContainerGGUFPath+":ro") {
+		t.Fatalf("GGUF bind-mount %v", calls[1])
+	}
 	if !strings.Contains(joined, "hypermesh-lease-2") || !strings.Contains(joined, ref) {
 		t.Fatalf("name/ref %v", calls[1])
 	}
@@ -1376,6 +1379,7 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	t.Setenv("HYPERMESH_CONTROL_PLANE_URL", "")
 	t.Setenv("HYPERMESH_LISTEN_PORT", "")
 	t.Setenv("HYPERMESH_COMPLETIONS_URL", "")
+	t.Setenv("HYPERMESH_GGUF_PATH", "")
 	cfg := FromEnv()
 	if cfg.ControlPlaneURL != "https://api.test.hyperme.sh" {
 		t.Fatalf("default control plane %q", cfg.ControlPlaneURL)
@@ -1385,6 +1389,9 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	}
 	if cfg.CompletionsEndpoint() != "http://127.0.0.1:8080/v1/chat/completions" {
 		t.Fatalf("default completions %q", cfg.CompletionsEndpoint())
+	}
+	if cfg.GGUFHostPath() != "/home/chris/hypermesh/workload/model.gguf" {
+		t.Fatalf("default GGUF path %q", cfg.GGUFHostPath())
 	}
 }
 

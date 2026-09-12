@@ -72,7 +72,7 @@ Install `wireguard-tools`. One WireGuard peer per host, not per lease. When a se
 
 ### Workload
 
-`lease_start` with `repo@digest` runs `docker pull` then `docker --runtime=nvidia -p 8080:8080` (host port configurable via `HYPERMESH_LISTEN_PORT`). The container must listen on `0.0.0.0:8080` and serve OpenAI-shaped `POST /v1/chat/completions`. The Fyber router is the only customer HTTPS path; it proxies to `http://<client_address>:8080/v1/chat/completions`.
+`lease_start` with `repo@digest` runs `docker pull` then `docker --runtime=nvidia -p 8080:8080` (host port configurable via `HYPERMESH_LISTEN_PORT`) and bind-mounts the host GGUF at `/models/model.gguf:ro` (default `/home/chris/hypermesh/workload/model.gguf`, override `HYPERMESH_GGUF_PATH`). The container must listen on `0.0.0.0:8080` and serve OpenAI-shaped `POST /v1/chat/completions`. The Fyber router is the only customer HTTPS path; it proxies to `http://<client_address>:8080/v1/chat/completions`.
 
 Empty `image_digest` POSTs `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. Do not invent a registry digest. Host will not invent `image_hash` / `repo@digest`. Catalog id stays `llama-3.1-8b-q4`.
 
@@ -80,7 +80,7 @@ Path B suite telem hash (`image_hash` from `HYPERMESH_IMAGE_HASH`, `/etc/hyperme
 
 Build the on-box image after overlay: [workload/README.md](workload/README.md). Target name `ghcr.io/fyberlabs/hypermesh-test`. Do not build that image on x86. Verify on the AGX with `--runtime=nvidia --platform linux/arm64`. Pin the sha256 after the on-box build (CI may pin a digest then; Host will not invent one). The FROM tag is Hardware Research / Product lock default `nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04` (compile in-image; matches host CUDA 13.2.1; Orin sm_87) and stays **unverified-until-AGX-build** until someone on this box pulls it and the build succeeds. Runtime alternative `13.2.1-runtime-ubuntu24.04` is for a copy-a-binary recipe only. L4T major MUST match the host (r39). Do not invent `l4t-jetpack:r39.2.1`. Do not use `l4t-jetpack` / `r36.*` / `ubuntu:22.04` / JP6. If 13.2.1 hits the driver-allowlist gap on-box, keep **13.0.0 only** as the documented fallback (`13.0.0-devel-ubuntu24.04` with `-e NVIDIA_DISABLE_REQUIRE=true`) — rescue, not a second default.
 
-**GGUF is still required** before `instance_check` / completions. On AGX64-1 the weights are already at `/home/chris/hypermesh/workload/model.gguf`. Copy or symlink that file to `deploy/agx/workload/model.gguf` (not in git). Missing weights fail the image build honestly. Without that running image, the completions endpoint has nothing to serve.
+**GGUF is still required** before `instance_check` / completions, but it is **not** `COPY`’d into the image (eMMC cannot bake 4.9G). On AGX64-1 the weights stay at `/home/chris/hypermesh/workload/model.gguf` and are volume-mounted at run. A forgotten mount fails honestly. Without that running container, the completions endpoint has nothing to serve.
 
 ### thin-v1
 
