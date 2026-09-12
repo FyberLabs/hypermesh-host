@@ -14,11 +14,16 @@
 # (linux/amd64 + linux/arm64). Not an on-box pull; unverified-until-AGX-build.
 #
 # Build this ON AGX64-1 after the JetPack 7.2.1 / L4T R39.2.1 overlay:
-#   sudo docker build --runtime=nvidia --platform linux/arm64 \
+#   sudo docker build --platform linux/arm64 \
 #     -t ghcr.io/fyberlabs/hypermesh-test .
-# Build does not need weights. Do not COPY model.gguf (eMMC cannot bake 4.9G).
+# Docker 29 Buildx does not accept --runtime=nvidia at build. CDI
+# --allow device + RUN --device= also failed the llama-server link
+# (libcuda.so.1 / CUDA symbols undefined). Link against CUDA devel
+# stubs (see cmake below). Build does not need weights. Do not COPY
+# model.gguf (eMMC cannot bake 4.9G).
 # Runtime: docker run --runtime=nvidia \
 #   -v /home/chris/hypermesh/workload/model.gguf:/models/model.gguf:ro ...
+# (not x86 --gpus). Host driver supplies the real libcuda.so.1.
 # Arch: sm_87, cmake -DCMAKE_CUDA_ARCHITECTURES=87
 #
 # Fallback only if 13.2.1 driver-allowlist rejects on-box:
@@ -42,8 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Toolkit is in the NGC CUDA devel image. Host driver still comes from
-# the AGX via --runtime=nvidia at build and at run (not x86 --gpus).
+# Toolkit is in the NGC CUDA devel image. Host driver comes from the AGX
+# at run via --runtime=nvidia (not x86 --gpus). Build links stubs only.
 ARG CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:/usr/local/lib:${LD_LIBRARY_PATH:-}"
@@ -70,10 +75,19 @@ WORKDIR /src
 #   /usr/local/lib/libggml-base.so
 #   /usr/local/lib/libggml-cpu.so
 #   /usr/local/lib/libggml-cuda.so
-RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov/llama.cpp.git \
+# CUDA devel stubs (NVIDIA standard link path): Docker 29 Buildx cannot
+# inject the host driver at build. The devel image ships
+# ${CUDA_HOME}/lib64/stubs/libcuda.so (SONAME libcuda.so.1). Symlink the
+# versioned name and pass -L / -Wl,-rpath-link so llama-server and
+# libggml-cuda.so finish the link. Do not add stubs to LD_LIBRARY_PATH
+# — runtime --runtime=nvidia provides the real driver.
+RUN ln -sf "${CUDA_HOME}/lib64/stubs/libcuda.so" "${CUDA_HOME}/lib64/stubs/libcuda.so.1" \
+    && git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov/llama.cpp.git \
     && cmake -S llama.cpp -B build \
         -DGGML_CUDA=ON \
         -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DCMAKE_EXE_LINKER_FLAGS="-L${CUDA_HOME}/lib64/stubs -Wl,-rpath-link,${CUDA_HOME}/lib64/stubs" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L${CUDA_HOME}/lib64/stubs -Wl,-rpath-link,${CUDA_HOME}/lib64/stubs" \
     && cmake --build build -j"$(nproc)" --target llama-server \
     && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server \
     && mkdir -p /usr/local/lib \
