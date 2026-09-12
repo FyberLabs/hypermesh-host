@@ -2,24 +2,30 @@
 #
 # JP7 / L4T R39 host — Ubuntu 24.04 + CUDA 13 SBSA (aarch64)
 # Pin a digest in CI after a good on-box build. Do not invent repo@digest here.
-# Do not use JP6 / ubuntu:22.04 / l4t-jetpack (gone in 7.x).
+# Do not use JP6 / ubuntu:22.04 / r36.* / l4t-jetpack (gone in 7.x).
+# Do not invent l4t-jetpack:r39.2.1. No whitesscott/l4t-jetpack unless
+# Product explicitly asks.
+#
+# Hardware Research default (compile llama.cpp in-image): devel, not runtime.
+# Matches JetPack 7.2 host CUDA 13.2.1. Tag was registry-listed
+# (linux/amd64 + linux/arm64). Not an on-box pull; unverified-until-AGX-build.
 #
 # Build this ON AGX64-1 after the JetPack 7.2.1 / L4T R39.2.1 overlay:
 #   sudo docker build --runtime=nvidia --platform linux/arm64 \
 #     -t ghcr.io/fyberlabs/hypermesh-test .
 # Runtime: docker run --runtime=nvidia ...
+# Arch: sm_87, cmake -DCMAKE_CUDA_ARCHITECTURES=87
 #
-# Do not build this on x86. The NGC CUDA tag is multi-arch; an x86 build
-# is the wrong image even if the tag name matches. Verify on the AGX with
-# --platform linux/arm64.
+# Fallback if 13.2.1 driver-allowlist rejects on-box (r590/r595 gap):
+#   nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
+#   or 13.3.x-*-ubuntu24.04 with -e NVIDIA_DISABLE_REQUIRE=true
+# That is an on-box rescue, not a second default FROM.
 #
-# CUDA in the image need not equal the host toolkit minor. L4T major MUST
-# match the host (r39). Host toolkit is CUDA 13.2; 13.2.1-devel-ubuntu24.04
-# is registry-listed. This recipe keeps the NVIDIA JP 7.2 / Orin guide
-# example 13.0.0-devel-ubuntu24.04. Tag listing is not an on-box pull and
-# is unverified-until-AGX-build.
+# Plain cuda:*-ubuntu24.04 does not ship Jetson cuDNN/TensorRT.
+# llama.cpp CUDA decode usually does not need TRT. Only add packages
+# from repo.download.nvidia.com/jetson r39.2 if a workload needs them.
 
-FROM nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
+FROM nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
