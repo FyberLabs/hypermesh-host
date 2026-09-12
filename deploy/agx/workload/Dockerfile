@@ -6,7 +6,10 @@
 # Do not invent l4t-jetpack:r39.2.1. No whitesscott/l4t-jetpack unless
 # Product explicitly asks.
 #
-# Hardware Research default (compile llama.cpp in-image): devel, not runtime.
+# Hardware Research / Product lock default (compile llama.cpp in-image):
+#   nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04
+# Runtime alternative (copy a prebuilt binary only; not this recipe):
+#   nvcr.io/nvidia/cuda:13.2.1-runtime-ubuntu24.04
 # Matches JetPack 7.2 host CUDA 13.2.1. Tag was registry-listed
 # (linux/amd64 + linux/arm64). Not an on-box pull; unverified-until-AGX-build.
 #
@@ -16,9 +19,9 @@
 # Runtime: docker run --runtime=nvidia ...
 # Arch: sm_87, cmake -DCMAKE_CUDA_ARCHITECTURES=87
 #
-# Fallback if 13.2.1 driver-allowlist rejects on-box (r590/r595 gap):
-#   nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
-#   or 13.3.x-*-ubuntu24.04 with -e NVIDIA_DISABLE_REQUIRE=true
+# Fallback only if 13.2.1 driver-allowlist rejects on-box:
+#   FROM nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
+#   and docker build/run -e NVIDIA_DISABLE_REQUIRE=true
 # That is an on-box rescue, not a second default FROM.
 #
 # Plain cuda:*-ubuntu24.04 does not ship Jetson cuDNN/TensorRT.
@@ -54,7 +57,9 @@ RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov
     && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server \
     && rm -rf /src
 
-# Weights are not in git. Copy llama-3.1-8b-q4 onto this box as model.gguf, then rebuild.
+# Weights are not in git. On AGX64-1 the GGUF is already at
+# /home/chris/hypermesh/workload/model.gguf — copy or link it next to this
+# Dockerfile as model.gguf, then rebuild. Do not commit the weights.
 # Missing file fails the build honestly. Catalog id stays llama-3.1-8b-q4.
 COPY model.gguf /models/model.gguf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
