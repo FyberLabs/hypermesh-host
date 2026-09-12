@@ -116,23 +116,10 @@ func (h *HIP) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	}, nil
 }
 
-// Stop sends docker stop.
+// Stop sends docker stop then docker rm so hypermesh-<lease_id> is
+// free for the next lease_start. Same leftover-name path as NVIDIA.
 func (h *HIP) Stop(ctx context.Context, handle *Handle) error {
-	if handle == nil {
-		return errors.New("hypermesh runtime: nil handle")
-	}
-	target := handle.ContainerID
-	if target == "" {
-		target = handle.Name
-	}
-	if target == "" {
-		return errors.New("hypermesh runtime: empty handle")
-	}
-	_, err := h.run(ctx, "stop", target)
-	if err != nil {
-		return fmt.Errorf("hypermesh runtime: hip-rocm stop: %w", err)
-	}
-	return nil
+	return stopAndRemove(ctx, h.run, handle)
 }
 
 func (h *HIP) run(ctx context.Context, args ...string) ([]byte, error) {

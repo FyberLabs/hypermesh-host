@@ -206,7 +206,7 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			wantPass:    true,
 			wantReason:  "lease_stop",
 			wantHash:    matrixDigest,
-			dockerFirst: []string{"stop"},
+			dockerFirst: []string{"stop", "rm"},
 		},
 		{
 			name: "lease_stop/mismatch",

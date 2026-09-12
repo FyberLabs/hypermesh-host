@@ -234,8 +234,8 @@ func TestSyntheticAgentLoop(t *testing.T) {
 		t.Fatalf("heartbeat after lease_start must set loaded_model_hash=%q, got %s", synthDigest, formatHBRaws(hbRaws))
 	}
 
-	if len(dockerCalls) < 3 {
-		t.Fatalf("expected pull/run/stop, calls=%v", dockerCalls)
+	if len(dockerCalls) < 4 {
+		t.Fatalf("expected pull/run/stop/rm, calls=%v", dockerCalls)
 	}
 	if dockerCalls[0][0] != "pull" || dockerCalls[0][1] != synthDigest {
 		t.Fatalf("pull %v", dockerCalls[0])
@@ -249,6 +249,9 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	}
 	if dockerCalls[2][0] != "stop" {
 		t.Fatalf("stop %v", dockerCalls[2])
+	}
+	if dockerCalls[3][0] != "rm" || dockerCalls[3][len(dockerCalls[3])-1] != "hypermesh-lease-syn" {
+		t.Fatalf("rm named container %v", dockerCalls[3])
 	}
 
 	if !ownerUp {

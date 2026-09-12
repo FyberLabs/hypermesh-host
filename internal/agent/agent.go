@@ -397,8 +397,8 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: true, ImageHash: a.preferredImageHash(nil, snap), Reason: "lease_stop"}
 	}
 
-	// Strict identity before docker stop. Empty job.lease_id is a mismatch
-	// when a handle exists — do not stop whatever is running.
+	// Strict identity before docker stop/rm. Empty job.lease_id is a
+	// mismatch when a handle exists — do not stop whatever is running.
 	jobLease := strings.TrimSpace(job.LeaseID)
 	localLease := strings.TrimSpace(h.LeaseID)
 	if jobLease == "" || jobLease != localLease {

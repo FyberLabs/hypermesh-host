@@ -76,8 +76,11 @@ func TestHIPStartMockNoPull(t *testing.T) {
 	if err := h.Stop(context.Background(), got); err != nil {
 		t.Fatal(err)
 	}
-	if len(seen) != 2 || seen[1][0] != "stop" {
-		t.Fatalf("stop: %v", seen)
+	if len(seen) != 3 || seen[1][0] != "stop" || seen[2][0] != "rm" {
+		t.Fatalf("stop then rm: %v", seen)
+	}
+	if seen[2][len(seen[2])-1] != "hypermesh-lease-h" {
+		t.Fatalf("rm name: %v", seen[2])
 	}
 }
 

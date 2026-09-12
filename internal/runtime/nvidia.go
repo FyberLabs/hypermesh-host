@@ -223,23 +223,46 @@ func wrapDocker(op string, out []byte, err error) error {
 	return fmt.Errorf("hypermesh runtime: docker %s: %w: %s", op, err, detail)
 }
 
-// Stop sends docker stop.
+// Stop sends docker stop then docker rm so hypermesh-<lease_id> is
+// free for the next lease_start. An already-gone container is a soft
+// success (do not fail lease_stop when the leftover is already gone).
 func (n *NVIDIA) Stop(ctx context.Context, h *Handle) error {
+	return stopAndRemove(ctx, n.run, h)
+}
+
+// stopAndRemove is docker stop then docker rm of the named container.
+// Prefer Handle.Name (hypermesh-<lease_id>) for rm so --name is free.
+// A missing container is a soft success. A failed stop does not rm.
+func stopAndRemove(ctx context.Context, run func(ctx context.Context, args ...string) ([]byte, error), h *Handle) error {
 	if h == nil {
 		return errors.New("hypermesh runtime: nil handle")
 	}
-	target := h.ContainerID
+	target := strings.TrimSpace(h.ContainerID)
 	if target == "" {
-		target = h.Name
+		target = strings.TrimSpace(h.Name)
 	}
 	if target == "" {
 		return errors.New("hypermesh runtime: empty handle")
 	}
-	_, err := n.run(ctx, "stop", target)
-	if err != nil {
-		return fmt.Errorf("hypermesh runtime: docker stop: %w", err)
+	if out, err := run(ctx, "stop", target); err != nil && !dockerAbsent(out, err) {
+		return wrapDocker("stop", out, err)
+	}
+	rmTarget := strings.TrimSpace(h.Name)
+	if rmTarget == "" || rmTarget == "hypermesh-" {
+		rmTarget = target
+	}
+	if out, err := run(ctx, "rm", rmTarget); err != nil && !dockerAbsent(out, err) {
+		return wrapDocker("rm", out, err)
 	}
 	return nil
+}
+
+func dockerAbsent(out []byte, err error) bool {
+	if err == nil {
+		return false
+	}
+	blob := strings.ToLower(string(out) + " " + err.Error())
+	return strings.Contains(blob, "no such container")
 }
 
 func (n *NVIDIA) run(ctx context.Context, args ...string) ([]byte, error) {
