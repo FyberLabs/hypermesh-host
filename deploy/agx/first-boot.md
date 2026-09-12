@@ -78,7 +78,7 @@ Empty `image_digest` POSTs `passed=false` (no soak image; not a running instance
 
 Path B suite telem hash (`image_hash` from `HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, or a hash of `/etc/nv_tegra_release` / `/etc/os-release`) is **not** the catalog `file_hash`.
 
-Build the on-box image after overlay: [workload/README.md](workload/README.md). Target name `ghcr.io/fyberlabs/hypermesh-test`. Do not build that image on x86. Pin the sha256 after the on-box build. The FROM tag is a documented NGC CUDA 13 SBSA candidate and stays **unverified-until-AGX-build** until someone on this box pulls it and the build succeeds.
+Build the on-box image after overlay: [workload/README.md](workload/README.md). Target name `ghcr.io/fyberlabs/hypermesh-test`. Do not build that image on x86. Verify on the AGX with `--runtime=nvidia --platform linux/arm64`. Pin the sha256 after the on-box build (CI may pin a digest then; Host will not invent one). The FROM tag is the documented NGC CUDA 13 SBSA example (`13.0.0-devel-ubuntu24.04`) and stays **unverified-until-AGX-build** until someone on this box pulls it and the build succeeds. CUDA in the image need not equal the host toolkit minor; L4T major MUST match the host (r39). Do not use `l4t-jetpack` (gone in 7.x).
 
 **GGUF is still required** before `instance_check` / completions: copy `llama-3.1-8b-q4` onto this box as `deploy/agx/workload/model.gguf` (not in git). Missing weights fail the image build honestly. Without that running image, the completions endpoint has nothing to serve.
 

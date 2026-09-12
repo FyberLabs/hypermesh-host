@@ -12,21 +12,21 @@ This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L
 
 **Do not build this on x86 and pretend it is a Jetson image.** The NGC CUDA tag is multi-arch; an x86 build is the wrong arch.
 
-**Do not keep or dual-pin a JP6 image for this box.** `ubuntu:22.04` / JetPack 6.2.3 / L4T 36.5.2 is not the AGX default. If a leftover JP6 image will not run here: **stop**.
+**Do not keep or dual-pin a JP6 image for this box.** `ubuntu:22.04` / `l4t-jetpack` / JetPack 6.2.3 / L4T 36.5.2 is not the AGX default (`l4t-jetpack` is gone in 7.x). If a leftover JP6 image will not run here: **stop**.
 
 ### FROM (documented JP7 path)
 
 NVIDIA does not publish `l4t-jetpack` for L4T r39 / JetPack 7.x (NGC catalog latest remains `r36.4.0`). The honest JP7 container path is NGC CUDA 13 SBSA / aarch64 on Ubuntu 24.04.
 
-Documented candidate (NVIDIA JP7 CUDA setup example):
+Research lock / NVIDIA Orin guide example (this recipe):
 
 ```text
 nvcr.io/nvidia/cuda:13.0.0-devel-ubuntu24.04
 ```
 
-That tag was **registry-listed** (linux/amd64 + linux/arm64) when this recipe was drafted. It is **not** an on-box pull. Treat the FROM as **unverified-until-AGX-build**. Do not invent a digest. Do not quote a Hub listing as `ghcr.io/fyberlabs/hypermesh-test` `repo@digest`.
+Host toolkit is CUDA 13.2. `nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04` is registry-listed. This recipe **keeps 13.0.0-devel** because that is the documented JP 7.2 example. CUDA in the image need not equal the host toolkit minor. **L4T major MUST match the host (r39).**
 
-Pin sha256 only after a good build **on this AGX**.
+That 13.0.0 tag was **registry-listed** (linux/amd64 + linux/arm64) when this recipe was drafted. It is **not** an on-box pull. Treat the FROM as **unverified-until-AGX-build**. Do not invent a digest. Do not quote a Hub listing as `ghcr.io/fyberlabs/hypermesh-test` `repo@digest`. Pin a digest in CI only after a good on-box build.
 
 ```bash
 # On AGX64-1, after first-boot overlay.
@@ -35,7 +35,8 @@ Pin sha256 only after a good build **on this AGX**.
 # and completions have nothing to hit.
 ls -l model.gguf
 
-sudo docker build --runtime=nvidia -t ghcr.io/fyberlabs/hypermesh-test .
+sudo docker build --runtime=nvidia --platform linux/arm64 \
+  -t ghcr.io/fyberlabs/hypermesh-test .
 
 # Pin the sha256 after a good on-box build. The host program will not invent
 # image_hash or a repo@digest.
