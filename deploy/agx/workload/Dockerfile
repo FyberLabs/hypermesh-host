@@ -46,17 +46,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # the AGX via --runtime=nvidia at build and at run (not x86 --gpus).
 ARG CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:/usr/local/lib:${LD_LIBRARY_PATH:-}"
 
 # AGX Orin is SM 8.7. Override LLAMA_CPP_REF if you need a different llama.cpp tag.
-ARG LLAMA_CPP_REF=b4690
+# Pin b4689: upstream has no b4690 (gap b4689 → b4692). AGX64-1 built this tag.
+ARG LLAMA_CPP_REF=b4689
 WORKDIR /src
+# llama.cpp b4689 defaults BUILD_SHARED_LIBS=ON. CMAKE_LIBRARY_OUTPUT_DIRECTORY
+# is build/bin (same dir as llama-server). install(TARGETS) for the runtime
+# .so set is: llama, ggml, ggml-base, plus ggml_add_backend_library backends
+# (ggml-cpu always; ggml-cuda when GGML_CUDA=ON). common is STATIC.
+# cmake --install of the whole tree also install()s every example RUNTIME
+# (llama-cli, …) — those were not built (--target llama-server only), so
+# a full cmake --install fails. Copy the shared libs cmake actually wrote.
+# AGX64-1 live image that only installed the binary then rm -rf /src had
+# empty /usr/local/lib and Exit 127:
+#   llama-server: error while loading shared libraries: libllama.so
+# ldd: libllama.so, libggml.so, libggml-base.so => not found.
+# Install list (b4689, GGML_CUDA=ON, GGML_BACKEND_DL=OFF):
+#   /usr/local/bin/llama-server
+#   /usr/local/lib/libllama.so
+#   /usr/local/lib/libggml.so
+#   /usr/local/lib/libggml-base.so
+#   /usr/local/lib/libggml-cpu.so
+#   /usr/local/lib/libggml-cuda.so
 RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov/llama.cpp.git \
     && cmake -S llama.cpp -B build \
         -DGGML_CUDA=ON \
         -DCMAKE_CUDA_ARCHITECTURES=87 \
     && cmake --build build -j"$(nproc)" --target llama-server \
     && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server \
+    && mkdir -p /usr/local/lib \
+    && cp -a build/bin/libllama.so* build/bin/libggml*.so* /usr/local/lib/ \
+    && ldconfig \
     && rm -rf /src
 
 # Weights stay on the host. Catalog id stays llama-3.1-8b-q4.
