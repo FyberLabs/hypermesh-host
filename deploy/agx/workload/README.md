@@ -8,7 +8,7 @@ Catalog id stays **`llama-3.1-8b-q4`**.
 
 ## Build this on AGX64-1
 
-This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L4T R39.2.1 / Ubuntu 24.04.5 / CUDA 13**, after the overlay, with `--runtime=nvidia`.
+This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L4T R39.2.1 / Ubuntu 24.04.5 / CUDA 13**, after the overlay. **Run** with `--runtime=nvidia` (not `--gpus`). Docker 29 Buildx does not accept `--runtime=nvidia` at **build**; the Dockerfile links CUDA devel stubs instead.
 
 **Do not build this on x86 and pretend it is a Jetson image.** The NGC CUDA tag is multi-arch; an x86 build is the wrong arch.
 
@@ -36,8 +36,9 @@ Plain `cuda:*-ubuntu24.04` does **not** ship Jetson cuDNN / TensorRT. llama.cpp 
 
 ```bash
 # On AGX64-1, after first-boot overlay.
-# Build does not need weights. Do not COPY model.gguf. Do not commit it.
-sudo docker build --runtime=nvidia --platform linux/arm64 \
+# Docker 29 Buildx rejects --runtime=nvidia on docker build. Link uses
+# CUDA devel stubs (see Dockerfile). Do not COPY model.gguf. Do not commit it.
+sudo docker build --platform linux/arm64 \
   -t ghcr.io/fyberlabs/hypermesh-test .
 
 # Pin the sha256 after a good on-box build. The host program will not invent
