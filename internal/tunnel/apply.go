@@ -18,6 +18,8 @@ import (
 const (
 	appliedFile  = "hypermesh.applied"
 	defaultIface = "hypermesh"
+	// persistentKeepaliveSec keeps NAT mappings warm on Path B cottage hosts.
+	persistentKeepaliveSec = 25
 )
 
 var (
@@ -105,8 +107,9 @@ func PeerFingerprint(s Session) string {
 // Apply writes the wg-quick config and brings the interface up.
 //
 // One host peer: wg-quick up runs only when endpoint, server_public_key,
-// peer_private_key, client_address, or allowed_ips change. A new tunnel_id
-// or lease_id on the same peer is a ticket and does not bounce the iface.
+// peer_private_key, client_address, or allowed_ips change, or the on-disk
+// conf is missing PersistentKeepalive. A new tunnel_id or lease_id on the
+// same peer is a ticket and does not bounce the iface.
 // The applied marker stores that fingerprint so a restart does not re-up
 // an identical peer. The key is never written to the marker.
 func (r *Runner) Apply(ctx context.Context, sess Session) error {
@@ -197,6 +200,10 @@ func (r *Runner) confMatchesPeer(s Session) bool {
 	if s.AllowedIPs != "" && !strings.Contains(text, "AllowedIPs = "+s.AllowedIPs) {
 		return false
 	}
+	// Old confs written before the NAT pin must not count as already applied.
+	if !strings.Contains(text, persistentKeepaliveLine()) {
+		return false
+	}
 	return true
 }
 
@@ -283,5 +290,11 @@ func wgQuickConfig(s Session) string {
 		b.WriteString(s.AllowedIPs)
 		b.WriteString("\n")
 	}
+	b.WriteString(persistentKeepaliveLine())
+	b.WriteString("\n")
 	return b.String()
+}
+
+func persistentKeepaliveLine() string {
+	return fmt.Sprintf("PersistentKeepalive = %d", persistentKeepaliveSec)
 }
