@@ -54,6 +54,9 @@ func TestApplyWritesConfigAndCallsUp(t *testing.T) {
 	if !strings.Contains(text, "PrivateKey = PEERPRIVATE") {
 		t.Fatalf("config contents incomplete")
 	}
+	if !strings.Contains(text, "PersistentKeepalive = 25") {
+		t.Fatalf("generated conf must pin PersistentKeepalive = 25")
+	}
 	if strings.Contains(text, "tun-1") || strings.Contains(text, "lease-1") {
 		t.Fatal("conf must not treat ticket ids as a new peer")
 	}
@@ -164,6 +167,74 @@ func TestApplyChangedEndpointReUps(t *testing.T) {
 	}
 	if len(ops) != 3 || ops[0] != "up" || ops[1] != "down" || ops[2] != "up" {
 		t.Fatalf("peer field change should down then up: %v", ops)
+	}
+}
+
+func TestWgQuickConfigIncludesPersistentKeepalive(t *testing.T) {
+	text := wgQuickConfig(allocated())
+	if !strings.Contains(text, "PersistentKeepalive = 25") {
+		t.Fatalf("missing PersistentKeepalive:\n%s", text)
+	}
+	if strings.Count(text, "[Peer]") != 1 {
+		t.Fatal("one peer per host")
+	}
+	if strings.Contains(text, "tun-1") || strings.Contains(text, "lease-1") {
+		t.Fatal("conf must not treat ticket ids as a new peer")
+	}
+}
+
+func TestConfMatchesPeerRequiresPersistentKeepalive(t *testing.T) {
+	dir := t.TempDir()
+	r := &Runner{ConfigDir: dir}
+	sess := allocated()
+	old := strings.ReplaceAll(wgQuickConfig(sess), "PersistentKeepalive = 25\n", "")
+	if strings.Contains(old, "PersistentKeepalive") {
+		t.Fatal("fixture must omit PersistentKeepalive")
+	}
+	if err := os.WriteFile(r.confPath(), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r.confMatchesPeer(sess) {
+		t.Fatal("conf without PersistentKeepalive must not match")
+	}
+	if err := os.WriteFile(r.confPath(), []byte(wgQuickConfig(sess)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !r.confMatchesPeer(sess) {
+		t.Fatal("generated conf must match")
+	}
+}
+
+func TestApplyRewritesConfMissingKeepalive(t *testing.T) {
+	dir := t.TempDir()
+	var ops []string
+	r := &Runner{
+		ConfigDir: dir,
+		Quick: func(_ context.Context, args ...string) error {
+			ops = append(ops, args[0])
+			return nil
+		},
+	}
+	sess := allocated()
+	old := strings.ReplaceAll(wgQuickConfig(sess), "PersistentKeepalive = 25\n", "")
+	if err := os.WriteFile(filepath.Join(dir, "hypermesh.conf"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, appliedFile), []byte(PeerFingerprint(sess)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Apply(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 2 || ops[0] != "down" || ops[1] != "up" {
+		t.Fatalf("missing keepalive must rewrite even when fingerprint matches: %v", ops)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "hypermesh.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "PersistentKeepalive = 25") {
+		t.Fatal("rewritten conf must include PersistentKeepalive = 25")
 	}
 }
 
