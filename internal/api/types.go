@@ -11,6 +11,7 @@ const (
 	PathJobResult         = Prefix + "/agent/jobs/%s/result"
 	PathTunnel            = Prefix + "/agent/tunnel"
 	PathTunnelAck         = Prefix + "/agent/tunnel/ack"
+	PathTunnelPeer        = Prefix + "/agent/tunnel/peer"
 	PathDeviceEnrollToken = Prefix + "/devices/%s/enroll-token"
 	HeaderTenantID        = "X-Tenant-ID"
 	HeaderAuthorization   = "Authorization"
@@ -120,18 +121,21 @@ const (
 	TunnelRevoked   TunnelStatus = "revoked"
 )
 
-// TunnelSession is GET /agent/tunnel.
-// PeerPrivateKey is present only while status=allocated, and only on this GET.
-// Never log it.
+// TunnelSession is GET /agent/tunnel. The host private key is never on this GET.
 type TunnelSession struct {
 	TunnelID        string       `json:"tunnel_id"`
 	LeaseID         string       `json:"lease_id"`
 	Status          TunnelStatus `json:"status"`
 	Endpoint        string       `json:"endpoint"`
 	ServerPublicKey string       `json:"server_public_key"`
-	PeerPrivateKey  string       `json:"peer_private_key,omitempty"`
+	PeerPublicKey   string       `json:"peer_public_key,omitempty"`
 	AllowedIPs      string       `json:"allowed_ips"`
 	ClientAddress   string       `json:"client_address"`
+}
+
+// TunnelPeerRequest is POST /agent/tunnel/peer. Public key only.
+type TunnelPeerRequest struct {
+	PeerPublicKey string `json:"peer_public_key"`
 }
 
 // TunnelAckRequest is POST /agent/tunnel/ack after wg-quick (or equivalent).

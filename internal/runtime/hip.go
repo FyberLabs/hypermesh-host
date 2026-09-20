@@ -63,7 +63,7 @@ func HIPStartArgs(spec Spec, ref string) []string {
 		"--device=" + kfdDevice,
 		"--device=" + driDevice,
 		"--group-add=video",
-		"-p", publishSpec(spec.HostPort),
+		"-p", publishSpec(spec.HostPort, spec.BindAddress),
 	}
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
 		args = append(args, "--name", name)

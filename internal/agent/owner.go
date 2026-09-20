@@ -274,7 +274,7 @@ func (a *Agent) lastBootRecord() pathb.Record {
 }
 
 func (a *Agent) completionsReachable(ctx context.Context) bool {
-	u := strings.TrimSpace(a.cfg.CompletionsEndpoint())
+	u := strings.TrimSpace(a.liveCompletionsURL())
 	if u == "" {
 		return false
 	}

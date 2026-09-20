@@ -32,6 +32,8 @@ type Agent struct {
 	state   State
 	lease   *runtime.Handle
 	applied string // fingerprint of the host peer we last acked (not tunnel_id)
+	bindIP  string // last tunnel client address, used to publish completions
+	keyDir  string // host WireGuard private key lives here only
 	now     func() time.Time
 	ownerMu sync.Mutex
 }
@@ -58,6 +60,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		hip:     runtime.NewHIP(),
 		metal:   runtime.NewMetal(),
 		tunnels: tunnel.NewRunner(),
+		keyDir:  "/etc/wireguard",
 		log:     log,
 	}, nil
 }
@@ -202,13 +205,22 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	}
 	switch sess.Status {
 	case api.TunnelAllocated:
+		priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
+		if err != nil {
+			return err
+		}
+		if err := a.client.ProposePeer(ctx, a.state.DeviceID, api.TunnelPeerRequest{PeerPublicKey: pub}); err != nil {
+			return err
+		}
+		a.bindIP = sess.ClientAddress
+		a.refreshCompletions()
 		ts := tunnel.Session{
 			TunnelID:        sess.TunnelID,
 			LeaseID:         sess.LeaseID,
 			Status:          string(sess.Status),
 			Endpoint:        sess.Endpoint,
 			ServerPublicKey: sess.ServerPublicKey,
-			PeerPrivateKey:  sess.PeerPrivateKey,
+			PeerPrivateKey:  priv,
 			AllowedIPs:      sess.AllowedIPs,
 			ClientAddress:   sess.ClientAddress,
 		}
@@ -236,6 +248,21 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	default:
 		return fmt.Errorf("hypermesh: unknown tunnel status %s", sess.Status)
 	}
+}
+
+func (a *Agent) liveCompletionsURL() string {
+	if u := strings.TrimSpace(a.cfg.CompletionsURL); u != "" {
+		return u
+	}
+	host := runtime.TunnelBindHost(a.bindIP)
+	if host == "" {
+		return a.cfg.CompletionsEndpoint()
+	}
+	return "http://" + host + ":" + a.cfg.PublishPort() + "/v1/chat/completions"
+}
+
+func (a *Agent) refreshCompletions() {
+	a.pathb.Endpoint = a.liveCompletionsURL()
 }
 
 func (a *Agent) pullAndRun(ctx context.Context) error {
@@ -307,6 +334,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		ImageDigest: job.ImageDigest,
 		Runtime:     job.Runtime,
 		HostPort:    a.cfg.PublishPort(),
+		BindAddress: a.bindIP,
 		GGUFPath:    a.cfg.GGUFHostPath(),
 		Backend:     job.Backend,
 	})

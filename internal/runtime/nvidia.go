@@ -50,8 +50,11 @@ type Spec struct {
 	CatalogID   string
 	ImageDigest string
 	Runtime     string
-	// HostPort is published as -p <HostPort>:8080. Empty uses DefaultListenPort.
+	// HostPort is published as -p <BindAddress>:<HostPort>:8080.
 	HostPort string
+	// BindAddress is the WireGuard client address (host or CIDR). Required
+	// so completions are not published on the LAN.
+	BindAddress string
 	// GGUFPath is the host file bind-mounted at ContainerGGUFPath (:ro).
 	// Empty uses DefaultGGUFPath. Do not invent a model or image_hash.
 	GGUFPath string
@@ -117,12 +120,26 @@ func PullArgs(ref string) []string {
 	return []string{"pull", ref}
 }
 
-func publishSpec(hostPort string) string {
+func TunnelBindHost(raw string) string {
+	addr := strings.TrimSpace(raw)
+	if addr == "" {
+		return ""
+	}
+	if host, _, ok := strings.Cut(addr, "/"); ok {
+		addr = host
+	}
+	return addr
+}
+
+func publishSpec(hostPort, bindAddress string) string {
 	p := strings.TrimSpace(hostPort)
 	if p == "" {
 		p = DefaultListenPort
 	}
-	return p + ":8080"
+	if bind := TunnelBindHost(bindAddress); bind != "" {
+		return bind + ":" + p + ":8080"
+	}
+	return "127.0.0.1:" + p + ":8080"
 }
 
 func ggufBind(host string) string {
@@ -134,13 +151,13 @@ func ggufBind(host string) string {
 }
 
 // StartArgs is the docker run argv for a resolved repo@digest.
-// Publishes container 8080 on the host so the WG client_address can reach
-// /v1/chat/completions. The process inside must listen on 0.0.0.0:8080.
+// Publishes container 8080 on the tunnel address only so the LAN cannot
+// reach completions. The process inside may listen on 0.0.0.0:8080.
 // Bind-mounts the host GGUF at /models/model.gguf:ro (not baked into the image).
 func StartArgs(spec Spec, ref string) []string {
 	args := []string{
 		"run", "-d", "--runtime=nvidia",
-		"-p", publishSpec(spec.HostPort),
+		"-p", publishSpec(spec.HostPort, spec.BindAddress),
 		"-v", ggufBind(spec.GGUFPath),
 	}
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {

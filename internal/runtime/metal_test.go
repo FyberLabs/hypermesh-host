@@ -9,7 +9,7 @@ import (
 func TestMetalStartArgsNoCUDA(t *testing.T) {
 	args := MetalStartArgs(Spec{LeaseID: "lease-m", HostPort: "8080"}, "llama-server")
 	joined := strings.Join(args, " ")
-	if args[0] != "llama-server" || !contains(args, "--host") || !contains(args, "0.0.0.0") {
+	if args[0] != "llama-server" || !contains(args, "--host") || !contains(args, "127.0.0.1") {
 		t.Fatalf("llama-server listen: %v", args)
 	}
 	if !contains(args, "--port") || !contains(args, "8080") {

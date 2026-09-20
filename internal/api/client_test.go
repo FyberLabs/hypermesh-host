@@ -357,7 +357,7 @@ func TestTunnelGetAck(t *testing.T) {
 			Status:          TunnelAllocated,
 			Endpoint:        "198.51.100.10:51820",
 			ServerPublicKey: "serverpub",
-			PeerPrivateKey:  "PEERPRIVATE",
+			PeerPublicKey:   "peerpub",
 			AllowedIPs:      "10.8.0.0/24",
 			ClientAddress:   "10.8.0.2/32",
 		})
@@ -371,7 +371,7 @@ func TestTunnelGetAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sess == nil || sess.Status != TunnelAllocated || sess.PeerPrivateKey == "" {
+	if sess == nil || sess.Status != TunnelAllocated || sess.PeerPublicKey == "" {
 		t.Fatalf("session %+v", sess)
 	}
 	if err := c.AckTunnel(context.Background(), testDevice, TunnelAckRequest{Applied: true}); err != nil {
@@ -379,6 +379,31 @@ func TestTunnelGetAck(t *testing.T) {
 	}
 	if !acked {
 		t.Fatal("ack not posted")
+	}
+}
+
+func TestProposePeer(t *testing.T) {
+	var got string
+	mux := http.NewServeMux()
+	mux.HandleFunc(PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		requireBearer(t, r)
+		if r.URL.Query().Get("device_id") != testDevice {
+			t.Errorf("peer query")
+		}
+		var body TunnelPeerRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got = body.PeerPublicKey
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
+	if err := c.ProposePeer(context.Background(), testDevice, TunnelPeerRequest{PeerPublicKey: "hostpub"}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "hostpub" {
+		t.Fatalf("posted %q", got)
 	}
 }
 
@@ -407,8 +432,8 @@ func TestTunnel204AndRevoked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sess.Status != TunnelRevoked || sess.PeerPrivateKey != "" {
-		t.Fatalf("revoked must omit private key: %+v", sess)
+	if sess.Status != TunnelRevoked {
+		t.Fatalf("revoked: %+v", sess)
 	}
 }
 
