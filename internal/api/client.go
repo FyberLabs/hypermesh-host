@@ -90,6 +90,12 @@ func (c *Client) GetTunnel(ctx context.Context, deviceID string) (*TunnelSession
 	return &out, nil
 }
 
+// ProposePeer posts the host WireGuard public key. The private key stays here.
+func (c *Client) ProposePeer(ctx context.Context, deviceID string, req TunnelPeerRequest) error {
+	q := url.Values{"device_id": {deviceID}}
+	return c.doJSON(ctx, http.MethodPost, PathTunnelPeer, q, req, http.StatusOK, nil, true)
+}
+
 // AckTunnel tells the control plane wg-quick (or equivalent) applied.
 func (c *Client) AckTunnel(ctx context.Context, deviceID string, req TunnelAckRequest) error {
 	q := url.Values{"device_id": {deviceID}}

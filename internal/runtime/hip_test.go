@@ -26,7 +26,7 @@ func TestHIPStartArgsNoNVIDIANoOverride(t *testing.T) {
 			t.Fatalf("must not invent gfx: %v", args)
 		}
 	}
-	if !contains(args, "8080:8080") || !contains(args, "hypermesh-lease-hip") {
+	if !contains(args, "127.0.0.1:8080:8080") || !contains(args, "hypermesh-lease-hip") {
 		t.Fatalf("publish/name: %v", args)
 	}
 	if args[len(args)-1] != testRef {

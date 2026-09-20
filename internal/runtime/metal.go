@@ -40,9 +40,13 @@ func MetalStartArgs(spec Spec, bin string) []string {
 	if port == "" {
 		port = DefaultListenPort
 	}
+	host := TunnelBindHost(spec.BindAddress)
+	if host == "" {
+		host = "127.0.0.1"
+	}
 	return []string{
 		bin,
-		"--host", "0.0.0.0",
+		"--host", host,
 		"--port", port,
 	}
 }

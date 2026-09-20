@@ -257,6 +257,7 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
+	acceptTunnelPeer(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testSecret {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -272,7 +273,6 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 				Status:          api.TunnelAllocated,
 				Endpoint:        "198.51.100.10:51820",
 				ServerPublicKey: "serverpub",
-				PeerPrivateKey:  "PEERPRIVATE",
 				AllowedIPs:      "10.8.0.0/24",
 				ClientAddress:   "10.8.0.2/32",
 			})
@@ -308,7 +308,7 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 	})
 
 	ft.mu.Lock()
-	if len(ft.applied) < 1 || ft.applied[0].PeerPrivateKey != "PEERPRIVATE" {
+	if len(ft.applied) < 1 || ft.applied[0].PeerPrivateKey == "" {
 		ft.mu.Unlock()
 		t.Fatalf("apply %+v", ft.applied)
 	}
@@ -336,7 +336,6 @@ func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
 			Status:          api.TunnelAllocated,
 			Endpoint:        "198.51.100.10:51820",
 			ServerPublicKey: "serverpub",
-			PeerPrivateKey:  "PEERPRIVATE",
 			AllowedIPs:      "10.8.0.0/24",
 			ClientAddress:   "10.8.0.2/32",
 		}
@@ -364,6 +363,7 @@ func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
+	acceptTunnelPeer(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testSecret {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -1698,7 +1698,14 @@ func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
 		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	a.pathb.Collector = a.telem
+	a.keyDir = t.TempDir()
 	return a
+}
+
+func acceptTunnelPeer(mux *http.ServeMux) {
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 func waitLoop(t *testing.T, a *Agent, ok func() bool) {

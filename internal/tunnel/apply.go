@@ -27,11 +27,11 @@ var (
 	ErrNoSession = errors.New("hypermesh tunnel: no session")
 	// ErrNotAllocated means the session is not status=allocated.
 	ErrNotAllocated = errors.New("hypermesh tunnel: session is not allocated")
-	// ErrMissingPrivateKey means allocated GET omitted peer_private_key.
+	// ErrMissingPrivateKey means Apply was given no host private key.
 	ErrMissingPrivateKey = errors.New("hypermesh tunnel: allocated session missing peer_private_key")
 )
 
-// Session is the locked GET /agent/tunnel body. Never log PeerPrivateKey.
+// Session is the allocated host peer. PeerPrivateKey is local, never from GET.
 // TunnelID and LeaseID are tickets on the host peer, not a new peer.
 type Session struct {
 	TunnelID        string
