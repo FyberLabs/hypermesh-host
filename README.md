@@ -152,7 +152,7 @@ Then: systemd unit + this program + Docker from get.docker.com + JetPack `nvidia
 
 AGX 64GB nvpmodel default is **30W (id 2)**. Report nvpmodel. Do not default MAXN + `jetson_clocks`.
 
-Details: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service). On-box workload image: [deploy/agx/workload/README.md](deploy/agx/workload/README.md) (`ghcr.io/fyberlabs/hypermesh-test`, built on the AGX, pin sha256 after build; GGUF is volume-mounted at run, not COPY’d).
+Details: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service). Witness sidecar (optional): [deploy/agx/aiuditor-witness.service](deploy/agx/aiuditor-witness.service). On-box workload image: [deploy/agx/workload/README.md](deploy/agx/workload/README.md) (`ghcr.io/fyberlabs/hypermesh-test`, built on the AGX, pin sha256 after build; GGUF is volume-mounted at run, not COPY’d).
 
 ### Path B — Seeed Super J4012 (first marketed NX class)
 
@@ -172,7 +172,7 @@ internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
-deploy/agx          systemd + first-boot + on-box workload (Path A, cottage now)
+deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit (Path A, cottage now)
 deploy/seeed-j4012  Path B prep (docs + overlay stubs; does not block AGX)
 deploy/rocm         AMD ROCm host-image notes (scaffold; not Path A/B)
 deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
@@ -180,4 +180,4 @@ deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 
 ## Out of scope here
 
-Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs. Owner console does not bind loopback/LAN/public TCP, does not enqueue CP jobs, does not add `sell_resume`, a drain mega-job, `reason_code`, `preempt_mode=hard`, Path B, SociACL, WebAuthn, OIDC, or privilege_grant.
+Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs. AIuditor witness is a sidecar (`deploy/agx/aiuditor-witness.service`), not this binary. Owner console does not bind loopback/LAN/public TCP, does not enqueue CP jobs, does not add `sell_resume`, a drain mega-job, `reason_code`, `preempt_mode=hard`, Path B, SociACL, WebAuthn, OIDC, or privilege_grant.

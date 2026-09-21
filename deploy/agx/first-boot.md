@@ -59,6 +59,7 @@ On the device, after the NVIDIA image boots:
 7. Copy `deploy/agx/agent.env.example` to `/etc/hypermesh/agent.env`, set tenant id and enroll token, `chmod 0600`.
 8. `sudo mkdir -p /var/lib/hypermesh && sudo chmod 0700 /var/lib/hypermesh`
 9. `sudo systemctl enable --now hypermesh-agent`
+10. Optional AIuditor witness sidecar (same image, `AIUDITOR_ROLE=witness`, loopback only). Copy [aiuditor-witness.env.example](aiuditor-witness.env.example) to `/etc/hypermesh/aiuditor-witness.env`, set parent token and tenant, `chmod 0600`. Install [aiuditor-witness.service](aiuditor-witness.service). Do not enable until those values exist. This process hydrates; it cannot fulfill. Not this Go agent. Not on hyperme.sh.
 
 ### Control plane
 
