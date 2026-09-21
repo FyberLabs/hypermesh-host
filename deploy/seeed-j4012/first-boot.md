@@ -2,7 +2,7 @@
 
 Seeed Super J4012 (Orin NX 16GB): Seeed’s Super image, then the same Hypermesh host as the AGX. Factory preinstall is later.
 
-Get the enroll token from [Get started](https://portal.test.hyperme.sh/dashboard/hypermesh/enroll). Shared steps: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Flash detail: [seeed-host-process.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Public page: https://hyperme.sh/hosts.
+Get the tenant id and enroll token from [host enroll](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll). Shared steps: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Flash detail: [seeed-host-process.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Public page: https://hyperme.sh/hosts.
 
 Use Seeed Super mfi, not `jetson-agx-orin-devkit` XML.
 
@@ -102,7 +102,7 @@ sudo cp deploy/seeed-j4012/hypermesh-agent.service /etc/systemd/system/
 sudo cp deploy/seeed-j4012/agent.env.example /etc/hypermesh/agent.env
 ```
 
-Set tenant id, enroll token from Get started, and `HYPERMESH_GGUF_PATH` to a regular file.
+Set tenant id, enroll token from host enroll, and `HYPERMESH_GGUF_PATH` to a regular file.
 
 ```bash
 sudo chmod 0600 /etc/hypermesh/agent.env
