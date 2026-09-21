@@ -51,14 +51,14 @@ sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test
 | Field | Who sets it | Invent? |
 |---|---|---|
 | job `image_digest` | control plane (`repo@digest`) | no — empty stays `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. |
-| result `image_hash` | this box (telem/host, or started handle `ImageDigest`) | no — Host will not invent `image_hash` / `repo@digest`. |
+| result `image_hash` | this box: Path B is telem/host; `lease_start` is sha256 of `HYPERMESH_GGUF_PATH` | no — do not echo the OCI pin. Do not invent a hash. |
 | Path B suite telem hash | this box (`HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, else hash of `/etc/nv_tegra_release` or `/etc/os-release`) | no — this is **not** the catalog `file_hash`. |
 
 `lease_start` still needs `repo@digest` from the control plane. Empty digest stays `passed=false`. Catalog id stays `llama-3.1-8b-q4`.
 
 ## GGUF is volume-mounted (not COPY)
 
-Do **not** `COPY model.gguf` into the image. On AGX64-1 the weights stay at **`/home/chris/hypermesh/workload/model.gguf`**. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` (`HYPERMESH_GGUF_PATH` overrides the host path). A forgotten mount fails honestly at container start. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
+Do **not** `COPY model.gguf` into the image. On AGX64-1 set **`HYPERMESH_GGUF_PATH=/home/chris/hypermesh/workload/model.gguf`**. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` after `stat` says it is a regular file. Empty, missing, or a directory POSTs `passed=false` so Docker cannot create a directory mount. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
 
 ```bash
 # Manual run (same mount the host program adds):

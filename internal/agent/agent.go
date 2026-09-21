@@ -34,8 +34,11 @@ type Agent struct {
 	applied string // fingerprint of the host peer we last acked (not tunnel_id)
 	bindIP  string // last tunnel client address, used to publish completions
 	keyDir  string // host WireGuard private key lives here only
-	now     func() time.Time
-	ownerMu sync.Mutex
+	now             func() time.Time
+	sleep           func(time.Duration)
+	resultTries     int
+	resultRetryWait time.Duration
+	ownerMu         sync.Mutex
 }
 
 // New builds an agent. log may be nil.
@@ -277,11 +280,38 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	a.log.Info("got job", "job_id", job.JobID, "kind", job.Kind, "suite_id", job.SuiteID, "lease_id", job.LeaseID, "backend", jobBackendLog(*job))
 
 	res := a.runJob(ctx, *job)
-	if err := a.client.PostResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
+	if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
 		return err
 	}
 	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))
 	return nil
+}
+
+func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api.JobResultRequest) error {
+	tries := a.resultTries
+	if tries <= 0 {
+		tries = defaultResultTries
+	}
+	wait := a.resultRetryWait
+	if wait <= 0 {
+		wait = defaultResultRetry
+	}
+	sleep := a.sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	var last error
+	for i := 0; i < tries; i++ {
+		last = a.client.PostResult(ctx, jobID, deviceID, body)
+		if last == nil {
+			return nil
+		}
+		if i+1 < tries {
+			a.log.Warn("job result post failed, retrying", "job_id", jobID, "attempt", i+1, "err", last)
+			sleep(wait)
+		}
+	}
+	return last
 }
 
 func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
@@ -324,8 +354,26 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lease_start refused", "reason", "sell paused", "sell_state", sell.SellState, "until", sell.Until)
 		return pathb.Result{Passed: false, Reason: "sell paused"}
 	}
-	if strings.TrimSpace(job.ImageDigest) == "" {
-		return pathb.Result{Passed: false, Reason: "no image_digest; no soak image"}
+	if _, err := runtime.ImageRef(job.ImageDigest); err != nil {
+		return pathb.Result{Passed: false, Reason: leaseStartFailReason(err)}
+	}
+	if runtime.TunnelBindHost(a.bindIP) == "" {
+		a.log.Info("lease_start refused", "reason", "no tunnel address", "lease_id", job.LeaseID)
+		return pathb.Result{Passed: false, Reason: "no tunnel address"}
+	}
+	if existing := a.localLease(); existing != nil && strings.TrimSpace(existing.LeaseID) != "" {
+		if strings.TrimSpace(existing.LeaseID) != strings.TrimSpace(job.LeaseID) {
+			a.log.Info("lease_start refused", "reason", "lease already running", "lease_id", job.LeaseID, "local_lease_id", existing.LeaseID)
+			return pathb.Result{Passed: false, Reason: "lease already running"}
+		}
+		return a.leaseStartAlready(existing)
+	}
+	gguf := a.cfg.GGUFHostPath()
+	hash, err := runtime.HashGGUFFile(gguf)
+	if err != nil {
+		reason := leaseStartFailReason(err)
+		a.log.Info("lease_start refused", "reason", reason, "lease_id", job.LeaseID)
+		return pathb.Result{Passed: false, Reason: reason}
 	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
@@ -335,7 +383,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		Runtime:     job.Runtime,
 		HostPort:    a.cfg.PublishPort(),
 		BindAddress: a.bindIP,
-		GGUFPath:    a.cfg.GGUFHostPath(),
+		GGUFPath:    gguf,
 		Backend:     job.Backend,
 	})
 	if err != nil {
@@ -343,8 +391,8 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lease_start failed", "reason", reason, "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: reason}
 	}
-	digest := strings.TrimSpace(h.ImageDigest)
-	if digest == "" {
+	h.FileHash = hash
+	if strings.TrimSpace(h.FileHash) == "" {
 		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: "no image_hash"}
 	}
@@ -353,7 +401,28 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Warn("lease record not saved", "err", err)
 	}
 	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.LogLabel(job.Backend), "runner", runnerLog(path))
-	return pathb.Result{Passed: true, ImageHash: digest, Reason: "lease_start"}
+	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}
+}
+
+// leaseStartAlready is a same-lease remint or PostResult retry. Do not
+// docker run a second container. Reuse the measured GGUF hash.
+func (a *Agent) leaseStartAlready(h *runtime.Handle) pathb.Result {
+	hash := strings.TrimSpace(h.FileHash)
+	if hash == "" {
+		var err error
+		hash, err = runtime.HashGGUFFile(a.cfg.GGUFHostPath())
+		if err != nil || hash == "" {
+			a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", h.LeaseID)
+			return pathb.Result{Passed: false, Reason: "no image_hash"}
+		}
+		h.FileHash = hash
+		a.lease = h
+		if err := a.saveLease(h); err != nil {
+			a.log.Warn("lease record not saved", "err", err)
+		}
+	}
+	a.log.Info("lease_start already running", "lease_id", h.LeaseID)
+	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}
 }
 
 // leaseStartFailReason keeps known sentinels exact. Docker pull/start
@@ -367,6 +436,10 @@ func leaseStartFailReason(err error) string {
 		return "image_digest is not repo@digest"
 	case errors.Is(err, runtime.ErrNoLeaseID):
 		return "lease_start requires lease_id"
+	case errors.Is(err, runtime.ErrNoGGUF):
+		return "no GGUF path"
+	case errors.Is(err, runtime.ErrGGUFNotFile):
+		return "GGUF is not a file"
 	default:
 		return "runtime start failed: " + err.Error()
 	}

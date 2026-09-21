@@ -36,8 +36,8 @@ var (
 // http://<client_address>:8080.
 const DefaultListenPort = "8080"
 
-// DefaultGGUFPath is the AGX64-1 host weights. Not baked into the image.
-// Override with Spec.GGUFPath / HYPERMESH_GGUF_PATH.
+// DefaultGGUFPath is the documented AGX64-1 example. The agent does not
+// use this as a silent default — HYPERMESH_GGUF_PATH must be a real file.
 const DefaultGGUFPath = "/home/chris/hypermesh/workload/model.gguf"
 
 // ContainerGGUFPath is where llama-server looks inside the container.
@@ -56,7 +56,7 @@ type Spec struct {
 	// so completions are not published on the LAN.
 	BindAddress string
 	// GGUFPath is the host file bind-mounted at ContainerGGUFPath (:ro).
-	// Empty uses DefaultGGUFPath. Do not invent a model or image_hash.
+	// Agent fail-closes if this is empty or not a regular file.
 	GGUFPath string
 	// Backend is the lease_start enum (optional). NVIDIA ignores it for argv.
 	Backend string
@@ -69,6 +69,9 @@ type Handle struct {
 	CatalogID   string
 	ImageDigest string
 	ContainerID string
+	// FileHash is sha256 of the mounted GGUF. lease_start POSTs this as
+	// image_hash. Distinct from ImageDigest (OCI repo@digest).
+	FileHash string `json:"file_hash,omitempty"`
 	// Backend is the path that started this handle (omitempty for old lease.json).
 	Backend string `json:"backend,omitempty"`
 }

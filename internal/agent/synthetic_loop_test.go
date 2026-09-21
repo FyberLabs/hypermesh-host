@@ -82,8 +82,10 @@ func TestSyntheticAgentLoop(t *testing.T) {
 			AcceptedAt: time.Now().UTC(),
 		})
 	})
+	acceptTunnelPeer(mux)
+	acceptTunnelAck(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, http.StatusOK, allocatedTunnel("lease-syn"))
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testSecret {
@@ -135,6 +137,7 @@ func TestSyntheticAgentLoop(t *testing.T) {
 
 	var logBuf strings.Builder
 	a := newTestAgent(t, srv.URL, dir, uptime, "one-time-token", "")
+	wantGGUF := readyLeaseStart(t, a)
 	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
 	a.tunnels = &fakeTunnel{}
 	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
@@ -186,8 +189,11 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	if !ok {
 		t.Fatal("missing lease_start result")
 	}
-	if !startRes.Body.Passed || startRes.Body.ImageHash != synthDigest {
-		t.Fatalf("lease_start must POST the job repo@digest: %+v", startRes.Body)
+	if !startRes.Body.Passed || startRes.Body.ImageHash != wantGGUF {
+		t.Fatalf("lease_start must POST the GGUF hash: %+v want %q", startRes.Body, wantGGUF)
+	}
+	if startRes.Body.ImageHash == synthDigest {
+		t.Fatal("must not echo the OCI pin as image_hash")
 	}
 
 	stopRes, ok := byID["syn-stop"]

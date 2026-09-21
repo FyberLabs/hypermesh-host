@@ -20,6 +20,7 @@ func TestLeaseStartLlamaCppCPUMetal(t *testing.T) {
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 	var metalCalls [][]string
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	wantHash := readyLeaseStart(t, a)
 	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("darwin llama-cpp-cpu must not use nvidia docker")
 		return nil, nil
@@ -38,8 +39,8 @@ func TestLeaseStartLlamaCppCPUMetal(t *testing.T) {
 		Runtime:     "nvidia",
 		Backend:     "llama-cpp-cpu",
 	})
-	if !got.Passed || got.Reason != "lease_start" || got.ImageHash != ref {
-		t.Fatalf("metal scaffold result %+v", got)
+	if !got.Passed || got.Reason != "lease_start" || got.ImageHash != wantHash {
+		t.Fatalf("metal scaffold result %+v want hash %q", got, wantHash)
 	}
 	if len(metalCalls) != 1 || metalCalls[0][0] != "llama-server" {
 		t.Fatalf("expected llama-server, calls=%v", metalCalls)
