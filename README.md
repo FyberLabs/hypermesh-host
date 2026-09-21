@@ -1,6 +1,6 @@
 # Hypermesh host
 
-Host software for certified Jetson boxes. First machine: NVIDIA Jetson AGX Orin 64GB. Product name is **Hypermesh** or **Hyperme.sh**. This repo is not the control plane and does not live in FyberLabs/panopticon.
+Host software for certified Jetson boxes. We enroll **NVIDIA AGX Orin 64GB** and **Seeed Super J4012**. Product name is **Hypermesh** or **Hyperme.sh**. This repo is not the control plane and does not live in FyberLabs/panopticon.
 
 This box enrolls, heartbeats, applies the allocated WireGuard session, and runs jobs against Panopticon `products/hypermesh` (path prefix `/api/v1/hypermesh`). It does not invent AIL, a subnet, Connect, public bot rental, or tokens/sec.
 
@@ -133,34 +133,37 @@ Revoked (host peer revoked) or 204 (no host session): `wg-quick down` and shred 
 
 The container is reachable at the WG `client_address` on port 8080. The router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
 
-## Install architecture
+## Enroll and update
 
-### Path A — AGX Orin (do now)
+Token from [Get started](https://portal.test.hyperme.sh/dashboard/hypermesh/enroll). Full steps for both boxes: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Public page: https://hyperme.sh/hosts.
 
-Module **P3701-0005**, board `jetson-agx-orin-devkit`. Overlay APP only.
+### NVIDIA AGX Orin 64GB
 
-This slice assumes **JetPack 7.2.1 / L4T R39.2.1** (Ubuntu 24.04.5 sample rootfs, kernel 6.8, CUDA 13). AGX64-1 stays on this pin.
+Module **P3701-0005**, board `jetson-agx-orin-devkit`. **JetPack 7.2.1 / L4T R39.2.1**. If the box is already there, skip the flash.
 
-- If the box is already 7.2.1 / R39.2.1: overlay only.
-- If not: flash `jetson-agx-orin-devkit` to 7.2.1 / 39.2.1, then overlay. Chris reviews.
-- Do not keep or dual-pin a JetPack 6.2.3 / L4T 36.5.2 image for this box.
-- If a leftover JP6 OCI image will not run: stop. Do not silently run both.
+Flash and install: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service). Workload: [deploy/agx/workload/README.md](deploy/agx/workload/README.md). Optional witness sidecar: [deploy/agx/aiuditor-witness.service](deploy/agx/aiuditor-witness.service).
 
-On the flash host: `l4t_create_default_user.sh`. On the device: `multi-user.target`. Do not purge `gdm3` or `nvidia-l4t-3d-core`. Do not overwrite `/etc/nv_boot_control.conf`.
+AGX 64GB nvpmodel default is **30W (id 2)**. GPU path is `--runtime=nvidia`.
 
-Then: systemd unit + this program + Docker from get.docker.com + JetPack `nvidia-container` + `nvidia-ctk runtime configure --runtime=docker` + Docker `default-runtime` nvidia + `wireguard-tools`. GPU path is `--runtime=nvidia`, never x86 `--gpus`.
+### Seeed Super J4012
 
-AGX 64GB nvpmodel default is **30W (id 2)**. Report nvpmodel. Do not default MAXN + `jetson_clocks`.
+Orin NX 16GB. Seeed Super mfi — **JP6.2 / 36.4.3** or **JP7.2.0 / 39.2.0**, pick one. Not the AGX 7.2.1 image.
 
-Details: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service). Witness sidecar (optional): [deploy/agx/aiuditor-witness.service](deploy/agx/aiuditor-witness.service). On-box workload image: [deploy/agx/workload/README.md](deploy/agx/workload/README.md) (`ghcr.io/fyberlabs/hypermesh-test`, built on the AGX, pin sha256 after build; GGUF is volume-mounted at run, not COPY’d).
+Flash and install: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). Super flash notes: [seeed-host-process.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012).
 
-### Seeed Super J4012 (first marketed NX class)
+nvpmodel is the NX Super table (`MAXN_SUPER`). Confirm ids on that image.
 
-Orin NX 16GB, Seeed Super J4012. Separate image, Seeed mfi massflash, NX Super nvpmodel (`MAXN_SUPER`). AGX flash XML and the AGX nvpmodel table stay on `deploy/agx/`.
+### Update
 
-Seeed pin is **one** of: mfi **JP6.2 / L4T 36.4.3** or **JP7.2.0 / L4T 39.2.0**. The AGX cottage pin is NVIDIA **7.2.1 / 39.2.1**.
+```bash
+cd hypermesh-host
+git pull
+go build -o hypermesh-agent ./cmd/agent
+sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
+sudo systemctl restart hypermesh-agent
+```
 
-Prep (docs + overlay stubs; factory massflash later): [deploy/seeed-j4012/README.md](deploy/seeed-j4012/README.md). Flash and host install: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). Product process page: [FyberLabs/hypermesh-docs `seeed-host-process.md`](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Buyer page: https://hyperme.sh/hosts. On-box workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012; target name `ghcr.io/fyberlabs/hypermesh-test`; Fyber publishes the digest later). Suite stays `thin-v1`. Host-certification `passed=true` needs a non-empty `image_hash`.
+Leave `/etc/hypermesh/agent.env` and `/var/lib/hypermesh/device.json` alone.
 
 ## Layout
 
@@ -172,9 +175,9 @@ internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
-deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit (cottage now)
-deploy/seeed-j4012  Super J4012 prep (docs + overlay stubs; factory later)
-deploy/rocm         AMD ROCm host-image notes (scaffold; not Path A/B)
+deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit
+deploy/seeed-j4012  Super J4012 first-boot and overlay
+deploy/rocm         AMD ROCm host-image notes (scaffold)
 deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 ```
 
