@@ -135,7 +135,7 @@ The container is reachable at the WG `client_address` on port 8080. The router i
 
 ## Enroll and update
 
-Token from [Get started](https://portal.test.hyperme.sh/dashboard/hypermesh/enroll). Full steps for both boxes: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Public page: https://hyperme.sh/hosts.
+Tenant id and token from [host enroll](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll). Full steps for both boxes: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Public page: https://hyperme.sh/hosts.
 
 ### NVIDIA AGX Orin 64GB
 

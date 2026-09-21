@@ -39,7 +39,7 @@ Classic (non-Super) J4012 cooling is a different design.
 
 ## After flash
 
-Install the host from [first-boot.md](first-boot.md): Docker, NVIDIA runtime, WireGuard, [hypermesh-agent.service](hypermesh-agent.service), [agent.env.example](agent.env.example). Set `HYPERMESH_GGUF_PATH` to a regular file. Enroll token comes from Get started.
+Install the host from [first-boot.md](first-boot.md): Docker, NVIDIA runtime, WireGuard, [hypermesh-agent.service](hypermesh-agent.service), [agent.env.example](agent.env.example). Set `HYPERMESH_GGUF_PATH` to a regular file. Tenant id and enroll token come from host enroll.
 
 On-box workload: [workload/README.md](workload/README.md). Build it on this J4012.
 
