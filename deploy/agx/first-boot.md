@@ -62,13 +62,13 @@ On the device, after the NVIDIA image boots:
 
 ### Control plane
 
-Set `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix is `/api/v1/hypermesh`. That is the deployed test Panopticon, not a localhost httptest. The URL may not be live yet; this repo still compiles and tests against `httptest`.
+Set `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix is `/api/v1/hypermesh`. That is the deployed test Panopticon, not a localhost httptest. Unit tests in this repo still compile against `httptest`.
 
 After enroll, this box persists the secret in `/var/lib/hypermesh/device.json` (0600). Do not put that secret in `agent.env`, the unit command line, or the journal.
 
 ### WireGuard
 
-Install `wireguard-tools`. One WireGuard peer per host, not per lease. When a session is allocated, this box applies the fields it is given (endpoint, keys, allowed_ips, client_address), writes a 0600 wg-quick config, `wg-quick up`, then acks. A later GET with a different `lease_id` / `tunnel_id` but the same peer fields is a ticket on that tunnel — no second `wg-quick up`. `wg-quick` down/up does not run on `lease_start` or `lease_stop`. Teardown only when GET is `revoked` (host peer revoked) or 204 (no host session). Planned router endpoint is `wg.test.hyperme.sh:51820`. There is no `listen_port` on the GET. Do not invent a lab peer. The peer private key is never logged and is shredded on teardown. A person on this box should never need to see that key. Chat stays on `client_address:8080`.
+Install `wireguard-tools`. One WireGuard peer per host, not per lease. This box generates the host private key locally and POSTs only the public key (`POST /agent/tunnel/peer`). GET `/agent/tunnel` never includes `peer_private_key`. When a session is allocated, this box applies GET `endpoint`, `server_public_key`, `allowed_ips`, and `client_address` plus that local private key, writes a 0600 wg-quick config, `wg-quick up`, then acks. A later GET with a different `lease_id` / `tunnel_id` but the same peer fields is a ticket on that tunnel — no second `wg-quick up`. `wg-quick` down/up does not run on `lease_start` or `lease_stop`. Teardown only when GET is `revoked` (host peer revoked) or 204 (no host session). Router endpoint is `wg.test.hyperme.sh:51820`. There is no `listen_port` on the GET. Do not invent a lab peer. The host private key is never logged, never sent to the plane, and is shredded on teardown. A person on this box should never need to see that key. Chat stays on `client_address:8080`.
 
 ### Workload
 

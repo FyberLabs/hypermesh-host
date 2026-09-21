@@ -8,7 +8,7 @@ This box enrolls, heartbeats, applies the allocated WireGuard session, and runs 
 
 HTTP matches the locked agent shapes (Bearer after enroll, tunnel get/ack, lease_start / lease_stop / sell_pause). H4 adds a **plane-down owner** unix socket on this box (not CP enqueue). Catalog id `llama-3.1-8b-q4` is in-tree and uncertified. Empty or bare `image_digest` on lease_start POSTs `passed=false` (not a running instance; CP must not go active).
 
-Default / example control plane: **`https://api.test.hyperme.sh`**. Not live yet. Tests compile against `httptest`.
+Default control plane: **`https://api.test.hyperme.sh`** (deployed test Panopticon). Unit tests compile against `httptest` and do not need that host.
 
 ## Build and test
 
@@ -48,6 +48,7 @@ After enroll, these routes send `Authorization: Bearer <device_secret>`, `X-Tena
 | Job pull | `GET /api/v1/hypermesh/agent/jobs?device_id=` |
 | Result | `POST /api/v1/hypermesh/agent/jobs/{job_id}/result?device_id=` |
 | Tunnel | `GET /api/v1/hypermesh/agent/tunnel?device_id=` |
+| Tunnel peer | `POST /api/v1/hypermesh/agent/tunnel/peer?device_id=` (host public key only) |
 | Tunnel ack | `POST /api/v1/hypermesh/agent/tunnel/ack?device_id=` |
 
 401 is missing/wrong secret. 403 is secret does not match `device_id`.
@@ -126,7 +127,7 @@ Control plane allocates on paid→starting. GET 200 is the current session or 20
 
 One WireGuard peer per **host**, not per lease. `lease_id` / `tunnel_id` on the GET are tickets on that same peer.
 
-Allocated: `peer_private_key` is only on that GET. This box writes a 0600 wg-quick config, `wg-quick up`, then POST ack `{"applied":true}`. Apply the fields it is given (Fyber router; planned `wg.test.hyperme.sh:51820`). `wg-quick up` runs only when `endpoint`, `server_public_key`, `peer_private_key`, `client_address`, or `allowed_ips` change. A restart that sees the same fingerprint does not bounce the iface. The key is never logged. Do not invent a lab peer.
+Allocated: this box generates the host WireGuard private key (`/etc/wireguard/hypermesh.key`, 0600) and POSTs only the public key to `/agent/tunnel/peer`. GET never carries `peer_private_key`. This box writes a 0600 wg-quick config from the local private key plus GET `endpoint`, `server_public_key`, `allowed_ips`, and `client_address`, `wg-quick up`, then POST ack `{"applied":true}`. Apply the fields it is given (Fyber router; `wg.test.hyperme.sh:51820`). `wg-quick up` runs only when those peer fields change. A restart that sees the same fingerprint does not bounce the iface. The private key is never logged and never sent to the plane. Do not invent a lab peer.
 
 Revoked (host peer revoked) or 204 (no host session): `wg-quick down` and shred `/etc/wireguard/hypermesh.conf` so the peer key does not stay on disk. Do not teardown because `lease_id` changed. `lease_start` / `lease_stop` do not `wg-quick` down/up.
 
