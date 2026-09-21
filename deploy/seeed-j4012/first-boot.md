@@ -1,23 +1,25 @@
-# Super J4012 first-boot (Path B prep)
+# Super J4012 first-boot
 
-Certification prep outline for Seeed Super J4012 (Orin NX 16GB). Seeed **mfi / massflash** only. This is not factory automation and does not wait on hardware.
+Seeed Super J4012 (Orin NX 16GB): Seeed’s Super image, then the same Hypermesh host as the AGX. Factory preinstall is later.
 
-**Does not block AGX cottage.** Do not change `deploy/agx/`. Do not flash this SKU with `jetson-agx-orin-devkit` XML.
+Get the enroll token from [Get started](https://portal.test.hyperme.sh/dashboard/hypermesh/enroll). Shared steps: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Flash detail: [seeed-host-process.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Public page: https://hyperme.sh/hosts.
 
-## Pin (one Seeed mfi)
+Use Seeed Super mfi, not `jetson-agx-orin-devkit` XML.
 
-Pick **one** Seeed Super J4012 pin and stay on it. Do not silently dual-pin.
+## Image
+
+Pick **one** Seeed Super J4012 package and stay on it.
 
 | Pin | L4T | `/etc/nv_tegra_release` |
 |---|---|---|
 | Seeed mfi JetPack **6.2** | **36.4.3** | R36 / REVISION 4.3 |
 | Seeed mfi JetPack **7.2.0** | **39.2.0** | R39 / REVISION 2.0 |
 
-**Not** NVIDIA / AGX Path A JetPack **7.2.1 / 39.2.1**.
+NVIDIA AGX uses JetPack **7.2.1 / 39.2.1** — a different module.
 
-If the box is later found on a pin that does not match the workload you built: **stop**.
+If the box and the workload later disagree, rebuild the workload on the flashed pin.
 
-Chris reviews the flash. Current Seeed Super J4012 / Orin NX 16GB packages:
+Current Seeed Super J4012 / Orin NX 16GB packages:
 
 - [Seeed Super getting started](https://wiki.seeedstudio.com/recomputer_jetson_super_getting_started/)
 - [Seeed flash-to-selected-product](https://wiki.seeedstudio.com/flash/jetpack_to_selected_product/)
@@ -29,7 +31,7 @@ mfi_recomputer-super-orin-nx-16g-j401-6.2-36.4.3-*.tar.gz
 mfi_recomputer-super-orin-nx-16g-7.2.0-39.2.0-*.tar.gz
 ```
 
-Verify the archive checksum Seeed publishes. Do not use classic (non-Super) J4012 mfi.
+Verify the archive checksum Seeed publishes. Classic (non-Super) J4012 packages are a different cooling design.
 
 ## Host (flash PC)
 
@@ -40,7 +42,7 @@ Physical Ubuntu host. Seeed’s matrix:
 | JP 6.x / 36.4.3 | 20.04 or 22.04 |
 | JP 7.2.0 / 39.2.0 | 20.04, 22.04, or 24.04 (24.04: flash + target components only) |
 
-Install Seeed’s flash dependencies on that host (abootimg, qemu-user-static, nfs-kernel-server, lz4, …). Do not use NVIDIA SDK Manager’s AGX Orin flow.
+Install Seeed’s flash dependencies on that host (abootimg, qemu-user-static, nfs-kernel-server, lz4, …). This is not NVIDIA SDK Manager’s AGX Orin flow.
 
 ## Recovery (Orin NX 16GB)
 
@@ -50,9 +52,9 @@ Seeed Super J4012: REC switch, power, USB Type-C data to the host. Confirm:
 lsusb
 ```
 
-Expect `0955:7323` (Orin NX 16GB). Other Super SKUs are different ids — this Path B box is 16GB only.
+Expect `0955:7323` (Orin NX 16GB). Other Super SKUs use different ids.
 
-Power for Orin NX Super is Seeed’s 19V / 4.74A 5525 barrel. Do not under-power MAXN_SUPER.
+Power for Orin NX Super is Seeed’s 19V / 4.74A 5525 barrel. MAXN_SUPER needs that supply.
 
 ## Massflash (Seeed mfi)
 
@@ -78,25 +80,42 @@ If the mfi image still starts the OEM wizard, finish it on the box (HDMI). Then 
 sudo systemctl set-default multi-user.target
 ```
 
-Do **not** purge `gdm3` or `nvidia-l4t-3d-core`. Do **not** overwrite `/etc/nv_boot_control.conf`.
+Leave `gdm3` and `nvidia-l4t-3d-core` installed. Leave `/etc/nv_boot_control.conf` as Seeed wrote it.
 
-## After first boot (overlay APP)
+## Install Hypermesh
 
-Same host program as Path A. On the J4012, after the Seeed image boots:
+Same host program as the AGX. On the J4012, after the Seeed image boots. Confirm `cat /etc/nv_tegra_release` matches the package you flashed. Go 1.22+.
 
-1. Confirm the pin (`cat /etc/nv_tegra_release`) matches the mfi you flashed.
-2. Install Docker from [get.docker.com](https://get.docker.com). Keep JetPack `nvidia-container` packages.
-3. `sudo nvidia-ctk runtime configure --runtime=docker` so `/etc/docker/daemon.json` has `"default-runtime": "nvidia"`. Workloads start as `docker --runtime=nvidia`. Not x86 `--gpus`.
-4. Install `wireguard-tools`.
-5. Install `hypermesh-agent` to `/usr/local/bin/hypermesh-agent`.
-6. Install [hypermesh-agent.service](hypermesh-agent.service) to `/etc/systemd/system/`.
-7. Copy [agent.env.example](agent.env.example) to `/etc/hypermesh/agent.env`, set tenant id and enroll token, `chmod 0600`.
-8. `sudo mkdir -p /var/lib/hypermesh && sudo chmod 0700 /var/lib/hypermesh`
-9. `sudo systemctl enable --now hypermesh-agent`
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+sudo apt-get update && sudo apt-get install -y wireguard-tools
 
-Control plane example: `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix `/api/v1/hypermesh`. Do not invent a public network or a lab WireGuard peer. After enroll, `device_secret` lives in `/var/lib/hypermesh/device.json` (0600).
+# From this repo, on the J4012:
+go build -o hypermesh-agent ./cmd/agent
+sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 
-Tunnel, lease, and owner-console behavior are the same agent as Path A. See the repo README. One WireGuard peer per host. Planned router endpoint is `wg.test.hyperme.sh:51820`. Chat stays on `client_address:8080`.
+sudo mkdir -p /etc/hypermesh /var/lib/hypermesh
+sudo chmod 0700 /var/lib/hypermesh
+sudo cp deploy/seeed-j4012/hypermesh-agent.service /etc/systemd/system/
+sudo cp deploy/seeed-j4012/agent.env.example /etc/hypermesh/agent.env
+```
+
+Set tenant id, enroll token from Get started, and `HYPERMESH_GGUF_PATH` to a regular file.
+
+```bash
+sudo chmod 0600 /etc/hypermesh/agent.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now hypermesh-agent
+sudo systemctl status hypermesh-agent
+```
+
+Control plane: `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix `/api/v1/hypermesh`. After enroll, the secret lives in `/var/lib/hypermesh/device.json` (0600).
+
+`lease_start` bind-mounts that GGUF at `/models/model.gguf:ro`. An empty path, a missing file, or a directory fails closed. Pin `catalog.image_digest` on the plane after the on-box workload build.
+
+Tunnel and lease behave the same as the AGX. One WireGuard peer per host. Router endpoint is `wg.test.hyperme.sh:51820`. Chat stays on `client_address:8080`.
 
 ## nvpmodel (do not share the AGX table)
 
@@ -109,20 +128,30 @@ grep -i "< POWER_MODEL" /etc/nvpmodel.conf
 
 Expect Super names **10W / 15W / 25W / 40W / MAXN_SUPER**. NVIDIA Super-mode docs use `nvpmodel -m 0` for MAXN SUPER on Orin NX — confirm the id on **this** image. AGX default 30W (id 2) is the wrong table.
 
-This box reports `nvpmodel -q`. Do not default a shared id from Path A. Do not quote TOPS as tokens/sec.
+This box reports `nvpmodel -q`. Confirm ids on this image. TOPS is not tokens/sec.
 
-## thin-v1 / Path B pass
+## thin-v1
 
-Suite is `thin-v1`. `path_b` collects image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, telem can still pass so enroll/green is not stuck before `lease_start`, and records that inference was skipped.
+Suite is `thin-v1`. `path_b` (code identifier) collects image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, telem can still pass so enroll/green is not stuck before `lease_start`, and records that inference was skipped.
 
-`passed=true` still needs a **non-empty `image_hash`** (telem/host, else the running lease `ImageDigest`). Empty telem + no lease → `passed=false`. Do not invent a hash.
+`passed=true` still needs a **non-empty `image_hash`** (telem/host, else the running lease `ImageDigest`). Empty telem + no lease → `passed=false`.
 
-Empty `image_digest` on `lease_start` POSTs `passed=false` (no soak image). That failure is **lease_start only** — it does not fail Path B telem.
+Empty `image_digest` on `lease_start` POSTs `passed=false` (no soak image). That failure is **lease_start only** — it does not fail host-certification telem.
 
 Result body stays `{passed, image_hash?}`. Do not quote tokens/sec.
 
 Build the on-box image after overlay: [workload/README.md](workload/README.md).
 
-## Factory (later)
+## Update
 
-A factory first-boot that preinstalls this agent, enrolls with a factory token, and leaves the box Path B ready is a **later** slice. This outline is cottage-style prep on a Seeed-flashed Super J4012.
+Leave `agent.env` and `device.json` alone.
+
+```bash
+cd hypermesh-host
+git pull
+go build -o hypermesh-agent ./cmd/agent
+sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
+sudo systemctl restart hypermesh-agent
+```
+
+Factory first-boot that preinstalls this agent is later.

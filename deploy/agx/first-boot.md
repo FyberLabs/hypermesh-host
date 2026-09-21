@@ -1,17 +1,14 @@
-# AGX Orin overlay (this slice)
+# AGX Orin first-boot
 
-First certified box: NVIDIA Jetson AGX Orin 64GB, module **P3701-0005**, board `jetson-agx-orin-devkit`. This is overlay APP only: NVIDIA sample rootfs plus our unit, this host program, and the container runtime. It is not a Seeed flash.
+NVIDIA Jetson AGX Orin 64GB, module **P3701-0005**, board `jetson-agx-orin-devkit`. NVIDIA image plus our unit, this host program, and the container runtime. Not a Seeed flash.
 
-## JetPack pin (locked)
+Get the enroll token from [Get started](https://portal.test.hyperme.sh/dashboard/hypermesh/enroll). Shared steps for both boxes: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Public page: https://hyperme.sh/hosts.
 
-This slice assumes **JetPack 7.2.1 / L4T R39.2.1** (Ubuntu 24.04.5 sample rootfs, kernel 6.8, CUDA 13). AGX64-1 stays on this pin.
+## Image
 
-- If the box is already 7.2.1 / R39.2.1: overlay only (steps below).
-- If not: flash `jetson-agx-orin-devkit` to 7.2.1 / 39.2.1, then overlay. Chris reviews the flash.
-- Do **not** keep or dual-pin a JetPack 6.2.3 / L4T 36.5.2 image for this box.
-- If someone later finds a leftover JP6 OCI image and it will not run: **stop**. Do not silently run both.
+**JetPack 7.2.1 / L4T R39.2.1** (Ubuntu 24.04.5 sample rootfs, kernel 6.8, CUDA 13). If the box is already there, skip the flash and install Hypermesh.
 
-Confirm what is actually flashed before you build or start a workload:
+Confirm before you build or start a workload:
 
 ```bash
 cat /etc/nv_tegra_release
@@ -21,7 +18,7 @@ Expect R39 / REVISION 2.1.
 
 ## Flash (only if the box is not already 7.2.1)
 
-Use NVIDIA SDK Manager or `Linux_for_Tegra` for `jetson-agx-orin-devkit`. Do not use Seeed Super J4012 / Orin NX flash XML on this module. Do not mix the Seeed nvpmodel table.
+Use NVIDIA SDK Manager or `Linux_for_Tegra` for `jetson-agx-orin-devkit`. Super J4012 uses Seeed’s image, not this XML.
 
 Headless, before flash, create the default user so the OEM wizard does not start:
 
@@ -35,35 +32,42 @@ After first boot, stay on the text console:
 sudo systemctl set-default multi-user.target
 ```
 
-Do **not** purge `gdm3` or `nvidia-l4t-3d-core`. That breaks the GPU stack this overlay still needs.
+Leave `gdm3` and `nvidia-l4t-3d-core` installed. Leave `/etc/nv_boot_control.conf` as NVIDIA wrote it.
 
-Do **not** overwrite `/etc/nv_boot_control.conf`. That file is board-specific.
+## Install Hypermesh
 
-## Overlay APP
+On the device, after the NVIDIA image boots. Go 1.22+. Workloads start as `docker --runtime=nvidia`.
 
-On the device, after the NVIDIA image boots:
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+sudo apt-get update && sudo apt-get install -y wireguard-tools
 
-1. Install Docker from [get.docker.com](https://get.docker.com), not a random distro GPU how-to.
-2. Keep JetPack’s `nvidia-container` packages.
-3. Point Docker at the NVIDIA runtime and make it the default:
+# From this repo, on the AGX:
+go build -o hypermesh-agent ./cmd/agent
+sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 
-   ```bash
-   sudo nvidia-ctk runtime configure --runtime=docker
-   ```
+sudo mkdir -p /etc/hypermesh /var/lib/hypermesh
+sudo chmod 0700 /var/lib/hypermesh
+sudo cp deploy/agx/hypermesh-agent.service /etc/systemd/system/
+sudo cp deploy/agx/agent.env.example /etc/hypermesh/agent.env
+```
 
-   `/etc/docker/daemon.json` should use `"default-runtime": "nvidia"` and must not treat x86 `--gpus` as the Jetson GPU path. Workloads start as `docker --runtime=nvidia`.
+Set tenant id, enroll token, and `HYPERMESH_GGUF_PATH` to a regular file. `chmod 0600` the env file.
 
-4. Install `wireguard-tools` so this box can `wg-quick` an allocated session.
-5. Install `hypermesh-agent` to `/usr/local/bin/hypermesh-agent`.
-6. Install `deploy/agx/hypermesh-agent.service` to `/etc/systemd/system/`.
-7. Copy `deploy/agx/agent.env.example` to `/etc/hypermesh/agent.env`, set tenant id and enroll token, `chmod 0600`.
-8. `sudo mkdir -p /var/lib/hypermesh && sudo chmod 0700 /var/lib/hypermesh`
-9. `sudo systemctl enable --now hypermesh-agent`
-10. Optional AIuditor witness sidecar (same image, `AIUDITOR_ROLE=witness`, loopback only). Copy [aiuditor-witness.env.example](aiuditor-witness.env.example) to `/etc/hypermesh/aiuditor-witness.env`, set parent token and tenant, `chmod 0600`. Install [aiuditor-witness.service](aiuditor-witness.service). Do not enable until those values exist. This process hydrates; it cannot fulfill. Not this Go agent. Not on hyperme.sh.
+```bash
+sudo chmod 0600 /etc/hypermesh/agent.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now hypermesh-agent
+sudo systemctl status hypermesh-agent
+```
+
+Optional AIuditor witness sidecar (loopback only, hydrate, cannot fulfill): [aiuditor-witness.service](aiuditor-witness.service). Enable it only after parent token and tenant exist. Not this Go agent.
 
 ### Control plane
 
-Set `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix is `/api/v1/hypermesh`. That is the deployed test Panopticon, not a localhost httptest. Unit tests in this repo still compile against `httptest`.
+Set `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix is `/api/v1/hypermesh`.
 
 After enroll, this box persists the secret in `/var/lib/hypermesh/device.json` (0600). Do not put that secret in `agent.env`, the unit command line, or the journal.
 
@@ -99,4 +103,16 @@ AGX Orin 64GB nvpmodel default is **30W (id 2)**. This box reports `nvpmodel -q`
 
 ## Catalog
 
-In-tree P2 id: `llama-3.1-8b-q4`. Uncertified until a soak hash exists. Do not quote tokens/sec.
+In-tree P2 id: `llama-3.1-8b-q4`. Uncertified until a soak hash exists.
+
+## Update
+
+Leave `agent.env` and `device.json` alone.
+
+```bash
+cd hypermesh-host
+git pull
+go build -o hypermesh-agent ./cmd/agent
+sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
+sudo systemctl restart hypermesh-agent
+```
