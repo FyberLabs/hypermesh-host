@@ -20,6 +20,7 @@ func TestLeaseStartHIPROCmScaffold(t *testing.T) {
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 	var hipCalls [][]string
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	wantHash := readyLeaseStart(t, a)
 	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
 		t.Fatal("hip-rocm must not use nvidia docker")
 		return nil, nil
@@ -38,8 +39,8 @@ func TestLeaseStartHIPROCmScaffold(t *testing.T) {
 		Runtime:     "nvidia",
 		Backend:     "hip-rocm",
 	})
-	if !got.Passed || got.Reason != "lease_start" || got.ImageHash != ref {
-		t.Fatalf("hip-rocm scaffold result %+v", got)
+	if !got.Passed || got.Reason != "lease_start" || got.ImageHash != wantHash {
+		t.Fatalf("hip-rocm scaffold result %+v want hash %q", got, wantHash)
 	}
 	if len(hipCalls) != 1 || hipCalls[0][0] != "run" {
 		t.Fatalf("expected hip docker run, calls=%v", hipCalls)

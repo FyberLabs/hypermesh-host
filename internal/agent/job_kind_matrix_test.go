@@ -162,11 +162,118 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 				LeaseID: "lease-ok", CatalogID: "llama-3.1-8b-q4",
 				ImageDigest: matrixDigest, Runtime: "nvidia",
 			},
+			setup: func(t *testing.T, a *Agent) {
+				t.Helper()
+				readyLeaseStart(t, a)
+			},
 			wantPass:    true,
 			wantReason:  "lease_start",
-			wantHash:    matrixDigest,
 			requireHash: true,
 			dockerFirst: []string{"pull", "run"},
+		},
+		{
+			name: "lease_start/no_tunnel",
+			kind: api.KindLeaseStart,
+			job: api.Job{
+				JobID: "m-start-notun", Kind: api.KindLeaseStart, DeviceID: testDevice,
+				LeaseID: "lease-notun", CatalogID: "llama-3.1-8b-q4",
+				ImageDigest: matrixDigest, Runtime: "nvidia",
+			},
+			setup: func(t *testing.T, a *Agent) {
+				t.Helper()
+				path, _ := writeTestGGUF(t, a.cfg.StateDir)
+				a.cfg.GGUFPath = path
+				a.bindIP = ""
+			},
+			wantPass:   false,
+			wantReason: "no tunnel address",
+			forbidHash: true,
+			noDocker:   true,
+		},
+		{
+			name: "lease_start/no_gguf",
+			kind: api.KindLeaseStart,
+			job: api.Job{
+				JobID: "m-start-nogguf", Kind: api.KindLeaseStart, DeviceID: testDevice,
+				LeaseID: "lease-nogguf", CatalogID: "llama-3.1-8b-q4",
+				ImageDigest: matrixDigest, Runtime: "nvidia",
+			},
+			setup: func(t *testing.T, a *Agent) {
+				t.Helper()
+				a.bindIP = "10.77.0.2/32"
+				a.cfg.GGUFPath = ""
+			},
+			wantPass:   false,
+			wantReason: "no GGUF path",
+			forbidHash: true,
+			noDocker:   true,
+		},
+		{
+			name: "lease_start/gguf_directory",
+			kind: api.KindLeaseStart,
+			job: api.Job{
+				JobID: "m-start-ggufdir", Kind: api.KindLeaseStart, DeviceID: testDevice,
+				LeaseID: "lease-ggufdir", CatalogID: "llama-3.1-8b-q4",
+				ImageDigest: matrixDigest, Runtime: "nvidia",
+			},
+			setup: func(t *testing.T, a *Agent) {
+				t.Helper()
+				a.bindIP = "10.77.0.2/32"
+				a.cfg.GGUFPath = a.cfg.StateDir
+			},
+			wantPass:   false,
+			wantReason: "GGUF is not a file",
+			forbidHash: true,
+			noDocker:   true,
+		},
+		{
+			name: "lease_start/already_running_other",
+			kind: api.KindLeaseStart,
+			job: api.Job{
+				JobID: "m-start-dual", Kind: api.KindLeaseStart, DeviceID: testDevice,
+				LeaseID: "lease-new", CatalogID: "llama-3.1-8b-q4",
+				ImageDigest: matrixDigest, Runtime: "nvidia",
+			},
+			setup: func(t *testing.T, a *Agent) {
+				t.Helper()
+				readyLeaseStart(t, a)
+				a.lease = &runtime.Handle{
+					Name:        "hypermesh-lease-running",
+					LeaseID:     "lease-running",
+					ImageDigest: matrixDigest,
+					FileHash:    "sha256:already",
+					ContainerID: "cid-local",
+				}
+			},
+			wantPass:   false,
+			wantReason: "lease already running",
+			forbidHash: true,
+			noDocker:   true,
+		},
+		{
+			name: "lease_start/same_lease_remint",
+			kind: api.KindLeaseStart,
+			job: api.Job{
+				JobID: "m-start-remint", Kind: api.KindLeaseStart, DeviceID: testDevice,
+				LeaseID: "lease-running", CatalogID: "llama-3.1-8b-q4",
+				ImageDigest: matrixDigest, Runtime: "nvidia",
+			},
+			setup: func(t *testing.T, a *Agent) {
+				t.Helper()
+				readyLeaseStart(t, a)
+				a.lease = &runtime.Handle{
+					Name:        "hypermesh-lease-running",
+					LeaseID:     "lease-running",
+					ImageDigest: matrixDigest,
+					FileHash:    "sha256:already",
+					ContainerID: "cid-local",
+				}
+			},
+			wantPass:    true,
+			wantReason:  "lease_start",
+			wantHash:    "sha256:already",
+			requireHash: true,
+			noDocker:    true,
 		},
 		{
 			name: "lease_start/sell_pause_blocks",
@@ -302,6 +409,9 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			}
 			if tc.wantHash != "" && got.ImageHash != tc.wantHash {
 				t.Fatalf("image_hash %q want %q", got.ImageHash, tc.wantHash)
+			}
+			if tc.kind == api.KindLeaseStart && got.Passed && got.ImageHash == tc.job.ImageDigest {
+				t.Fatalf("must not echo OCI pin as image_hash: %q", got.ImageHash)
 			}
 			if tc.forbidHash && got.ImageHash != "" {
 				t.Fatalf("must not invent image_hash: %+v", got)

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -546,8 +548,10 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
 	})
+	acceptTunnelPeer(mux)
+	acceptTunnelAck(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, http.StatusOK, allocatedTunnel("lease-2"))
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -584,6 +588,7 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	uptime := filepath.Join(dir, "uptime")
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	wantHash := readyLeaseStart(t, a)
 	a.tunnels = &fakeTunnel{}
 	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, a ...string) ([]byte, error) {
 		mu.Lock()
@@ -604,17 +609,17 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	if !strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "--gpus") {
 		t.Fatalf("docker args %v", calls[1])
 	}
-	if !strings.Contains(joined, "-p") || !strings.Contains(joined, "8080:8080") {
+	if !strings.Contains(joined, "-p") || !strings.Contains(joined, "10.77.0.2:8080:8080") {
 		t.Fatalf("port publish %v", calls[1])
 	}
-	if !strings.Contains(joined, "-v") || !strings.Contains(joined, runtime.DefaultGGUFPath+":"+runtime.ContainerGGUFPath+":ro") {
+	if !strings.Contains(joined, "-v") || !strings.Contains(joined, a.cfg.GGUFHostPath()+":"+runtime.ContainerGGUFPath+":ro") {
 		t.Fatalf("GGUF bind-mount %v", calls[1])
 	}
 	if !strings.Contains(joined, "hypermesh-lease-2") || !strings.Contains(joined, ref) {
 		t.Fatalf("name/ref %v", calls[1])
 	}
-	if postedHash != ref {
-		t.Fatalf("lease_start result image_hash %q want repo@digest %q", postedHash, ref)
+	if postedHash != wantHash {
+		t.Fatalf("lease_start result image_hash %q want GGUF %q", postedHash, wantHash)
 	}
 }
 
@@ -655,6 +660,9 @@ func TestLeaseStartBackends(t *testing.T) {
 			_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 			var dockerCalls [][]string
 			a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+			if tc.wantPass {
+				_ = readyLeaseStart(t, a)
+			}
 			a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 				dockerCalls = append(dockerCalls, append([]string{}, args...))
 				return []byte("cid\n"), nil
@@ -947,6 +955,7 @@ func TestLeaseStopThenStartFreesExitedName(t *testing.T) {
 	}
 	ft := &fakeTunnel{}
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	ggufHash := readyLeaseStart(t, a)
 	a.tunnels = ft
 	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		dockerCalls = append(dockerCalls, append([]string{}, args...))
@@ -1002,7 +1011,7 @@ func TestLeaseStopThenStartFreesExitedName(t *testing.T) {
 	if !stop.Passed {
 		t.Fatalf("lease_stop %+v", stop)
 	}
-	if stop.ImageHash != digest && stop.ImageHash != "sha256:fixture" {
+	if stop.ImageHash != digest && stop.ImageHash != "sha256:fixture" && stop.ImageHash != ggufHash {
 		t.Fatalf("lease_stop must not invent a hash: %q", stop.ImageHash)
 	}
 	if _, ok := present[name]; ok {
@@ -1085,6 +1094,7 @@ func TestLeaseStartDockerErrorAppearsInReason(t *testing.T) {
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 	var logBuf strings.Builder
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	_ = readyLeaseStart(t, a)
 	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
 	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if len(args) > 0 && args[0] == "run" {
@@ -1139,6 +1149,7 @@ func TestLeaseStartLocalImageAfterPullUnauthorized(t *testing.T) {
 	uptime := filepath.Join(dir, "uptime")
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	wantHash := readyLeaseStart(t, a)
 	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		switch {
 		case len(args) > 0 && args[0] == "pull":
@@ -1164,8 +1175,8 @@ func TestLeaseStartLocalImageAfterPullUnauthorized(t *testing.T) {
 	if !got.Passed || got.Reason != "lease_start" {
 		t.Fatalf("local pin must not fail Start: %+v", got)
 	}
-	if got.ImageHash != ref {
-		t.Fatalf("must echo job pin, not invent a digest: %+v", got)
+	if got.ImageHash != wantHash {
+		t.Fatalf("must POST GGUF hash, not OCI pin: %+v", got)
 	}
 }
 
@@ -1331,7 +1342,7 @@ func TestHeartbeatOmitsLoadedModelHashWithoutLease(t *testing.T) {
 	}
 }
 
-func TestLeaseStartResultImageHashIsRepoDigest(t *testing.T) {
+func TestLeaseStartResultImageHashIsGGUF(t *testing.T) {
 	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
@@ -1339,6 +1350,7 @@ func TestLeaseStartResultImageHashIsRepoDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	wantHash := readyLeaseStart(t, a)
 	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("cid\n"), nil
 	}}
@@ -1351,11 +1363,14 @@ func TestLeaseStartResultImageHashIsRepoDigest(t *testing.T) {
 		ImageDigest: ref,
 		Runtime:     "nvidia",
 	})
-	if !got.Passed || got.ImageHash != ref {
-		t.Fatalf("lease_start must POST handle ImageDigest as image_hash: %+v", got)
+	if !got.Passed || got.ImageHash != wantHash {
+		t.Fatalf("lease_start must POST GGUF sha256 as image_hash: %+v", got)
+	}
+	if got.ImageHash == ref {
+		t.Fatal("must not echo the OCI pin as image_hash")
 	}
 	body := jobResultBody(api.KindLeaseStart, got)
-	if body.ImageHash != ref || !body.Passed {
+	if body.ImageHash != wantHash || !body.Passed {
 		t.Fatalf("result body %+v", body)
 	}
 }
@@ -1621,8 +1636,8 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	if cfg.CompletionsEndpoint() != "http://127.0.0.1:8080/v1/chat/completions" {
 		t.Fatalf("default completions %q", cfg.CompletionsEndpoint())
 	}
-	if cfg.GGUFHostPath() != "/home/chris/hypermesh/workload/model.gguf" {
-		t.Fatalf("default GGUF path %q", cfg.GGUFHostPath())
+	if cfg.GGUFHostPath() != "" {
+		t.Fatalf("unset GGUF path must be empty, got %q", cfg.GGUFHostPath())
 	}
 }
 
@@ -1668,6 +1683,43 @@ func TestDeviceIDWithoutSecretErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "enroll-token") {
 		t.Fatalf("got %v", err)
 	}
+}
+
+func writeTestGGUF(t *testing.T, dir string) (path, hash string) {
+	t.Helper()
+	path = filepath.Join(dir, "model.gguf")
+	body := []byte("fixture-gguf-weights")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	return path, "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func readyLeaseStart(t *testing.T, a *Agent) string {
+	t.Helper()
+	path, hash := writeTestGGUF(t, a.cfg.StateDir)
+	a.cfg.GGUFPath = path
+	a.bindIP = "10.77.0.2/32"
+	return hash
+}
+
+func allocatedTunnel(leaseID string) api.TunnelSession {
+	return api.TunnelSession{
+		TunnelID:        "tun-live",
+		LeaseID:         leaseID,
+		Status:          api.TunnelAllocated,
+		Endpoint:        "wg.test.hyperme.sh:51820",
+		ServerPublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		AllowedIPs:      "10.77.0.0/24",
+		ClientAddress:   "10.77.0.2/32",
+	}
+}
+
+func acceptTunnelAck(mux *http.ServeMux) {
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
