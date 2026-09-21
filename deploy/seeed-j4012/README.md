@@ -1,16 +1,14 @@
-# Seeed Super J4012 (Path B — certification prep)
+# Seeed Super J4012 (certification prep)
 
 First marketed **NX class** for Hypermesh / Hyperme.sh. Module class: **Jetson Orin NX 16GB**. Carrier: Seeed Super J401 / reComputer Super J4012.
 
-This directory is **docs + overlay stubs**. It is not factory automation and does not wait on J4012 hardware.
+This directory is **docs + overlay stubs**. Factory massflash that preinstalls the agent is later. Product process: [FyberLabs/hypermesh-docs `seeed-host-process.md`](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Buyer page: https://hyperme.sh/hosts.
 
-## Does not block AGX cottage
-
-Path A (AGX Orin 64GB, P3701-0005, `deploy/agx/`) stays the certified-now cottage path. Nothing here changes AGX flash XML, the AGX JetPack pin, or the AGX nvpmodel table. Do not hold cottage for this SKU. Product reviews this slice; Chris merges.
+AGX Orin 64GB (P3701-0005, `deploy/agx/`) stays the cottage path that can lease now. This directory does not change AGX flash XML, the AGX JetPack pin, or the AGX nvpmodel table. Product reviews this slice; Chris merges.
 
 ## What differs
 
-| | AGX Orin 64GB (Path A, cottage now) | Super J4012 (Path B, this directory) |
+| | AGX Orin 64GB (`deploy/agx`, cottage now) | Super J4012 (this directory) |
 |---|---|---|
 | Module class | P3701-0005 | Orin NX 16GB |
 | Board | `jetson-agx-orin-devkit` | Seeed Super J4012 / J401 |
@@ -34,7 +32,7 @@ Seeed publishes two Super J4012 mfi pins. Choose **one** for the box and the on-
 
 **Not** these pins:
 
-- NVIDIA / AGX Path A JetPack **7.2.1 / L4T 39.2.1** (cottage; different module — not the Seeed mfi pin)
+- NVIDIA / AGX cottage JetPack **7.2.1 / L4T 39.2.1** (different module — not the Seeed mfi pin)
 
 If this box is later found on a pin that does not match the image you built: **stop**. Do not silently run a JP6 OCI image on a JP7.2.0 box, or a JP7 image on 36.4.3. Do not silently dual-pin with AGX 7.2.1 / 39.2.1.
 
@@ -71,21 +69,21 @@ Suite stays **`thin-v1`**. Empty or unknown `suite_id` is thin-v1.
 | Field | Where | Rule |
 |---|---|---|
 | `image_digest` | job (`lease_start`) | Must be `repo@digest`. Empty digest → `passed=false` on **lease_start only** (no soak image; not a running instance). Bare `sha256:hex` fails. |
-| `image_hash` | job result | Path B `passed=true` needs a **non-empty** `image_hash` (telem/host, else running lease `ImageDigest`). Do not invent. Empty hash fails that job only. |
+| `image_hash` | job result | Host-certification `passed=true` needs a **non-empty** `image_hash` (telem/host, else running lease `ImageDigest`). Empty hash fails that job only. |
 | `loaded_model_hash` | heartbeat | Running lease `repo@digest` when a handle exists; omitempty otherwise. |
 
 Do not invent hashes. Catalog id stays `llama-3.1-8b-q4` until a soak hash exists.
 
 Workload build notes (on the J4012, Fyber-published digest later): [workload/README.md](workload/README.md).
 
-## Overlay stubs (thin)
+## Overlay stubs
 
-Same host program as Path A. After a Seeed image boots, install the overlay the same way cottage does — this directory only mirrors the unit layout:
+Same host program as the AGX. After a Seeed image boots, install the overlay the same way cottage does:
 
 - [hypermesh-agent.service](hypermesh-agent.service)
 - [agent.env.example](agent.env.example)
 
-Control plane example stays `https://api.test.hyperme.sh` (path prefix `/api/v1/hypermesh`). Do not invent a public network.
+Set `HYPERMESH_GGUF_PATH` to a regular file. Control plane example stays `https://api.test.hyperme.sh` (path prefix `/api/v1/hypermesh`). Enroll token comes from the portal get-started flow.
 
 ## Out of scope here
 

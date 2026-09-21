@@ -154,13 +154,13 @@ AGX 64GB nvpmodel default is **30W (id 2)**. Report nvpmodel. Do not default MAX
 
 Details: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service). Witness sidecar (optional): [deploy/agx/aiuditor-witness.service](deploy/agx/aiuditor-witness.service). On-box workload image: [deploy/agx/workload/README.md](deploy/agx/workload/README.md) (`ghcr.io/fyberlabs/hypermesh-test`, built on the AGX, pin sha256 after build; GGUF is volume-mounted at run, not COPY’d).
 
-### Path B — Seeed Super J4012 (first marketed NX class)
+### Seeed Super J4012 (first marketed NX class)
 
-Orin NX 16GB, Seeed Super J4012. **Does not block AGX cottage.** Separate image, Seeed mfi massflash, NX Super nvpmodel (`MAXN_SUPER`). Do not mix AGX flash XML or the AGX nvpmodel table.
+Orin NX 16GB, Seeed Super J4012. Separate image, Seeed mfi massflash, NX Super nvpmodel (`MAXN_SUPER`). AGX flash XML and the AGX nvpmodel table stay on `deploy/agx/`.
 
-Seeed pin is **one** of: mfi **JP6.2 / L4T 36.4.3** or **JP7.2.0 / L4T 39.2.0**. Not NVIDIA / AGX Path A **7.2.1 / 39.2.1**. Do not silently dual-pin.
+Seeed pin is **one** of: mfi **JP6.2 / L4T 36.4.3** or **JP7.2.0 / L4T 39.2.0**. The AGX cottage pin is NVIDIA **7.2.1 / 39.2.1**.
 
-Prep path (docs + overlay stubs, not factory automation): [deploy/seeed-j4012/README.md](deploy/seeed-j4012/README.md). Flash outline: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). On-box workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012; target name `ghcr.io/fyberlabs/hypermesh-test`; Fyber publishes the digest later; do not GHCR pull; empty `image_digest` fails `lease_start` only). Suite stays `thin-v1`. Path B `passed=true` needs a non-empty `image_hash`.
+Prep (docs + overlay stubs; factory massflash later): [deploy/seeed-j4012/README.md](deploy/seeed-j4012/README.md). Flash and host install: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). Product process page: [FyberLabs/hypermesh-docs `seeed-host-process.md`](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Buyer page: https://hyperme.sh/hosts. On-box workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012; target name `ghcr.io/fyberlabs/hypermesh-test`; Fyber publishes the digest later). Suite stays `thin-v1`. Host-certification `passed=true` needs a non-empty `image_hash`.
 
 ## Layout
 
@@ -172,8 +172,8 @@ internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
-deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit (Path A, cottage now)
-deploy/seeed-j4012  Path B prep (docs + overlay stubs; does not block AGX)
+deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit (cottage now)
+deploy/seeed-j4012  Super J4012 prep (docs + overlay stubs; factory later)
 deploy/rocm         AMD ROCm host-image notes (scaffold; not Path A/B)
 deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 ```
