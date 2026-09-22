@@ -106,14 +106,15 @@ type Job struct {
 // DecodeTokS is omitted unless the probe returned completion_tokens.
 // Sustained stays false for one sample. Prompt text is not a field.
 type ScorecardReport struct {
-	DeviceID   string  `json:"device_id"`
-	CatalogID  string  `json:"catalog_id"`
-	ImageHash  string  `json:"image_hash"`
-	Runtime    string  `json:"runtime"`
-	PromptPack string  `json:"prompt_pack"`
-	SampleMs   int     `json:"sample_ms,omitempty"`
-	DecodeTokS float64 `json:"decode_tok_s,omitempty"`
-	Sustained  bool    `json:"sustained"`
+	DeviceID    string  `json:"device_id"`
+	CatalogID   string  `json:"catalog_id"`
+	ImageHash   string  `json:"image_hash"`
+	Runtime     string  `json:"runtime"`
+	PromptPack  string  `json:"prompt_pack"`
+	ImageDigest string  `json:"image_digest,omitempty"`
+	SampleMs    int     `json:"sample_ms,omitempty"`
+	DecodeTokS  float64 `json:"decode_tok_s,omitempty"`
+	Sustained   bool    `json:"sustained"`
 }
 
 // JobResultRequest is POST /agent/jobs/{job_id}/result.
