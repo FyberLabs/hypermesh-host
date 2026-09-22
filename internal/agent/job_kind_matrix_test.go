@@ -525,25 +525,43 @@ func assertLockedResultShape(t *testing.T, kind api.JobKind, body api.JobResultR
 
 func assertDockerLike(t *testing.T, calls [][]string, wantFirst []string, ref string) {
 	t.Helper()
-	if len(calls) != len(wantFirst) {
-		t.Fatalf("docker calls %v want first tokens %v", calls, wantFirst)
+	filtered := make([][]string, 0, len(calls))
+	for _, c := range calls {
+		if len(c) > 0 && c[0] == "network" {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	if len(filtered) != len(wantFirst) {
+		t.Fatalf("docker calls %v want first tokens %v", filtered, wantFirst)
 	}
 	for i, w := range wantFirst {
-		if len(calls[i]) == 0 || calls[i][0] != w {
-			t.Fatalf("call %d %v want %s", i, calls[i], w)
+		if len(filtered[i]) == 0 || filtered[i][0] != w {
+			t.Fatalf("call %d %v want %s", i, filtered[i], w)
 		}
-		joined := strings.Join(calls[i], " ")
+		joined := strings.Join(filtered[i], " ")
 		if strings.Contains(joined, "--gpus") {
-			t.Fatalf("GPU path is --runtime=nvidia, not --gpus: %v", calls[i])
+			t.Fatalf("GPU path is --runtime=nvidia, not --gpus: %v", filtered[i])
 		}
 		if strings.Contains(joined, "ghcr.io") {
-			t.Fatalf("no GHCR pull: %v", calls[i])
+			t.Fatalf("no GHCR pull: %v", filtered[i])
 		}
-		if w == "pull" && (len(calls[i]) < 2 || calls[i][1] != ref) {
-			t.Fatalf("pull ref %v want %s", calls[i], ref)
+		if w == "pull" && (len(filtered[i]) < 2 || filtered[i][1] != ref) {
+			t.Fatalf("pull ref %v want %s", filtered[i], ref)
 		}
-		if w == "run" && (!strings.Contains(joined, "--runtime=nvidia") || !strings.Contains(joined, ref)) {
-			t.Fatalf("run args %v", calls[i])
+		if w == "run" {
+			if !strings.Contains(joined, "--runtime=nvidia") || !strings.Contains(joined, ref) {
+				t.Fatalf("run args %v", filtered[i])
+			}
+			if strings.Contains(joined, "--network=host") {
+				t.Fatalf("workload must not use host network: %v", filtered[i])
+			}
+			if !strings.Contains(joined, runtime.WorkloadNetworkName) {
+				t.Fatalf("want workload network: %v", filtered[i])
+			}
+			if !strings.Contains(joined, "10.77.0.2:8080:8080") {
+				t.Fatalf("publish must be WG IP: %v", filtered[i])
+			}
 		}
 	}
 }

@@ -27,6 +27,9 @@ func TestLeaseStartHIPROCmScaffold(t *testing.T) {
 	}}
 	a.hip = &runtime.HIP{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		hipCalls = append(hipCalls, append([]string{}, args...))
+		if len(args) > 0 && args[0] == "network" {
+			return []byte{}, nil
+		}
 		return []byte("cid-hip\n"), nil
 	}}
 	got := a.runJob(context.Background(), api.Job{
@@ -42,13 +45,26 @@ func TestLeaseStartHIPROCmScaffold(t *testing.T) {
 	if !got.Passed || got.Reason != "lease_start" || got.ImageHash != wantHash {
 		t.Fatalf("hip-rocm scaffold result %+v want hash %q", got, wantHash)
 	}
-	if len(hipCalls) != 1 || hipCalls[0][0] != "run" {
+	var runArgs []string
+	for _, c := range hipCalls {
+		if len(c) > 0 && c[0] == "run" {
+			runArgs = c
+			break
+		}
+		if len(c) > 0 && c[0] == "pull" {
+			t.Fatalf("expected hip docker run without pull, calls=%v", hipCalls)
+		}
+	}
+	if runArgs == nil {
 		t.Fatalf("expected hip docker run, calls=%v", hipCalls)
 	}
-	joined := strings.Join(hipCalls[0], " ")
+	joined := strings.Join(runArgs, " ")
 	if strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "HSA_OVERRIDE") ||
 		strings.Contains(joined, "gfx1036") || strings.Contains(joined, "--gpus") {
-		t.Fatalf("hip args %v", hipCalls[0])
+		t.Fatalf("hip args %v", runArgs)
+	}
+	if strings.Contains(joined, "--network=host") || !strings.Contains(joined, runtime.WorkloadNetworkName) {
+		t.Fatalf("hip workload jail network: %v", runArgs)
 	}
 }
 

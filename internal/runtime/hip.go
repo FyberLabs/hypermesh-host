@@ -56,7 +56,8 @@ func StripHSAOverride(env []string) []string {
 }
 
 // HIPStartArgs is docker run argv for a resolved repo@digest on ROCm.
-// Device nodes only. Not --runtime=nvidia. Not x86 --gpus.
+// Device nodes only (KFD/DRI). Not --runtime=nvidia. Not x86 --gpus.
+// Same workload jail as NVIDIA: internal network, no host net, no socket.
 func HIPStartArgs(spec Spec, ref string) []string {
 	args := []string{
 		"run", "-d",
@@ -65,6 +66,7 @@ func HIPStartArgs(spec Spec, ref string) []string {
 		"--group-add=video",
 		"-p", publishSpec(spec.HostPort, spec.BindAddress),
 	}
+	args = append(args, JailArgs()...)
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
 		args = append(args, "--name", name)
 	}
@@ -101,6 +103,12 @@ func (h *HIP) Start(ctx context.Context, spec Spec) (*Handle, error) {
 		if a == "--runtime=nvidia" || strings.HasPrefix(a, "HSA_OVERRIDE") {
 			return nil, errors.New("hypermesh: hip-rocm must not use nvidia runtime or HSA_OVERRIDE")
 		}
+	}
+	if err := jailForbidden(args); err != nil {
+		return nil, err
+	}
+	if err := ensureWorkloadNetwork(ctx, h.run); err != nil {
+		return nil, err
 	}
 	out, err := h.run(ctx, args...)
 	if err != nil {

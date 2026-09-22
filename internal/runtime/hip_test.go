@@ -29,6 +29,7 @@ func TestHIPStartArgsNoNVIDIANoOverride(t *testing.T) {
 	if !contains(args, "127.0.0.1:8080:8080") || !contains(args, "hypermesh-lease-hip") {
 		t.Fatalf("publish/name: %v", args)
 	}
+	assertWorkloadJail(t, args)
 	if args[len(args)-1] != testRef {
 		t.Fatalf("ref last: %v", args)
 	}
@@ -60,6 +61,9 @@ func TestHIPStartMockNoPull(t *testing.T) {
 	h := &HIP{
 		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			seen = append(seen, append([]string{}, args...))
+			if len(args) > 0 && args[0] == "network" {
+				return []byte{}, nil
+			}
 			return []byte("cid-hip\n"), nil
 		},
 	}
@@ -70,17 +74,30 @@ func TestHIPStartMockNoPull(t *testing.T) {
 	if got.Backend != BackendHIPROCm || got.ContainerID != "cid-hip" {
 		t.Fatalf("handle %+v", got)
 	}
-	if len(seen) != 1 || seen[0][0] != "run" {
-		t.Fatalf("scaffold must not docker pull, calls=%v", seen)
+	runIdx := -1
+	for i, call := range seen {
+		if len(call) > 0 && call[0] == "run" {
+			runIdx = i
+			break
+		}
 	}
+	if runIdx < 0 {
+		t.Fatalf("missing run, calls=%v", seen)
+	}
+	for i := 0; i < runIdx; i++ {
+		if seen[i][0] == "pull" {
+			t.Fatalf("scaffold must not docker pull, calls=%v", seen)
+		}
+	}
+	assertWorkloadJail(t, seen[runIdx])
 	if err := h.Stop(context.Background(), got); err != nil {
 		t.Fatal(err)
 	}
-	if len(seen) != 3 || seen[1][0] != "stop" || seen[2][0] != "rm" {
+	if seen[len(seen)-2][0] != "stop" || seen[len(seen)-1][0] != "rm" {
 		t.Fatalf("stop then rm: %v", seen)
 	}
-	if seen[2][len(seen[2])-1] != "hypermesh-lease-h" {
-		t.Fatalf("rm name: %v", seen[2])
+	if seen[len(seen)-1][len(seen[len(seen)-1])-1] != "hypermesh-lease-h" {
+		t.Fatalf("rm name: %v", seen[len(seen)-1])
 	}
 }
 
