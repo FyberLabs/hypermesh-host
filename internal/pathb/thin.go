@@ -170,6 +170,13 @@ type completionResponse struct {
 
 // complete POSTs the pinned probe. It never returns the prompt or the
 // completion text (success is a bool). Errors are reachability only.
+// Probe reports whether the local completions endpoint answered.
+// It does not invent a sample. The job result stays separate.
+func (r Runner) Probe(ctx context.Context) bool {
+	ok, _, _, _ := r.complete(ctx)
+	return ok
+}
+
 func (r Runner) complete(ctx context.Context) (bool, error, int, int) {
 	body, err := json.Marshal(completionRequest{
 		Model: "local",
