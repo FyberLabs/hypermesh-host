@@ -33,12 +33,17 @@ const DefaultCompletionsURL = "http://127.0.0.1:8080/v1/chat/completions"
 // in JobResultRequest.
 const probeText = "Reply with the single word ready."
 
-// Result is what the agent POSTs back. No tok/s field. Reason is for
-// host logs only; the HTTP body stays {passed, image_hash?}.
+// Result is what the agent POSTs back for the job. Reason is for host
+// logs only; the job HTTP body stays {passed, image_hash?}.
+// Measured / SampleMs / DecodeTokS are a separate scorecard report.
+// They stay unset unless the completion body included usage.completion_tokens.
 type Result struct {
-	Passed    bool
-	ImageHash string
-	Reason    string
+	Passed     bool
+	ImageHash  string
+	Reason     string
+	Measured   bool
+	SampleMs   int
+	DecodeTokS float64
 }
 
 // Collector is the telemetry thin-v1 needs.
@@ -94,7 +99,7 @@ func (r Runner) Run(ctx context.Context, job api.Job) Result {
 		}
 	}
 
-	ok, reachErr := r.complete(ctx)
+	ok, reachErr, sampleMs, tokens := r.complete(ctx)
 	if job.Kind == api.KindInstanceCheck {
 		if !ok {
 			reason := "no completion"
@@ -103,13 +108,23 @@ func (r Runner) Run(ctx context.Context, job api.Job) Result {
 			}
 			return Result{Passed: false, ImageHash: hash, Reason: reason}
 		}
-		return Result{Passed: true, ImageHash: hash, Reason: "thin-v1"}
+		return withMeasure(Result{Passed: true, ImageHash: hash, Reason: "thin-v1"}, sampleMs, tokens)
 	}
 
 	if !ok {
 		return Result{Passed: true, ImageHash: hash, Reason: "thin-v1 telem; inference skipped"}
 	}
-	return Result{Passed: true, ImageHash: hash, Reason: "thin-v1"}
+	return withMeasure(Result{Passed: true, ImageHash: hash, Reason: "thin-v1"}, sampleMs, tokens)
+}
+
+func withMeasure(res Result, sampleMs, tokens int) Result {
+	if tokens <= 0 || sampleMs <= 0 {
+		return res
+	}
+	res.Measured = true
+	res.SampleMs = sampleMs
+	res.DecodeTokS = float64(tokens) / (float64(sampleMs) / 1000)
+	return res
 }
 
 func (r Runner) telem(ctx context.Context) (telem.Snapshot, bool) {
@@ -148,11 +163,14 @@ type completionResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage struct {
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 }
 
 // complete POSTs the pinned probe. It never returns the prompt or the
 // completion text (success is a bool). Errors are reachability only.
-func (r Runner) complete(ctx context.Context) (bool, error) {
+func (r Runner) complete(ctx context.Context) (bool, error, int, int) {
 	body, err := json.Marshal(completionRequest{
 		Model: "local",
 		Messages: []map[string]string{
@@ -160,31 +178,37 @@ func (r Runner) complete(ctx context.Context) (bool, error) {
 		},
 	})
 	if err != nil {
-		return false, err
+		return false, err, 0, 0
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint(), bytes.NewReader(body))
 	if err != nil {
-		return false, err
+		return false, err, 0, 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	started := time.Now()
 	resp, err := r.client().Do(req)
 	if err != nil {
-		return false, err
+		return false, err, 0, 0
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	sampleMs := int(time.Since(started) / time.Millisecond)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return false, fmt.Errorf("completions status %d", resp.StatusCode)
+		return false, fmt.Errorf("completions status %d", resp.StatusCode), 0, 0
 	}
 
 	var out completionResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return false, nil
+		return false, nil, 0, 0
 	}
 	if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
-		return false, nil
+		return false, nil, 0, 0
 	}
-	return true, nil
+	tokens := out.Usage.CompletionTokens
+	if tokens < 0 {
+		tokens = 0
+	}
+	return true, nil, sampleMs, tokens
 }
