@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/bench"
 	"github.com/FyberLabs/hypermesh-host/internal/logsafe"
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
@@ -39,6 +40,8 @@ type Agent struct {
 	resultTries     int
 	resultRetryWait time.Duration
 	ownerMu         sync.Mutex
+	// inspectCatalog reads a local repo digest. Nil uses docker inspect.
+	inspectCatalog func(ctx context.Context, catalogID string) string
 }
 
 // New builds an agent. log may be nil.
@@ -289,27 +292,62 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 }
 
 func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Result) {
-	catalogID := strings.TrimSpace(job.CatalogID)
-	if !res.Measured || catalogID == "" || strings.TrimSpace(res.ImageHash) == "" {
+	if job.Kind != api.KindPathB && job.Kind != api.KindInstanceCheck {
+		return
+	}
+	if !res.Passed || strings.TrimSpace(res.ImageHash) == "" {
 		return
 	}
 	runtimeName := strings.TrimSpace(job.Runtime)
 	if runtimeName == "" {
 		runtimeName = "nvidia"
 	}
-	err := a.client.PostScorecard(ctx, api.ScorecardReport{
-		DeviceID:   a.state.DeviceID,
-		CatalogID:  catalogID,
-		ImageHash:  res.ImageHash,
-		Runtime:    runtimeName,
-		PromptPack: "pack-v1",
-		SampleMs:   res.SampleMs,
-		DecodeTokS: res.DecodeTokS,
-		Sustained:  false,
-	})
-	if err != nil {
-		a.log.Warn("scorecard post failed", "catalog_id", catalogID, "err", err)
+	seen := map[string]bool{}
+	var ids []string
+	if id := strings.TrimSpace(job.CatalogID); id != "" {
+		ids = []string{id}
+	} else if a.lease != nil && strings.TrimSpace(a.lease.CatalogID) != "" {
+		ids = []string{a.lease.CatalogID}
+	} else {
+		for _, id := range bench.PackIDs() {
+			if bench.LocalImage(id) != "" {
+				ids = append(ids, id)
+			}
+		}
 	}
+	for _, catalogID := range ids {
+		if seen[catalogID] {
+			continue
+		}
+		seen[catalogID] = true
+		digest := a.catalogDigest(ctx, catalogID)
+		if digest == "" && !res.Measured {
+			continue
+		}
+		report := api.ScorecardReport{
+			DeviceID:    a.state.DeviceID,
+			CatalogID:   catalogID,
+			ImageHash:   res.ImageHash,
+			Runtime:     runtimeName,
+			PromptPack:  "pack-v1",
+			ImageDigest: digest,
+			Sustained:   false,
+		}
+		if res.Measured {
+			report.SampleMs = res.SampleMs
+			report.DecodeTokS = res.DecodeTokS
+		}
+		if err := a.client.PostScorecard(ctx, report); err != nil {
+			a.log.Warn("scorecard post failed", "catalog_id", catalogID, "err", err)
+		}
+	}
+}
+
+func (a *Agent) catalogDigest(ctx context.Context, catalogID string) string {
+	if a.inspectCatalog != nil {
+		return a.inspectCatalog(ctx, catalogID)
+	}
+	return bench.Inspect(ctx, bench.LocalImage(catalogID))
 }
 
 func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api.JobResultRequest) error {
