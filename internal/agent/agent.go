@@ -20,20 +20,20 @@ import (
 
 // Agent is the host process.
 type Agent struct {
-	cfg     Config
-	client  *api.Client
-	telem   telem.Source
-	pathb   pathb.Runner
-	runtime *runtime.NVIDIA
-	hip     *runtime.HIP
-	metal   *runtime.Metal
-	tunnels tunnel.Applier
-	log     *slog.Logger
-	state   State
-	lease   *runtime.Handle
-	applied string // fingerprint of the host peer we last acked (not tunnel_id)
-	bindIP  string // last tunnel client address, used to publish completions
-	keyDir  string // host WireGuard private key lives here only
+	cfg             Config
+	client          *api.Client
+	telem           telem.Source
+	pathb           pathb.Runner
+	runtime         *runtime.NVIDIA
+	hip             *runtime.HIP
+	metal           *runtime.Metal
+	tunnels         tunnel.Applier
+	log             *slog.Logger
+	state           State
+	lease           *runtime.Handle
+	applied         string // fingerprint of the host peer we last acked (not tunnel_id)
+	bindIP          string // last tunnel client address, used to publish completions
+	keyDir          string // host WireGuard private key lives here only
 	now             func() time.Time
 	sleep           func(time.Duration)
 	resultTries     int
@@ -283,8 +283,33 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
 		return err
 	}
+	a.reportScorecard(ctx, *job, res.Result)
 	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))
 	return nil
+}
+
+func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Result) {
+	catalogID := strings.TrimSpace(job.CatalogID)
+	if !res.Measured || catalogID == "" || strings.TrimSpace(res.ImageHash) == "" {
+		return
+	}
+	runtimeName := strings.TrimSpace(job.Runtime)
+	if runtimeName == "" {
+		runtimeName = "nvidia"
+	}
+	err := a.client.PostScorecard(ctx, api.ScorecardReport{
+		DeviceID:   a.state.DeviceID,
+		CatalogID:  catalogID,
+		ImageHash:  res.ImageHash,
+		Runtime:    runtimeName,
+		PromptPack: "pack-v1",
+		SampleMs:   res.SampleMs,
+		DecodeTokS: res.DecodeTokS,
+		Sustained:  false,
+	})
+	if err != nil {
+		a.log.Warn("scorecard post failed", "catalog_id", catalogID, "err", err)
+	}
 }
 
 func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api.JobResultRequest) error {

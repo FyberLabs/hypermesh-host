@@ -69,6 +69,12 @@ func (c *Client) PullJob(ctx context.Context, deviceID string) (*Job, error) {
 	return &out, nil
 }
 
+// PostScorecard stores a measured pack sample. Requires Bearer.
+// A failure here does not change the job result.
+func (c *Client) PostScorecard(ctx context.Context, req ScorecardReport) error {
+	return c.doJSON(ctx, http.MethodPost, PathScorecard, nil, req, http.StatusOK, nil, true)
+}
+
 // PostResult reports a job outcome. Requires Bearer. device_id is a query cross-check.
 func (c *Client) PostResult(ctx context.Context, jobID, deviceID string, req JobResultRequest) error {
 	q := url.Values{"device_id": {deviceID}}

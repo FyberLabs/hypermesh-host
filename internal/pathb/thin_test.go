@@ -87,6 +87,31 @@ func TestInstanceCheckPassesOnChoice(t *testing.T) {
 		t.Fatal("probe was not POSTed")
 	}
 	assertNoProbeLeak(t, got.Reason)
+	if got.Measured {
+		t.Fatal("a choice without usage.completion_tokens must not invent tok/s")
+	}
+}
+
+func TestPathBMeasuresDecodeOnlyWhenUsageTokensExist(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": "ready"}},
+			},
+			"usage": map[string]any{"completion_tokens": 4},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	r := Runner{
+		Collector: fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc"}},
+		Endpoint:  srv.URL + "/v1/chat/completions",
+	}
+	got := r.Run(context.Background(), api.Job{Kind: api.KindPathB, SuiteID: SuiteThinV1})
+	if !got.Passed || !got.Measured || got.SampleMs < 1 || got.DecodeTokS <= 0 {
+		t.Fatalf("%+v", got)
+	}
+	assertNoProbeLeak(t, got.Reason)
 }
 
 func TestInstanceCheckFailsOnEmptyChoice(t *testing.T) {
