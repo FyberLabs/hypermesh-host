@@ -485,11 +485,13 @@ func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api
 func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 	_ = a.effectiveSell()
 	switch job.Kind {
-	case api.KindPathB, api.KindInstanceCheck:
+	case api.KindPathB, api.KindInstanceCheck, api.KindCompactCert:
 		if res, stub := a.backendStub(job); stub {
 			return jobOutcome{Result: res}
 		}
 		return jobOutcome{Result: a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))}
+	case api.KindLabPull:
+		return jobOutcome{Result: a.labPull(job)}
 	case api.KindLeaseStart:
 		return jobOutcome{Result: a.leaseStart(ctx, job)}
 	case api.KindLeaseStop:
@@ -501,6 +503,28 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 	default:
 		return jobOutcome{Result: pathb.Result{Passed: false, Reason: "unknown job kind"}}
 	}
+}
+
+// labPull verifies a local GGUF against the pinned content hash. It never
+// fetches weights from the public internet. Fail closed on a missing pin or
+// hash mismatch. Does not start a container or touch the workload jail.
+func (a *Agent) labPull(job api.Job) pathb.Result {
+	pin := strings.TrimSpace(job.ImageDigest)
+	if !strings.HasPrefix(strings.ToLower(pin), "sha256:") || len(pin) < len("sha256:")+64 {
+		a.log.Info("lab_pull refused", "reason", "pinned hash required", "catalog_id", job.CatalogID)
+		return pathb.Result{Passed: false, Reason: "pinned hash required"}
+	}
+	hash, err := runtime.HashGGUFFile(a.cfg.GGUFHostPath())
+	if err != nil {
+		reason := leaseStartFailReason(err)
+		a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
+		return pathb.Result{Passed: false, Reason: reason}
+	}
+	if !strings.EqualFold(hash, pin) {
+		a.log.Info("lab_pull refused", "reason", "artifact hash mismatch", "catalog_id", job.CatalogID)
+		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
+	}
+	return pathb.Result{Passed: true, ImageHash: hash}
 }
 
 // backendStub fails lease_start / path_b / instance_check on a stub or

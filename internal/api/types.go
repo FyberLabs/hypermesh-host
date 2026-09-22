@@ -76,6 +76,8 @@ type JobKind string
 
 const (
 	KindPathB         JobKind = "path_b"
+	KindCompactCert   JobKind = "compact_cert"
+	KindLabPull       JobKind = "lab_pull"
 	KindInstanceCheck JobKind = "instance_check"
 	KindLeaseStart    JobKind = "lease_start"
 	KindLeaseStop     JobKind = "lease_stop"
