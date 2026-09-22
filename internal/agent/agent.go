@@ -12,6 +12,7 @@ import (
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/bench"
+	"github.com/FyberLabs/hypermesh-host/internal/catalog"
 	"github.com/FyberLabs/hypermesh-host/internal/logsafe"
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
@@ -40,9 +41,16 @@ type Agent struct {
 	resultTries     int
 	resultRetryWait time.Duration
 	ownerMu         sync.Mutex
-	// inspectCatalog reads a local repo digest. Nil uses docker inspect.
+	// inspectCatalog reads a local repo digest. Nil uses bench.Resolve,
+	// which pulls the workload tag when the image is not already local.
 	inspectCatalog func(ctx context.Context, catalogID string) string
+	digests        map[string]string
+	// certReadyWait bounds how long init waits for the cert container
+	// to answer. Zero uses three minutes. Tests set a short wait.
+	certReadyWait time.Duration
 }
+
+const certLeaseID = "cert-bench"
 
 // New builds an agent. log may be nil.
 func New(cfg Config, log *slog.Logger) (*Agent, error) {
@@ -282,6 +290,10 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	}
 	a.log.Info("got job", "job_id", job.JobID, "kind", job.Kind, "suite_id", job.SuiteID, "lease_id", job.LeaseID, "backend", jobBackendLog(*job))
 
+	if job.Kind == api.KindPathB {
+		stop := a.ensureCertSample(ctx)
+		defer stop()
+	}
 	res := a.runJob(ctx, *job)
 	if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
 		return err
@@ -296,6 +308,10 @@ func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Resu
 		return
 	}
 	if !res.Passed || strings.TrimSpace(res.ImageHash) == "" {
+		return
+	}
+	if !res.Measured {
+		a.log.Info("scorecard skipped", "reason", "inference skipped")
 		return
 	}
 	runtimeName := strings.TrimSpace(job.Runtime)
@@ -344,10 +360,99 @@ func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Resu
 }
 
 func (a *Agent) catalogDigest(ctx context.Context, catalogID string) string {
-	if a.inspectCatalog != nil {
-		return a.inspectCatalog(ctx, catalogID)
+	if a.digests != nil {
+		if digest := strings.TrimSpace(a.digests[catalogID]); digest != "" {
+			return digest
+		}
 	}
-	return bench.Inspect(ctx, bench.LocalImage(catalogID))
+	var digest string
+	if a.inspectCatalog != nil {
+		digest = a.inspectCatalog(ctx, catalogID)
+	} else {
+		digest = bench.Resolve(ctx, catalogID)
+	}
+	a.rememberDigest(catalogID, digest)
+	return digest
+}
+
+func (a *Agent) rememberDigest(catalogID, digest string) {
+	digest = strings.TrimSpace(digest)
+	if digest == "" {
+		return
+	}
+	if a.digests == nil {
+		a.digests = map[string]string{}
+	}
+	a.digests[catalogID] = digest
+}
+
+// ensureCertSample pulls the workload image when it is missing and starts
+// that repo@sha256 so path_b can take a timed sample. It does not record
+// a lease. A missing image, a missing GGUF, or a completions timeout
+// leaves the sample unset. Path B can still pass telem. That pass does
+// not tag the catalog.
+func (a *Agent) ensureCertSample(ctx context.Context) func() {
+	noop := func() {}
+	digest := a.catalogDigest(ctx, catalog.Llama318BQ4)
+	if digest == "" {
+		a.log.Info("cert image not local", "catalog_id", catalog.Llama318BQ4)
+		return noop
+	}
+	if a.lease != nil || a.runtime == nil {
+		return noop
+	}
+	gguf := a.cfg.GGUFHostPath()
+	if err := runtime.RequireGGUFFile(gguf); err != nil {
+		a.log.Info("cert sample skipped", "reason", "no gguf")
+		return noop
+	}
+	handle, err := a.runtime.Start(ctx, runtime.Spec{
+		LeaseID:     certLeaseID,
+		CatalogID:   catalog.Llama318BQ4,
+		ImageDigest: digest,
+		Runtime:     "nvidia",
+		HostPort:    a.cfg.PublishPort(),
+		BindAddress: a.bindIP,
+		GGUFPath:    gguf,
+	})
+	if err != nil {
+		a.log.Info("cert sample skipped", "reason", err.Error())
+		return noop
+	}
+	stop := func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if stopErr := a.runtime.Stop(cctx, handle); stopErr != nil {
+			a.log.Warn("cert container stop", "err", stopErr)
+		}
+	}
+	if !a.waitCompletions(ctx) {
+		a.log.Info("cert sample skipped", "reason", "completions not ready")
+		stop()
+		return noop
+	}
+	return stop
+}
+
+func (a *Agent) waitCompletions(ctx context.Context) bool {
+	wait := a.certReadyWait
+	if wait <= 0 {
+		wait = 3 * time.Minute
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		if a.pathb.Probe(ctx) {
+			return true
+		}
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return false
+		}
+		sleep := a.sleep
+		if sleep == nil {
+			sleep = time.Sleep
+		}
+		sleep(2 * time.Second)
+	}
 }
 
 func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api.JobResultRequest) error {

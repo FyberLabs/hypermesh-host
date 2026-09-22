@@ -5,6 +5,7 @@ package bench
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -51,6 +52,43 @@ func FirstRepoDigest(raw []byte) string {
 		}
 	}
 	return ""
+}
+
+// Pull fetches the local workload tag. It is not a catalog pin.
+// A repo@sha256 is refused here so a missing inspect cannot be invented.
+func Pull(ctx context.Context, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.Contains(ref, "@") {
+		return fmt.Errorf("cert pull wants a local tag, not a pin")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "pull", ref).CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			return fmt.Errorf("docker pull: %w", err)
+		}
+		return fmt.Errorf("docker pull: %w: %s", err, detail)
+	}
+	return nil
+}
+
+// Resolve returns the repo digest of the local workload image.
+// It pulls the tag only when inspect is empty. An unknown catalog id
+// and a failed pull are empty. The tag itself is never returned.
+func Resolve(ctx context.Context, catalogID string) string {
+	ref := LocalImage(catalogID)
+	if ref == "" {
+		return ""
+	}
+	if digest := Inspect(ctx, ref); digest != "" {
+		return digest
+	}
+	if err := Pull(ctx, ref); err != nil {
+		return ""
+	}
+	return Inspect(ctx, ref)
 }
 
 // Inspect runs docker image inspect for ref and returns a repo digest.

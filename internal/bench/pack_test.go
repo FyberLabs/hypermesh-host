@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,13 @@ func TestFirstRepoDigestKeepsRepoPin(t *testing.T) {
 	raw := []byte(`["` + want + `"]`)
 	if got := FirstRepoDigest(raw); got != want {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPullRefusesAPin(t *testing.T) {
+	err := Pull(context.Background(), "ghcr.io/fyberlabs/hypermesh-test@sha256:"+strings.Repeat("ab", 32))
+	if err == nil {
+		t.Fatal("pull must not accept a repo pin")
 	}
 }
 
