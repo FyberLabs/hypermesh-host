@@ -15,6 +15,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/catalog"
 	"github.com/FyberLabs/hypermesh-host/internal/logsafe"
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
+	"github.com/FyberLabs/hypermesh-host/internal/pull"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/telem"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
@@ -48,6 +49,9 @@ type Agent struct {
 	// certReadyWait bounds how long init waits for the cert container
 	// to answer. Zero uses three minutes. Tests set a short wait.
 	certReadyWait time.Duration
+	// fetchWeights downloads a pinned artifact for lab_pull. Nil uses
+	// the allowlisted HTTP fetcher. Tests stub this — never hit the network.
+	fetchWeights func(ctx context.Context, dest, sourceRef, pin string) error
 }
 
 const certLeaseID = "cert-bench"
@@ -290,21 +294,30 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	}
 	a.log.Info("got job", "job_id", job.JobID, "kind", job.Kind, "suite_id", job.SuiteID, "lease_id", job.LeaseID, "backend", jobBackendLog(*job))
 
-	if job.Kind == api.KindPathB {
+	if job.Kind == api.KindPathB || job.Kind == api.KindCompactCert {
 		stop := a.ensureCertSample(ctx)
 		defer stop()
 	}
 	res := a.runJob(ctx, *job)
-	if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
-		return err
+	// Compact-cert band check on the plane needs the scorecard before the
+	// job result greens path_b_state. Lab path_b keeps post-then-scorecard.
+	if job.Kind == api.KindCompactCert {
+		a.reportScorecard(ctx, *job, res.Result)
+		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
+			return err
+		}
+	} else {
+		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
+			return err
+		}
+		a.reportScorecard(ctx, *job, res.Result)
 	}
-	a.reportScorecard(ctx, *job, res.Result)
 	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))
 	return nil
 }
 
 func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Result) {
-	if job.Kind != api.KindPathB && job.Kind != api.KindInstanceCheck {
+	if job.Kind != api.KindPathB && job.Kind != api.KindInstanceCheck && job.Kind != api.KindCompactCert {
 		return
 	}
 	if !res.Passed || strings.TrimSpace(res.ImageHash) == "" {
@@ -347,6 +360,7 @@ func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Resu
 			Runtime:     runtimeName,
 			PromptPack:  "pack-v1",
 			ImageDigest: digest,
+			ThermalC:    res.ThermalC,
 			Sustained:   false,
 		}
 		if res.Measured {
@@ -491,7 +505,7 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 		}
 		return jobOutcome{Result: a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))}
 	case api.KindLabPull:
-		return jobOutcome{Result: a.labPull(job)}
+		return jobOutcome{Result: a.labPull(ctx, job)}
 	case api.KindLeaseStart:
 		return jobOutcome{Result: a.leaseStart(ctx, job)}
 	case api.KindLeaseStop:
@@ -505,16 +519,25 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 	}
 }
 
-// labPull verifies a local GGUF against the pinned content hash. It never
-// fetches weights from the public internet. Fail closed on a missing pin or
-// hash mismatch. Does not start a container or touch the workload jail.
-func (a *Agent) labPull(job api.Job) pathb.Result {
+// labPull fetches a pinned artifact from an allowlisted source onto the host
+// GGUF path (when source_ref is set), then verifies the content hash. Fail
+// closed on untrusted URL, hash mismatch, or missing pin. Does not start a
+// container — the subsequent lab soak / path_b job runs the jailed sample.
+func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	pin := strings.TrimSpace(job.ImageDigest)
 	if !strings.HasPrefix(strings.ToLower(pin), "sha256:") || len(pin) < len("sha256:")+64 {
 		a.log.Info("lab_pull refused", "reason", "pinned hash required", "catalog_id", job.CatalogID)
 		return pathb.Result{Passed: false, Reason: "pinned hash required"}
 	}
-	hash, err := runtime.HashGGUFFile(a.cfg.GGUFHostPath())
+	dest := a.cfg.GGUFHostPath()
+	if source := strings.TrimSpace(job.SourceRef); source != "" {
+		if err := a.doFetchWeights(ctx, dest, source, pin); err != nil {
+			reason := labPullFailReason(err)
+			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: reason}
+		}
+	}
+	hash, err := runtime.HashGGUFFile(dest)
 	if err != nil {
 		reason := leaseStartFailReason(err)
 		a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
@@ -525,6 +548,34 @@ func (a *Agent) labPull(job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
 	return pathb.Result{Passed: true, ImageHash: hash}
+}
+
+func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string) error {
+	if a.fetchWeights != nil {
+		return a.fetchWeights(ctx, dest, sourceRef, pin)
+	}
+	rawURL, err := pull.TrustedDownloadURL(sourceRef)
+	if err != nil {
+		return err
+	}
+	return pull.ToFile(ctx, dest, rawURL, pin, pull.HTTPGet(nil))
+}
+
+func labPullFailReason(err error) string {
+	if err == nil {
+		return "lab_pull failed"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "untrusted"):
+		return "untrusted source"
+	case strings.Contains(msg, "hash mismatch"):
+		return "artifact hash mismatch"
+	case strings.Contains(msg, "pinned hash"):
+		return "pinned hash required"
+	default:
+		return "lab_pull failed"
+	}
 }
 
 // backendStub fails lease_start / path_b / instance_check on a stub or
