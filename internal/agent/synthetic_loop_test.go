@@ -246,18 +246,37 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	if dockerCalls[0][0] != "pull" || dockerCalls[0][1] != synthDigest {
 		t.Fatalf("pull %v", dockerCalls[0])
 	}
-	runJoined := strings.Join(dockerCalls[1], " ")
-	if dockerCalls[1][0] != "run" || !strings.Contains(runJoined, "--runtime=nvidia") || strings.Contains(runJoined, "--gpus") {
-		t.Fatalf("run %v", dockerCalls[1])
+	runArgs := findDockerRun(dockerCalls)
+	if runArgs == nil {
+		t.Fatalf("missing docker run: %v", dockerCalls)
+	}
+	runJoined := strings.Join(runArgs, " ")
+	if !strings.Contains(runJoined, "--runtime=nvidia") || strings.Contains(runJoined, "--gpus") {
+		t.Fatalf("run %v", runArgs)
 	}
 	if !strings.Contains(runJoined, synthDigest) || strings.Contains(runJoined, "ghcr.io") {
-		t.Fatalf("run ref %v", dockerCalls[1])
+		t.Fatalf("run ref %v", runArgs)
 	}
-	if dockerCalls[2][0] != "stop" {
-		t.Fatalf("stop %v", dockerCalls[2])
+	if strings.Contains(runJoined, "--network=host") || !strings.Contains(runJoined, runtime.WorkloadNetworkName) {
+		t.Fatalf("workload jail network: %v", runArgs)
 	}
-	if dockerCalls[3][0] != "rm" || dockerCalls[3][len(dockerCalls[3])-1] != "hypermesh-lease-syn" {
-		t.Fatalf("rm named container %v", dockerCalls[3])
+	if !strings.Contains(runJoined, "10.77.0.2:8080:8080") {
+		t.Fatalf("publish must be WG IP: %v", runArgs)
+	}
+	stopIdx, rmIdx := -1, -1
+	for i, c := range dockerCalls {
+		if len(c) > 0 && c[0] == "stop" {
+			stopIdx = i
+		}
+		if len(c) > 0 && c[0] == "rm" {
+			rmIdx = i
+		}
+	}
+	if stopIdx < 0 {
+		t.Fatalf("stop missing: %v", dockerCalls)
+	}
+	if rmIdx < 0 || dockerCalls[rmIdx][len(dockerCalls[rmIdx])-1] != "hypermesh-lease-syn" {
+		t.Fatalf("rm named container %v", dockerCalls)
 	}
 
 	if !ownerUp {

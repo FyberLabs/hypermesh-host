@@ -157,12 +157,15 @@ func ggufBind(host string) string {
 // Publishes container 8080 on the tunnel address only so the LAN cannot
 // reach completions. The process inside may listen on 0.0.0.0:8080.
 // Bind-mounts the host GGUF at /models/model.gguf:ro (not baked into the image).
+// JailArgs put the container on the internal workload network (not host,
+// not the default bridge with LAN egress).
 func StartArgs(spec Spec, ref string) []string {
 	args := []string{
 		"run", "-d", "--runtime=nvidia",
 		"-p", publishSpec(spec.HostPort, spec.BindAddress),
 		"-v", ggufBind(spec.GGUFPath),
 	}
+	args = append(args, JailArgs()...)
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
 		args = append(args, "--name", name)
 	}
@@ -197,6 +200,12 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 		if a == "--gpus" || strings.HasPrefix(a, "--gpus=") {
 			return nil, ErrUsesGPUsFlag
 		}
+	}
+	if err := jailForbidden(args); err != nil {
+		return nil, err
+	}
+	if err := ensureWorkloadNetwork(ctx, n.run); err != nil {
+		return nil, err
 	}
 	out, err := n.run(ctx, args...)
 	if err != nil {

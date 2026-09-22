@@ -605,22 +605,50 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	if calls[0][0] != "pull" || calls[0][1] != ref {
 		t.Fatalf("pull %v", calls[0])
 	}
-	joined := strings.Join(calls[1], " ")
+	runArgs := findDockerRun(calls)
+	if runArgs == nil {
+		t.Fatalf("missing docker run: %+v", calls)
+	}
+	joined := strings.Join(runArgs, " ")
 	if !strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "--gpus") {
-		t.Fatalf("docker args %v", calls[1])
+		t.Fatalf("docker args %v", runArgs)
 	}
 	if !strings.Contains(joined, "-p") || !strings.Contains(joined, "10.77.0.2:8080:8080") {
-		t.Fatalf("port publish %v", calls[1])
+		t.Fatalf("port publish must be WG IP only: %v", runArgs)
+	}
+	if strings.Contains(joined, "--network=host") || strings.Contains(joined, "--network host") {
+		t.Fatalf("workload must not use host network: %v", runArgs)
+	}
+	if !strings.Contains(joined, "--network") || !strings.Contains(joined, runtime.WorkloadNetworkName) {
+		t.Fatalf("want internal workload network: %v", runArgs)
+	}
+	if strings.Contains(joined, "docker.sock") {
+		t.Fatalf("must not mount docker.sock: %v", runArgs)
+	}
+	if !strings.Contains(joined, "--cap-drop") || !strings.Contains(joined, "ALL") {
+		t.Fatalf("want --cap-drop ALL: %v", runArgs)
+	}
+	if !strings.Contains(joined, "--read-only") {
+		t.Fatalf("want --read-only: %v", runArgs)
 	}
 	if !strings.Contains(joined, "-v") || !strings.Contains(joined, a.cfg.GGUFHostPath()+":"+runtime.ContainerGGUFPath+":ro") {
-		t.Fatalf("GGUF bind-mount %v", calls[1])
+		t.Fatalf("GGUF bind-mount %v", runArgs)
 	}
 	if !strings.Contains(joined, "hypermesh-lease-2") || !strings.Contains(joined, ref) {
-		t.Fatalf("name/ref %v", calls[1])
+		t.Fatalf("name/ref %v", runArgs)
 	}
 	if postedHash != wantHash {
 		t.Fatalf("lease_start result image_hash %q want GGUF %q", postedHash, wantHash)
 	}
+}
+
+func findDockerRun(calls [][]string) []string {
+	for _, c := range calls {
+		if len(c) > 0 && c[0] == "run" {
+			return c
+		}
+	}
+	return nil
 }
 
 func TestLeaseStartBackends(t *testing.T) {
@@ -684,9 +712,16 @@ func TestLeaseStartBackends(t *testing.T) {
 				if len(dockerCalls) < 2 || dockerCalls[0][0] != "pull" || dockerCalls[0][1] != ref {
 					t.Fatalf("expected nvidia pull, calls=%v", dockerCalls)
 				}
-				joined := strings.Join(dockerCalls[1], " ")
+				runArgs := findDockerRun(dockerCalls)
+				if runArgs == nil {
+					t.Fatalf("missing docker run: %v", dockerCalls)
+				}
+				joined := strings.Join(runArgs, " ")
 				if !strings.Contains(joined, "--runtime=nvidia") || strings.Contains(joined, "--gpus") {
-					t.Fatalf("docker args %v", dockerCalls[1])
+					t.Fatalf("docker args %v", runArgs)
+				}
+				if strings.Contains(joined, "--network=host") || !strings.Contains(joined, runtime.WorkloadNetworkName) {
+					t.Fatalf("workload jail network: %v", runArgs)
 				}
 			} else if len(dockerCalls) != 0 {
 				t.Fatalf("stub must not call docker, calls=%v", dockerCalls)
@@ -1156,6 +1191,8 @@ func TestLeaseStartLocalImageAfterPullUnauthorized(t *testing.T) {
 			return []byte("Error response from daemon: unauthorized"), errors.New("exit status 1")
 		case len(args) >= 2 && args[0] == "image" && args[1] == "inspect":
 			return []byte("sha256:localpin\n"), nil
+		case len(args) > 0 && args[0] == "network":
+			return []byte{}, nil
 		case len(args) > 0 && args[0] == "run":
 			return []byte("cid-local\n"), nil
 		default:

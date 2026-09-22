@@ -1,11 +1,27 @@
 # hypermesh-test (build on the AGX)
 
-OCI wrapper that serves OpenAI-shaped `POST /v1/chat/completions` on `0.0.0.0:8080`. The GGUF is **volume-mounted at run**, not baked into the image (AGX64-1 eMMC cannot hold a 4.9G COPY). The host program publishes that as `docker -p 8080:8080` plus the bind-mount. The Fyber router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
+OCI wrapper that serves OpenAI-shaped `POST /v1/chat/completions` on `0.0.0.0:8080`. The GGUF is **volume-mounted at run**, not baked into the image (AGX64-1 eMMC cannot hold a 4.9G COPY). The host program publishes that as `docker -p <client_address>:8080:8080` on the internal `hypermesh-workload` network (not host network), plus the GGUF bind-mount. The Fyber router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
 
 Target name: **`ghcr.io/fyberlabs/hypermesh-test`**.
 
 Catalog id stays **`llama-3.1-8b-q4`**.
 
+## Workload jail
+
+`lease_start` (and cert-sample starts) always jail the artifact container:
+
+| Guarantee | How |
+|---|---|
+| No host network | `--network hypermesh-workload` (never `--network=host`) |
+| No LAN / public egress | network created with `docker network create --internal` |
+| Overlay ingress only | `-p <WireGuard client_address>:8080:8080` |
+| No Docker socket | not mounted |
+| Dropped caps | `--cap-drop ALL`, `--security-opt no-new-privileges:true` |
+| Read-only root | `--read-only` + `--tmpfs /tmp` |
+| Weights only | `-v $HYPERMESH_GGUF_PATH:/models/model.gguf:ro` — no other host paths |
+| No sensors/cameras/robots | no `--device` grants (GPU via `--runtime=nvidia` only) |
+
+Agent and witness stay on host network; they reach completions via the WG publish address like the gateway door.
 ## Build this on AGX64-1
 
 This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L4T R39.2.1 / Ubuntu 24.04.5 / CUDA 13**, after the overlay. **Run** with `--runtime=nvidia` (not `--gpus`). Docker 29 Buildx does not accept `--runtime=nvidia` at **build**; the Dockerfile links CUDA devel stubs instead.
@@ -61,9 +77,13 @@ sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test
 Do **not** `COPY model.gguf` into the image. On AGX64-1 set **`HYPERMESH_GGUF_PATH=/home/chris/hypermesh/workload/model.gguf`**. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` after `stat` says it is a regular file. Empty, missing, or a directory POSTs `passed=false` so Docker cannot create a directory mount. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
 
 ```bash
-# Manual run (same mount the host program adds):
+# Manual run (same jail the host program adds):
+sudo docker network create --driver bridge --internal hypermesh-workload 2>/dev/null || true
 sudo docker run --runtime=nvidia --platform linux/arm64 \
-  -p 8080:8080 \
+  -p 10.77.0.2:8080:8080 \
+  --network hypermesh-workload \
+  --read-only --tmpfs /tmp \
+  --cap-drop ALL --security-opt no-new-privileges:true \
   -v /home/chris/hypermesh/workload/model.gguf:/models/model.gguf:ro \
   ghcr.io/fyberlabs/hypermesh-test
 ```
