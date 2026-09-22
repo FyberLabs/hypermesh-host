@@ -20,11 +20,14 @@ type SellPosture struct {
 }
 
 // jobOutcome is the host-local job result. Sell fields are only POSTed for sell_pause.
+// Egress fields are POSTed for path_b lab soaks (admission sandbox).
 type jobOutcome struct {
 	pathb.Result
-	SellState api.SellState
-	Until     string
-	DeviceID  string
+	SellState    api.SellState
+	Until        string
+	DeviceID     string
+	EgressOk     *bool
+	EgressReason string
 }
 
 func (a *Agent) clock() time.Time {
@@ -176,6 +179,10 @@ func jobResultBody(kind api.JobKind, res jobOutcome) api.JobResultRequest {
 		req.SellState = res.SellState
 		req.Until = res.Until
 		req.DeviceID = res.DeviceID
+	}
+	if kind == api.KindPathB {
+		req.EgressOk = res.EgressOk
+		req.EgressReason = res.EgressReason
 	}
 	return req
 }

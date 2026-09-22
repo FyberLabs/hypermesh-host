@@ -306,3 +306,8 @@ func (n *NVIDIA) run(ctx context.Context, args ...string) ([]byte, error) {
 	defer cancel()
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
+
+// DockerRun exposes the docker CLI runner for host-side jail observation.
+func (n *NVIDIA) DockerRun(ctx context.Context, args ...string) ([]byte, error) {
+	return n.run(ctx, args...)
+}

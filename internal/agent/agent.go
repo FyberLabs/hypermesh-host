@@ -52,6 +52,11 @@ type Agent struct {
 	// fetchWeights downloads a pinned artifact for lab_pull. Nil uses
 	// the allowlisted HTTP fetcher. Tests stub this — never hit the network.
 	fetchWeights func(ctx context.Context, dest, sourceRef, pin string) error
+	// dockerRun runs docker CLI. Nil uses the NVIDIA runtime's runner when
+	// available; tests inject a stub for egress observation.
+	dockerRun runtime.DockerRunner
+	// egressSample samples host-visible connections. Nil uses ss/conntrack.
+	egressSample runtime.ConnSampler
 }
 
 const certLeaseID = "cert-bench"
@@ -299,6 +304,9 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 		defer stop()
 	}
 	res := a.runJob(ctx, *job)
+	if job.Kind == api.KindPathB {
+		a.attachEgressObservation(ctx, &res)
+	}
 	// Compact-cert band check on the plane needs the scorecard before the
 	// job result greens path_b_state. Lab path_b keeps post-then-scorecard.
 	if job.Kind == api.KindCompactCert {
@@ -494,6 +502,20 @@ func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api
 		}
 	}
 	return last
+}
+
+// attachEgressObservation records a host-namespace egress boolean for lab
+// path_b soaks. Fail closed when observation is unavailable. Does not scan
+// or weaken the jail.
+func (a *Agent) attachEgressObservation(ctx context.Context, res *jobOutcome) {
+	run := a.dockerRun
+	if run == nil && a.runtime != nil {
+		run = a.runtime.DockerRun
+	}
+	ok, reason := runtime.ObserveWorkloadEgress(ctx, run, a.egressSample)
+	res.EgressOk = &ok
+	res.EgressReason = reason
+	a.log.Info("path_b egress", "ok", ok, "reason", reason)
 }
 
 func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {

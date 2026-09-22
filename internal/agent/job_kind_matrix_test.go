@@ -511,11 +511,16 @@ func assertLockedResultShape(t *testing.T, kind api.JobKind, body api.JobResultR
 			t.Fatalf("never passed=true with n/a: %+v", body)
 		}
 	default:
-		if strings.Contains(s, "sell_state") || strings.Contains(s, "until") {
+		if strings.Contains(s, "sell_state") || strings.Contains(s, `"until"`) {
 			t.Fatalf("%s result must stay {passed, image_hash?}: %s", kind, s)
 		}
-		if strings.Contains(s, "reason") || strings.Contains(s, "reason_code") {
-			t.Fatalf("%s result must not include reason fields: %s", kind, s)
+		if strings.Contains(s, "reason_code") {
+			t.Fatalf("%s result must not include reason_code: %s", kind, s)
+		}
+		if kind != api.KindPathB {
+			if strings.Contains(s, `"reason"`) || strings.Contains(s, "egress_") {
+				t.Fatalf("%s result must stay {passed, image_hash?}: %s", kind, s)
+			}
 		}
 	}
 	if strings.Contains(s, "ghcr.io") || strings.Contains(s, "peer_private") || strings.Contains(s, "device_secret") {
