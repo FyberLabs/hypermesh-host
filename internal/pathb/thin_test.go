@@ -158,6 +158,52 @@ func TestUnknownSuiteFails(t *testing.T) {
 	}
 }
 
+func TestPackV1AcceptedForCompactCertAndPathB(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "ready"}}},
+			"usage":   map[string]any{"completion_tokens": 3},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	r := Runner{
+		Collector: fakeCollect{snap: telem.Snapshot{ImageHash: "h"}},
+		Endpoint:  srv.URL,
+	}
+	compact := r.Run(context.Background(), api.Job{
+		Kind: api.KindCompactCert, SuiteID: SuitePackV1,
+	})
+	if !compact.Passed || !compact.Measured || compact.Reason != SuitePackV1 {
+		t.Fatalf("compact_cert pack-v1: %+v", compact)
+	}
+	pathB := r.Run(context.Background(), api.Job{
+		Kind: api.KindPathB, SuiteID: SuitePackV1,
+	})
+	if !pathB.Passed || pathB.Reason != SuitePackV1 {
+		t.Fatalf("path_b pack-v1: %+v", pathB)
+	}
+}
+
+func TestCompactCertFailsWithoutTimedSample(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "ready"}}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	r := Runner{
+		Collector: fakeCollect{snap: telem.Snapshot{ImageHash: "h"}},
+		Endpoint:  srv.URL,
+	}
+	got := r.Run(context.Background(), api.Job{
+		Kind: api.KindCompactCert, SuiteID: SuitePackV1,
+	})
+	if got.Passed || got.Reason != "no timed sample" {
+		t.Fatalf("want no timed sample, got %+v", got)
+	}
+}
+
 func TestTelemetryErrorFailsPathB(t *testing.T) {
 	r := Runner{Collector: fakeCollect{err: errors.New("no /proc")}}
 	got := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})

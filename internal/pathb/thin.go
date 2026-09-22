@@ -1,9 +1,9 @@
-// Package pathb runs the only suite this slice knows: thin-v1.
+// Package pathb runs thin-v1 (lab Path B) and pack-v1 (enrolled compact-cert).
 //
-// thin-v1 collects image hash / uptime / thermal when available. If a
-// local OpenAI-shaped completions endpoint is up, it POSTs a pinned
-// probe and requires a real choice. It does not invent a host-scorecard,
-// an inference bench, or tokens/sec.
+// Both collect image hash / uptime / thermal when available. If a local
+// OpenAI-shaped completions endpoint is up, they POST a pinned probe and
+// require a real choice. They do not invent a host-scorecard, an inference
+// bench, or tokens/sec.
 //
 // The probe text and the completion text are never logged and never
 // placed in the job result body.
@@ -23,8 +23,11 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/telem"
 )
 
-// SuiteThinV1 is the platform suite_id for this slice. There is no suite payload.
+// SuiteThinV1 is the lab Path B suite_id. Empty suite_id is treated as thin-v1.
 const SuiteThinV1 = "thin-v1"
+
+// SuitePackV1 is the enrolled compact-cert suite_id (plane core suite).
+const SuitePackV1 = "pack-v1"
 
 // DefaultCompletionsURL is the local OpenAI-shaped path the lease publishes.
 const DefaultCompletionsURL = "http://127.0.0.1:8080/v1/chat/completions"
@@ -44,6 +47,23 @@ type Result struct {
 	Measured   bool
 	SampleMs   int
 	DecodeTokS float64
+	ThermalC   *float64
+}
+
+func knownSuite(suiteID string) bool {
+	switch strings.TrimSpace(suiteID) {
+	case "", SuiteThinV1, SuitePackV1:
+		return true
+	default:
+		return false
+	}
+}
+
+func suiteLabel(suiteID string) string {
+	if strings.TrimSpace(suiteID) == SuitePackV1 {
+		return SuitePackV1
+	}
+	return SuiteThinV1
 }
 
 // Collector is the telemetry thin-v1 needs.
@@ -78,11 +98,17 @@ type Runner struct {
 // completion (non-empty choices[0].message.content) or it fails. Boot
 // identity is not a gate here.
 //
-// Unknown suite ids fail. Empty suite_id is thin-v1.
+// Unknown suite ids fail. Empty suite_id is thin-v1. pack-v1 is accepted so
+// enrolled compact-cert (plane CORE_SUITE_ID) can run the same probe.
+//
+// compact_cert requires a timed sample (decode_tok_s). A down endpoint or a
+// completion without usage.completion_tokens fails closed — unlike path_b,
+// which may still green on telem alone before lease_start.
 func (r Runner) Run(ctx context.Context, job api.Job) Result {
-	if job.SuiteID != "" && job.SuiteID != SuiteThinV1 {
+	if !knownSuite(job.SuiteID) {
 		return Result{Passed: false, Reason: fmt.Sprintf("unknown suite %s", job.SuiteID)}
 	}
+	label := suiteLabel(job.SuiteID)
 
 	snap, telemOK := r.telem(ctx)
 	hash := snap.ImageHash
@@ -95,7 +121,7 @@ func (r Runner) Run(ctx context.Context, job api.Job) Result {
 
 	if job.Kind != api.KindInstanceCheck && telemOK {
 		if ok, _ := r.checkBoot(snap); !ok {
-			return Result{Passed: false, ImageHash: hash, Reason: "reboot"}
+			return Result{Passed: false, ImageHash: hash, Reason: "reboot", ThermalC: snap.ThermalC}
 		}
 	}
 
@@ -106,15 +132,30 @@ func (r Runner) Run(ctx context.Context, job api.Job) Result {
 			if reachErr != nil {
 				reason = "completions unreachable"
 			}
-			return Result{Passed: false, ImageHash: hash, Reason: reason}
+			return Result{Passed: false, ImageHash: hash, Reason: reason, ThermalC: snap.ThermalC}
 		}
-		return withMeasure(Result{Passed: true, ImageHash: hash, Reason: "thin-v1"}, sampleMs, tokens)
+		return withMeasure(Result{Passed: true, ImageHash: hash, Reason: label, ThermalC: snap.ThermalC}, sampleMs, tokens)
+	}
+
+	if job.Kind == api.KindCompactCert {
+		if !ok {
+			reason := "no completion"
+			if reachErr != nil {
+				reason = "completions unreachable"
+			}
+			return Result{Passed: false, ImageHash: hash, Reason: reason, ThermalC: snap.ThermalC}
+		}
+		res := withMeasure(Result{Passed: true, ImageHash: hash, Reason: label, ThermalC: snap.ThermalC}, sampleMs, tokens)
+		if !res.Measured {
+			return Result{Passed: false, ImageHash: hash, Reason: "no timed sample", ThermalC: snap.ThermalC}
+		}
+		return res
 	}
 
 	if !ok {
-		return Result{Passed: true, ImageHash: hash, Reason: "thin-v1 telem; inference skipped"}
+		return Result{Passed: true, ImageHash: hash, Reason: label + " telem; inference skipped", ThermalC: snap.ThermalC}
 	}
-	return withMeasure(Result{Passed: true, ImageHash: hash, Reason: "thin-v1"}, sampleMs, tokens)
+	return withMeasure(Result{Passed: true, ImageHash: hash, Reason: label, ThermalC: snap.ThermalC}, sampleMs, tokens)
 }
 
 func withMeasure(res Result, sampleMs, tokens int) Result {

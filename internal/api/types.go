@@ -98,25 +98,29 @@ type Job struct {
 	LeaseID     string  `json:"lease_id,omitempty"`
 	CatalogID   string  `json:"catalog_id,omitempty"`
 	ImageDigest string  `json:"image_digest,omitempty"`
-	Runtime     string  `json:"runtime,omitempty"`
-	Backend     string  `json:"backend,omitempty"`
-	SuiteID     string  `json:"suite_id,omitempty"`
-	Until       string  `json:"until,omitempty"`
+	// SourceRef is the trusted fetch pin for lab_pull (repo@rev/file or
+	// allowlisted HTTPS URL). Distinct from ImageDigest (content sha256).
+	SourceRef string `json:"source_ref,omitempty"`
+	Runtime   string `json:"runtime,omitempty"`
+	Backend   string `json:"backend,omitempty"`
+	SuiteID   string `json:"suite_id,omitempty"`
+	Until     string `json:"until,omitempty"`
 }
 
 // ScorecardReport is POST /agent/scorecard.
 // DecodeTokS is omitted unless the probe returned completion_tokens.
 // Sustained stays false for one sample. Prompt text is not a field.
 type ScorecardReport struct {
-	DeviceID    string  `json:"device_id"`
-	CatalogID   string  `json:"catalog_id"`
-	ImageHash   string  `json:"image_hash"`
-	Runtime     string  `json:"runtime"`
-	PromptPack  string  `json:"prompt_pack"`
-	ImageDigest string  `json:"image_digest,omitempty"`
-	SampleMs    int     `json:"sample_ms,omitempty"`
-	DecodeTokS  float64 `json:"decode_tok_s,omitempty"`
-	Sustained   bool    `json:"sustained"`
+	DeviceID    string   `json:"device_id"`
+	CatalogID   string   `json:"catalog_id"`
+	ImageHash   string   `json:"image_hash"`
+	Runtime     string   `json:"runtime"`
+	PromptPack  string   `json:"prompt_pack"`
+	ImageDigest string   `json:"image_digest,omitempty"`
+	SampleMs    int      `json:"sample_ms,omitempty"`
+	DecodeTokS  float64  `json:"decode_tok_s,omitempty"`
+	ThermalC    *float64 `json:"thermal_c,omitempty"`
+	Sustained   bool     `json:"sustained"`
 }
 
 // JobResultRequest is POST /agent/jobs/{job_id}/result.

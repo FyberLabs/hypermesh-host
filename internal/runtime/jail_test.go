@@ -43,7 +43,17 @@ func assertWorkloadJail(t *testing.T, args []string) {
 }
 
 func TestJailArgs(t *testing.T) {
-	assertWorkloadJail(t, append([]string{"run", "-d"}, JailArgs()...))
+	args := append([]string{"run", "-d"}, JailArgs()...)
+	assertWorkloadJail(t, args)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--network=host") || strings.Contains(joined, "--network host") {
+		t.Fatalf("must not use host network: %v", args)
+	}
+	// Overlay-only: no host docker.sock, no host net — default route off
+	// overlay is denied by --internal + no masquerade on create.
+	if strings.Contains(joined, "docker.sock") {
+		t.Fatalf("must not mount docker.sock: %v", args)
+	}
 }
 
 func TestEnsureWorkloadNetworkCreatesWhenMissing(t *testing.T) {
@@ -59,6 +69,13 @@ func TestEnsureWorkloadNetworkCreatesWhenMissing(t *testing.T) {
 		if len(args) >= 2 && args[0] == "network" && args[1] == "create" {
 			if !contains(args, "--internal") || !contains(args, WorkloadNetworkName) {
 				t.Fatalf("create args: %v", args)
+			}
+			joined := strings.Join(args, " ")
+			if !strings.Contains(joined, "enable_icc=false") {
+				t.Fatalf("want ICC off: %v", args)
+			}
+			if !strings.Contains(joined, "enable_ip_masquerade=false") {
+				t.Fatalf("want no masquerade / no default route off overlay: %v", args)
 			}
 			return []byte("netid\n"), nil
 		}

@@ -38,10 +38,16 @@ func workloadNetworkInspectArgs() []string {
 }
 
 func workloadNetworkCreateArgs() []string {
+	// --internal: no default route off the overlay to the host LAN / public
+	// internet. ICC and masquerade stay off so containers cannot hairpin to
+	// each other or SNAT onto a host path. Agent and door still reach the
+	// workload via docker-proxy on the WireGuard publish address.
 	return []string{
 		"network", "create",
 		"--driver", "bridge",
 		"--internal",
+		"--opt", "com.docker.network.bridge.enable_icc=false",
+		"--opt", "com.docker.network.bridge.enable_ip_masquerade=false",
 		WorkloadNetworkName,
 	}
 }
