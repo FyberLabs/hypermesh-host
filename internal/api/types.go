@@ -127,12 +127,16 @@ type ScorecardReport struct {
 // Sell fields are omitempty so lease_start / lease_stop / path_b
 // do not leak them. sell_pause must set SellState. passed=true
 // with sell_state=n/a is invalid on the control plane.
+// EgressOk / EgressReason are host observations for lab quarantine
+// soaks; omit means unobserved (plane fails closed for admission).
 type JobResultRequest struct {
-	Passed    bool      `json:"passed"`
-	ImageHash string    `json:"image_hash,omitempty"`
-	SellState SellState `json:"sell_state,omitempty"`
-	Until     string    `json:"until,omitempty"`
-	DeviceID  string    `json:"device_id,omitempty"`
+	Passed       bool      `json:"passed"`
+	ImageHash    string    `json:"image_hash,omitempty"`
+	SellState    SellState `json:"sell_state,omitempty"`
+	Until        string    `json:"until,omitempty"`
+	DeviceID     string    `json:"device_id,omitempty"`
+	EgressOk     *bool     `json:"egress_ok,omitempty"`
+	EgressReason string    `json:"egress_reason,omitempty"`
 }
 
 // TunnelStatus is the control-plane session state.

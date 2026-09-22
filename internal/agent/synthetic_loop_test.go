@@ -148,6 +148,13 @@ func TestSyntheticAgentLoop(t *testing.T) {
 		mu.Unlock()
 		return []byte("cid-synth\n"), nil
 	}}
+	// Stub egress observation so path_b does not share the lease docker Run hook.
+	a.dockerRun = func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte(`[{"Internal":true,"Options":{"com.docker.network.bridge.enable_icc":"false","com.docker.network.bridge.enable_ip_masquerade":"false"},"Containers":{}}]`), nil
+	}
+	a.egressSample = func(_ context.Context) ([]string, bool) {
+		return []string{}, true
+	}
 
 	waitLoop(t, a, func() bool {
 		if _, err := os.Stat(ownerSockPath(dir)); err == nil {
@@ -209,7 +216,13 @@ func TestSyntheticAgentLoop(t *testing.T) {
 
 	for _, r := range results {
 		s := string(r.Raw)
-		if strings.Contains(s, "sell_state") || strings.Contains(s, "reason") || strings.Contains(s, "reason_code") {
+		if strings.Contains(s, "sell_state") || strings.Contains(s, "reason_code") {
+			t.Fatalf("%s result shape must stay {passed, image_hash?}: %s", r.ID, s)
+		}
+		if r.ID != "syn-pathb" && strings.Contains(s, "egress_") {
+			t.Fatalf("%s must not carry egress fields: %s", r.ID, s)
+		}
+		if r.ID != "syn-pathb" && strings.Contains(s, `"reason"`) {
 			t.Fatalf("%s result shape must stay {passed, image_hash?}: %s", r.ID, s)
 		}
 		if strings.Contains(s, "ghcr.io") {
