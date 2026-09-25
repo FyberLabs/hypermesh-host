@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FyberLabs/hypermesh-host/internal/metrics"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
@@ -57,27 +58,45 @@ type Config struct {
 	// "1" / "userspace" forces that unit. "0" / "kernel" forces wg-quick.
 	// Empty stays on wg-quick (tests). The agent never spawns wireguard-go.
 	WGMode string
+	// MetricsAddr is the Prometheus text /metrics listener.
+	// Default 127.0.0.1:9464. Non-loopback is refused unless
+	// MetricsAllowNonLoopback is set. Never the tunnel address by default.
+	MetricsAddr string
+	// MetricsAllowNonLoopback permits a non-loopback MetricsAddr.
+	// The process logs a warning when it binds one.
+	MetricsAllowNonLoopback bool
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
 // after this returns.
 func FromEnv() Config {
 	return Config{
-		ControlPlaneURL: envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
-		TenantID:        os.Getenv("HYPERMESH_TENANT_ID"),
-		EnrollToken:     os.Getenv("HYPERMESH_ENROLL_TOKEN"),
-		StateDir:        envOr("HYPERMESH_STATE_DIR", defaultStateDir),
-		HeartbeatEvery:  defaultHeartbeat,
-		JobEvery:        defaultJobInterval,
-		DeviceSecret:    os.Getenv("HYPERMESH_DEVICE_SECRET"),
-		ImageHash:       os.Getenv("HYPERMESH_IMAGE_HASH"),
-		ListenPort:      envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
-		CompletionsURL:  os.Getenv("HYPERMESH_COMPLETIONS_URL"),
-		GGUFPath:        os.Getenv("HYPERMESH_GGUF_PATH"),
-		LlamaJinja:      envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
-		LlamaCtxSize:    envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
-		LlamaTimeout:    envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
-		WGMode:          wgModeFromEnv(),
+		ControlPlaneURL:         envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
+		TenantID:                os.Getenv("HYPERMESH_TENANT_ID"),
+		EnrollToken:             os.Getenv("HYPERMESH_ENROLL_TOKEN"),
+		StateDir:                envOr("HYPERMESH_STATE_DIR", defaultStateDir),
+		HeartbeatEvery:          defaultHeartbeat,
+		JobEvery:                defaultJobInterval,
+		DeviceSecret:            os.Getenv("HYPERMESH_DEVICE_SECRET"),
+		ImageHash:               os.Getenv("HYPERMESH_IMAGE_HASH"),
+		ListenPort:              envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
+		CompletionsURL:          os.Getenv("HYPERMESH_COMPLETIONS_URL"),
+		GGUFPath:                os.Getenv("HYPERMESH_GGUF_PATH"),
+		LlamaJinja:              envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
+		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
+		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
+		WGMode:                  wgModeFromEnv(),
+		MetricsAddr:             envOr("HYPERMESH_METRICS_ADDR", metrics.DefaultAddr),
+		MetricsAllowNonLoopback: envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
+	}
+}
+
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 

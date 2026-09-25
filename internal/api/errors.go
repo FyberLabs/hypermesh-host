@@ -43,6 +43,21 @@ var (
 	ErrMissingTenant = errors.New("hypermesh api: X-Tenant-ID is required")
 )
 
+// DecodeError is a JSON body this client could not decode.
+// The response body is not included; it may echo tokens or keys.
+type DecodeError struct {
+	Err error
+}
+
+func (e *DecodeError) Error() string {
+	if e == nil || e.Err == nil {
+		return "hypermesh api: decode"
+	}
+	return "hypermesh api: decode: " + e.Err.Error()
+}
+
+func (e *DecodeError) Unwrap() error { return e.Err }
+
 // StatusError is an unexpected HTTP status. Response bodies are not kept
 // (they may echo tokens or keys).
 type StatusError struct {

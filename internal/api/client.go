@@ -188,7 +188,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		return fmt.Errorf("hypermesh api: empty %d body", resp.StatusCode)
 	}
 	if err := json.Unmarshal(payload, dest); err != nil {
-		return fmt.Errorf("hypermesh api: decode: %w", err)
+		return &DecodeError{Err: err}
 	}
 	return nil
 }
