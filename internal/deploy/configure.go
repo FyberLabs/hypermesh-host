@@ -35,11 +35,13 @@ func RenderAgentEnv(controlPlane, tenant, token, stateDir, gguf string, enrolled
 		return "", fmt.Errorf("tenant id must be a UUID")
 	}
 	token = strings.TrimSpace(token)
-	if token == "" && !enrolled {
-		return "", fmt.Errorf("enroll token is required")
-	}
-	if token != "" && (strings.Contains(token, "\n") || strings.Contains(token, "\x00")) {
-		return "", fmt.Errorf("enroll token is not a single line")
+	if !enrolled {
+		if token == "" {
+			return "", fmt.Errorf("enroll token is required")
+		}
+		if strings.Contains(token, "\n") || strings.Contains(token, "\x00") {
+			return "", fmt.Errorf("enroll token is not a single line")
+		}
 	}
 	gguf = strings.TrimSpace(gguf)
 	if gguf == "" {
@@ -54,7 +56,7 @@ func RenderAgentEnv(controlPlane, tenant, token, stateDir, gguf string, enrolled
 	b.WriteString("# The device secret stays in the state dir device.json after enroll.\n")
 	fmt.Fprintf(&b, "HYPERMESH_CONTROL_PLANE_URL=%s\n", controlPlane)
 	fmt.Fprintf(&b, "HYPERMESH_TENANT_ID=%s\n", tenant)
-	if token != "" {
+	if token != "" && !enrolled {
 		fmt.Fprintf(&b, "HYPERMESH_ENROLL_TOKEN=%s\n", token)
 	}
 	fmt.Fprintf(&b, "HYPERMESH_STATE_DIR=%s\n", stateDir)

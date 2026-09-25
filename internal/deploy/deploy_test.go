@@ -234,7 +234,7 @@ func TestConnectRejectsHealthWithoutCatalog(t *testing.T) {
 
 func TestConnectTakesDeviceIDFromListedHost(t *testing.T) {
 	rows := []HostRecord{
-		{ID: seedDeviceID, Serial: "FYBER-AGX-ORIN-64-001"},
+		{ID: seedDeviceID, Serial: "seed-row"},
 		{ID: labDeviceID, Serial: labSerial},
 	}
 	id, err := DeviceIDFromList(rows, labSerial)
@@ -244,7 +244,7 @@ func TestConnectTakesDeviceIDFromListedHost(t *testing.T) {
 	if id != labDeviceID {
 		t.Fatalf("id %s", id)
 	}
-	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: "FYBER-AGX-ORIN-64-001"}}, labSerial); err == nil {
+	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: "seed-row"}}, labSerial); err == nil {
 		t.Fatal("missing listed host fell back to the seed row")
 	}
 	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: labSerial}}, labSerial); err == nil {
@@ -405,7 +405,7 @@ func TestRerunSkipsEnrollToken(t *testing.T) {
 	facts := goodFacts()
 	opt := readyOptions(t, root, lab, &units)
 	opt.Facts = &facts
-	opt.EnrollToken = ""
+	opt.EnrollToken = "stale-one-time-token"
 	opt.HTTP = lab.client
 	opt.PollEvery = time.Millisecond
 	opt.HeartbeatWait = time.Second
@@ -456,8 +456,27 @@ func TestEnrollTokenNotFromFlag(t *testing.T) {
 	if !strings.Contains(text, `"enroll-token-file"`) {
 		t.Fatal("enroll token file flag is missing")
 	}
-	if strings.Contains(text, "FYBER-AGX64") || strings.Contains(text, "f6124d28") {
-		t.Fatal("deploy command hardcodes a live serial or device id")
+	roots := []string{
+		filepath.Join("..", "..", "cmd", "hypermesh-deploy"),
+		".",
+	}
+	for _, root := range roots {
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(b), "FYBER-AGX64") || strings.Contains(string(b), "f6124d28") {
+				t.Fatalf("%s hardcodes a live serial or device id", path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -498,7 +517,7 @@ func (l *planeLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		old := now.Add(-24 * time.Hour)
 		rows := []HostRecord{
-			{ID: seedDeviceID, Serial: "FYBER-AGX-ORIN-64-001"},
+			{ID: seedDeviceID, Serial: "seed-row"},
 			{ID: labDeviceID, Serial: labSerial},
 		}
 		if l.seedFresh {
