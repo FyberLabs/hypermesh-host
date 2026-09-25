@@ -60,6 +60,13 @@ type Spec struct {
 	GGUFPath string
 	// Backend is the lease_start enum (optional). NVIDIA ignores it for argv.
 	Backend string
+	// LlamaJinja, LlamaCtxSize, and LlamaTimeout are the lease container's
+	// LLAMA_ARG_JINJA / LLAMA_ARG_CTX_SIZE / LLAMA_ARG_TIMEOUT. Empty uses
+	// DefaultLlamaJinja, DefaultLlamaCtxSize, and DefaultLlamaTimeout.
+	// CatalogID is the served model alias (--alias). Empty fails Start.
+	LlamaJinja   string
+	LlamaCtxSize string
+	LlamaTimeout string
 }
 
 // Handle is a started container or host process.
@@ -159,6 +166,8 @@ func ggufBind(host string) string {
 // Bind-mounts the host GGUF at /models/model.gguf:ro (not baked into the image).
 // JailArgs put the container on the internal workload network (not host,
 // not the default bridge with LAN egress).
+// The image entrypoint is replaced so llama-server --alias is the lease
+// catalog id and LLAMA_ARG_JINJA / CTX_SIZE / TIMEOUT are set. See llama.go.
 func StartArgs(spec Spec, ref string) []string {
 	args := []string{
 		"run", "-d", "--runtime=nvidia",
@@ -169,7 +178,8 @@ func StartArgs(spec Spec, ref string) []string {
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
 		args = append(args, "--name", name)
 	}
-	args = append(args, ref)
+	args = append(args, llamaServerDockerOpts(spec)...)
+	args = append(args, ref, "-c", llamaServerCommand)
 	return args
 }
 
@@ -187,6 +197,9 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	}
 	ref, err := ImageRef(spec.ImageDigest)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := requireServeAlias(spec.CatalogID); err != nil {
 		return nil, err
 	}
 	name := ContainerName(spec.LeaseID)

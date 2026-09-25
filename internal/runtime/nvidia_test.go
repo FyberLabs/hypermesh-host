@@ -23,9 +23,7 @@ func TestStartArgsUseNVIDIARuntimeNotGPUs(t *testing.T) {
 			t.Fatalf("must not use --gpus: %v", args)
 		}
 	}
-	if args[len(args)-1] != testRef {
-		t.Fatalf("ref last: %v", args)
-	}
+	imageBeforeCommand(t, args, testRef)
 	if !contains(args, "-p") || !contains(args, "127.0.0.1:8080:8080") {
 		t.Fatalf("must not publish on all interfaces: %v", args)
 	}
@@ -123,7 +121,7 @@ func TestStartPullThenRunStop(t *testing.T) {
 			return []byte{}, nil
 		},
 	}
-	h, err := n.Start(context.Background(), Spec{LeaseID: "lease-a", ImageDigest: testRef, Runtime: "nvidia"})
+	h, err := n.Start(context.Background(), Spec{LeaseID: "lease-a", CatalogID: "llama-3.1-8b-q4", ImageDigest: testRef, Runtime: "nvidia"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +150,10 @@ func TestStartPullThenRunStop(t *testing.T) {
 	if seen[len(seen)-1][len(seen[len(seen)-1])-1] != "hypermesh-lease-a" {
 		t.Fatalf("rm must target named container: %v", seen[len(seen)-1])
 	}
-	if seen[0][1] != testRef || seen[runIdx][len(seen[runIdx])-1] != testRef {
+	if seen[0][1] != testRef {
 		t.Fatalf("ref not used: %+v", seen)
 	}
+	imageBeforeCommand(t, seen[runIdx], testRef)
 	if !contains(seen[runIdx], "hypermesh-lease-a") {
 		t.Fatalf("name: %v", seen[runIdx])
 	}
@@ -200,7 +199,7 @@ func TestStartPullUnauthorizedUsesLocalImage(t *testing.T) {
 			}
 		},
 	}
-	h, err := n.Start(context.Background(), Spec{LeaseID: "lease-local", ImageDigest: testRef, Runtime: "nvidia"})
+	h, err := n.Start(context.Background(), Spec{LeaseID: "lease-local", CatalogID: "llama-3.1-8b-q4", ImageDigest: testRef, Runtime: "nvidia"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +230,7 @@ func TestStartPullFailsWhenImageAbsent(t *testing.T) {
 			return nil, errors.New("no such image")
 		},
 	}
-	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-missing", ImageDigest: testRef, Runtime: "nvidia"})
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-missing", CatalogID: "llama-3.1-8b-q4", ImageDigest: testRef, Runtime: "nvidia"})
 	if err == nil {
 		t.Fatal("expected pull error")
 	}
@@ -256,7 +255,7 @@ func TestStartRunErrorIncludesDockerOutput(t *testing.T) {
 			return []byte{}, nil
 		},
 	}
-	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-cdi", ImageDigest: testRef, Runtime: "nvidia"})
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-cdi", CatalogID: "llama-3.1-8b-q4", ImageDigest: testRef, Runtime: "nvidia"})
 	if err == nil {
 		t.Fatal("expected start error")
 	}
@@ -288,7 +287,7 @@ func TestStartRemovesCreatedLeftover(t *testing.T) {
 			}
 		},
 	}
-	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-cdi", ImageDigest: testRef, Runtime: "nvidia"})
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-cdi", CatalogID: "llama-3.1-8b-q4", ImageDigest: testRef, Runtime: "nvidia"})
 	if err == nil {
 		t.Fatal("expected start error")
 	}
@@ -326,7 +325,7 @@ func TestStartLeavesNonCreatedContainer(t *testing.T) {
 			}
 		},
 	}
-	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-live", ImageDigest: testRef, Runtime: "nvidia"})
+	_, err := n.Start(context.Background(), Spec{LeaseID: "lease-live", CatalogID: "llama-3.1-8b-q4", ImageDigest: testRef, Runtime: "nvidia"})
 	if err == nil {
 		t.Fatal("expected start error")
 	}
@@ -455,7 +454,7 @@ func TestStopThenStartReusesExitedName(t *testing.T) {
 			}
 		},
 	}
-	spec := Spec{LeaseID: leaseID, ImageDigest: testRef, Runtime: "nvidia"}
+	spec := Spec{LeaseID: leaseID, CatalogID: "llama-3.1-8b-q4", ImageDigest: testRef, Runtime: "nvidia"}
 	h, err := n.Start(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -488,6 +487,20 @@ func TestDockerAbsent(t *testing.T) {
 	if !dockerAbsent(nil, errors.New("no such container: hypermesh-x")) {
 		t.Fatal("err no such container")
 	}
+}
+
+func imageBeforeCommand(t *testing.T, args []string, ref string) {
+	t.Helper()
+	for i, a := range args {
+		if a != ref {
+			continue
+		}
+		if i+1 < len(args) && args[i+1] == "-c" {
+			return
+		}
+		t.Fatalf("image ref must precede -c llama-server command: %v", args)
+	}
+	t.Fatalf("missing image ref %s in %v", ref, args)
 }
 
 func contains(args []string, want string) bool {
