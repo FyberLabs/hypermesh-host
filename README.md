@@ -22,11 +22,9 @@ go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
 
 `build_commit` on the heartbeat prefers that ldflags value. If it is empty, this box uses the VCS revision from `debug.ReadBuildInfo` (`vcs.revision`). If that is empty too, the value is `unknown`.
 
-`hypermesh-deploy agx` preflights the pinned AGX image, writes the existing agent env and systemd units, then starts `hypermesh-wg` and `hypermesh-agent`. It stops on the first failure. The device id comes from the plane device list for serial `FYBER-AGX64-1`. Catalog must be HTTP 200 at `/api/v1/hypermesh/catalog`.
+`hypermesh-deploy agx` preflights the pinned AGX image, writes the existing agent env and systemd units, then starts `hypermesh-wg` and `hypermesh-agent`. It stops on the first failure. `-serial` is required. The device id comes from the plane device list for that serial. Catalog must be HTTP 200 at `/api/v1/hypermesh/catalog`. The enroll token is `HYPERMESH_ENROLL_TOKEN` or `-enroll-token-file`, not a command-line value. A rerun on a box that already has `device.json` does not need a fresh token.
 
-`hypermesh-muse` is one Linux image (`deploy/muse/Dockerfile`) and three placements (`HYPERMESH_MUSE_PLACEMENT`): `outside` (off the network), `host` (enrolls and heartbeats as host type `supervisor`, refuses `lease_start`), and `renter` (`POST /v1/chat/completions` on the chat gateway). It holds credentials and restarts the local runtime.
-
-Release archives for both binaries are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
+Release archives are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
 
 Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
 
@@ -197,7 +195,6 @@ Leave `/etc/hypermesh/agent.env` and `/var/lib/hypermesh/device.json` alone.
 ```
 cmd/agent             host process (hypermesh-agent)
 cmd/hypermesh-deploy  AGX preflight, configure, connect
-cmd/hypermesh-muse    supervisor (outside, host, renter)
 internal/api        locked HTTP client (agent routes + optional enroll-token helper)
 internal/pathb      thin-v1 (telem + optional local completions; path_b fails on reboot)
 internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (gated)
@@ -207,7 +204,6 @@ internal/metrics    loopback Prometheus text /metrics
 internal/buildinfo  build commit (ldflags, else VCS revision)
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
 deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit
-deploy/muse         supervisor image (one image, placements outside / host / renter)
 deploy/seeed-j4012  Super J4012 first-boot and overlay
 deploy/rocm         AMD ROCm host-image notes (scaffold)
 deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)

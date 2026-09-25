@@ -13,12 +13,8 @@ import (
 const (
 	catalogPath = "/api/v1/hypermesh/catalog"
 	devicesPath = "/api/v1/hypermesh/devices"
-	// liveAGXSerial is the known host. The device id is whatever the
-	// plane lists for this serial after GET /devices.
-	liveAGXSerial = "FYBER-AGX64-1"
-	// seedDeviceID is the placeholder row. It is not FYBER-AGX64-1.
-	// The live id f6124d28-772c-4f1f-8e03-1a7a17724381 is taken from
-	// the list. This constant is only a rejection.
+	// seedDeviceID is the placeholder row. The device id for a serial
+	// is whatever GET /devices lists. This constant is only a rejection.
 	seedDeviceID = "a6400000-0640-4000-8000-000000000001"
 )
 

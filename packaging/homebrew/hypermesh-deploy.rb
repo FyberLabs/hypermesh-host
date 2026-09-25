@@ -22,8 +22,8 @@ class HypermeshDeploy < Formula
       This formula installs the operator CLI. The AGX enroll path is still
       hypermesh-agent plus hypermesh-wg on the box.
 
-      The device id is taken from the plane device list for serial
-      FYBER-AGX64-1. There is no device-id flag.
+      -serial is required. The device id is taken from the plane
+      device list for that serial. There is no device-id flag.
 
       Dev install, without Homebrew:
         go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest

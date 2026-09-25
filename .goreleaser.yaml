@@ -13,16 +13,6 @@ builds:
       - arm64
     ldflags:
       - -s -w
-  - id: hypermesh-muse
-    main: ./cmd/hypermesh-muse
-    binary: hypermesh-muse
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w
 
 archives:
   - id: hypermesh-deploy
@@ -30,11 +20,6 @@ archives:
       - hypermesh-deploy
     formats: [tar.gz]
     name_template: "hypermesh-deploy_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  - id: hypermesh-muse
-    ids:
-      - hypermesh-muse
-    formats: [tar.gz]
-    name_template: "hypermesh-muse_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt

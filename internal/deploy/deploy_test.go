@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	testTenant = "8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d"
-	liveAGXID  = "f6124d28-772c-4f1f-8e03-1a7a17724381"
+	testTenant  = "8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d"
+	labSerial   = "lab-host-1"
+	labDeviceID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 )
 
 func goodFacts() Facts {
@@ -234,20 +235,20 @@ func TestConnectRejectsHealthWithoutCatalog(t *testing.T) {
 func TestConnectTakesDeviceIDFromListedHost(t *testing.T) {
 	rows := []HostRecord{
 		{ID: seedDeviceID, Serial: "FYBER-AGX-ORIN-64-001"},
-		{ID: liveAGXID, Serial: liveAGXSerial},
+		{ID: labDeviceID, Serial: labSerial},
 	}
-	id, err := DeviceIDFromList(rows, liveAGXSerial)
+	id, err := DeviceIDFromList(rows, labSerial)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != liveAGXID {
+	if id != labDeviceID {
 		t.Fatalf("id %s", id)
 	}
-	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: "FYBER-AGX-ORIN-64-001"}}, liveAGXSerial); err == nil {
-		t.Fatal("missing live host fell back to the seed row")
+	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: "FYBER-AGX-ORIN-64-001"}}, labSerial); err == nil {
+		t.Fatal("missing listed host fell back to the seed row")
 	}
-	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: liveAGXSerial}}, liveAGXSerial); err == nil {
-		t.Fatal("seed id on the live serial was accepted")
+	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: labSerial}}, labSerial); err == nil {
+		t.Fatal("seed id on the listed serial was accepted")
 	}
 }
 
@@ -267,7 +268,7 @@ func TestHeartbeatMustBeTheListedHost(t *testing.T) {
 	if err == nil {
 		t.Fatal("seed heartbeat was treated as the live host")
 	}
-	if !strings.Contains(err.Error(), liveAGXID) {
+	if !strings.Contains(err.Error(), labDeviceID) {
 		t.Fatalf("error should name the listed device, got %v", err)
 	}
 	if strings.Contains(err.Error(), seedDeviceID) {
@@ -276,7 +277,7 @@ func TestHeartbeatMustBeTheListedHost(t *testing.T) {
 }
 
 func TestRenderAgentEnvUsesTestPlane(t *testing.T) {
-	body, err := RenderAgentEnv("", testTenant, "tok", "", "/models/model.gguf")
+	body, err := RenderAgentEnv("", testTenant, "tok", "", "/models/model.gguf", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,6 +352,9 @@ func TestReleaseArchivesAreLinuxAMD64AndARM64(t *testing.T) {
 			t.Fatalf("goreleaser missing %s", want)
 		}
 	}
+	if strings.Contains(text, "hypermesh-muse") {
+		t.Fatal("goreleaser still builds hypermesh-muse")
+	}
 	formula, err := os.ReadFile(filepath.Join("..", "..", "packaging", "homebrew", "hypermesh-deploy.rb"))
 	if err != nil {
 		t.Fatal(err)
@@ -364,6 +368,96 @@ func TestReleaseArchivesAreLinuxAMD64AndARM64(t *testing.T) {
 	}
 	if !strings.Contains(string(readme), "homebrew-tap") || !strings.Contains(string(readme), "go install") {
 		t.Fatal("tap notes should say what the tap still needs and keep go install")
+	}
+}
+
+func TestSerialRequired(t *testing.T) {
+	root := t.TempDir()
+	facts := goodFacts()
+	var units [][]string
+	opt := readyOptions(t, root, &planeLab{}, &units)
+	opt.Facts = &facts
+	opt.Serial = ""
+	err := AGX{}.Pipeline(opt).Run(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "serial") {
+		t.Fatalf("error %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "etc/hypermesh/agent.env")); !os.IsNotExist(statErr) {
+		t.Fatal("configure wrote agent.env without a serial")
+	}
+	if len(units) != 0 {
+		t.Fatalf("units started: %v", units)
+	}
+}
+
+func TestRerunSkipsEnrollToken(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "var/lib/hypermesh")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"device_id":"` + labDeviceID + `","device_secret":"hm_dev_fixture"}` + "\n"
+	if err := os.WriteFile(filepath.Join(state, "device.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lab := newPlaneLab(t)
+	var units [][]string
+	facts := goodFacts()
+	opt := readyOptions(t, root, lab, &units)
+	opt.Facts = &facts
+	opt.EnrollToken = ""
+	opt.HTTP = lab.client
+	opt.PollEvery = time.Millisecond
+	opt.HeartbeatWait = time.Second
+	if err := (AGX{}).Pipeline(opt).Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	env, err := os.ReadFile(filepath.Join(root, "etc/hypermesh/agent.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(env), "HYPERMESH_ENROLL_TOKEN") {
+		t.Fatalf("rerun wrote an enroll token\n%s", env)
+	}
+}
+
+func TestEnrollTokenFromEnvOrFile(t *testing.T) {
+	got, err := LoadEnrollToken("from-env", "")
+	if err != nil || got != "from-env" {
+		t.Fatalf("env %q %v", got, err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = LoadEnrollToken("", path)
+	if err != nil || got != "from-file" {
+		t.Fatalf("file %q %v", got, err)
+	}
+	if _, err := LoadEnrollToken("from-env", path); err == nil {
+		t.Fatal("mismatched env and file were accepted")
+	}
+	got, err = LoadEnrollToken("from-file", path)
+	if err != nil || got != "from-file" {
+		t.Fatalf("match %q %v", got, err)
+	}
+}
+
+func TestEnrollTokenNotFromFlag(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "cmd", "hypermesh-deploy", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Contains(text, `"enroll-token"`) {
+		t.Fatal("enroll token is still a command-line flag")
+	}
+	if !strings.Contains(text, `"enroll-token-file"`) {
+		t.Fatal("enroll token file flag is missing")
+	}
+	if strings.Contains(text, "FYBER-AGX64") || strings.Contains(text, "f6124d28") {
+		t.Fatal("deploy command hardcodes a live serial or device id")
 	}
 }
 
@@ -405,7 +499,7 @@ func (l *planeLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		old := now.Add(-24 * time.Hour)
 		rows := []HostRecord{
 			{ID: seedDeviceID, Serial: "FYBER-AGX-ORIN-64-001"},
-			{ID: liveAGXID, Serial: liveAGXSerial},
+			{ID: labDeviceID, Serial: labSerial},
 		}
 		if l.seedFresh {
 			rows[0].LastHeartbeat = &now
@@ -425,7 +519,7 @@ func (l *planeLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (l *planeLab) arm(id string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if !l.armLive || id != liveAGXID {
+	if !l.armLive || id != labDeviceID {
 		return
 	}
 	now := time.Now()
@@ -441,13 +535,14 @@ func readyOptions(t *testing.T, root string, lab *planeLab, units *[][]string) O
 	return Options{
 		ControlPlaneURL: base,
 		TenantID:        testTenant,
+		Serial:          labSerial,
 		EnrollToken:     "one-time-token",
 		GGUFPath:        "/home/chris/hypermesh/workload/model.gguf",
 		Root:            root,
 		Run: func(_ context.Context, name string, args ...string) error {
 			*units = append(*units, append([]string{name}, args...))
 			if lab != nil && len(args) > 0 && args[len(args)-1] == agentUnitName {
-				lab.arm(liveAGXID)
+				lab.arm(labDeviceID)
 			}
 			return nil
 		},

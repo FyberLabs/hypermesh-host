@@ -2,9 +2,11 @@ package deploy
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -25,8 +27,8 @@ type Options struct {
 	Root            string
 	EnvFile         string
 	UnitDir         string
-	// Serial is the known host. Empty uses FYBER-AGX64-1.
-	// The device id is not an option. It comes from the device list.
+	// Serial is the known host. Required. The device id is not an
+	// option. It comes from the device list.
 	Serial string
 	// HTTP is used for catalog and the device list. Nil uses a 15s client.
 	HTTP *http.Client
@@ -55,9 +57,6 @@ func (o Options) withDefaults() Options {
 	}
 	if o.UnitDir == "" {
 		o.UnitDir = defaultUnitDir
-	}
-	if o.Serial == "" {
-		o.Serial = liveAGXSerial
 	}
 	if o.Run == nil {
 		o.Run = func(ctx context.Context, name string, args ...string) error {
@@ -102,7 +101,11 @@ func loadFacts(ctx context.Context, opt Options) (Facts, error) {
 }
 
 func configure(_ context.Context, opt Options) error {
-	body, err := RenderAgentEnv(opt.ControlPlaneURL, opt.TenantID, opt.EnrollToken, opt.StateDir, opt.GGUFPath)
+	if strings.TrimSpace(opt.Serial) == "" {
+		return fmt.Errorf("known host serial is required")
+	}
+	enrolled := AlreadyEnrolled(opt.Root, opt.StateDir)
+	body, err := RenderAgentEnv(opt.ControlPlaneURL, opt.TenantID, opt.EnrollToken, opt.StateDir, opt.GGUFPath, enrolled)
 	if err != nil {
 		return err
 	}
