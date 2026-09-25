@@ -228,12 +228,24 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	}
 	switch sess.Status {
 	case api.TunnelAllocated:
+		// Panopticon POST /api/v1/hypermesh/agent/tunnel/peer (PR #128, fc1dfa1):
+		// JSON is only {"peer_public_key":"<standard base64>"}. Auth is Bearer
+		// device secret plus X-Tenant-ID (device_id query is not checked).
+		// 200 is the session with no host private key; 404 if no tunnel; 409
+		// if revoked. The same public key may be posted again. POST when GET
+		// status=allocated and peer_public_key is empty or not ours, before
+		// wg-quick and ack. The private key stays in keyDir.
 		priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
 		if err != nil {
 			return err
 		}
-		if err := a.client.ProposePeer(ctx, a.state.DeviceID, api.TunnelPeerRequest{PeerPublicKey: pub}); err != nil {
-			return err
+		if strings.TrimSpace(priv) == "" {
+			return tunnel.ErrNoHostKey
+		}
+		if sessionNeedsPeer(sess.PeerPublicKey, pub) {
+			if err := a.client.ProposePeer(ctx, a.state.DeviceID, api.TunnelPeerRequest{PeerPublicKey: pub}); err != nil {
+				return err
+			}
 		}
 		a.bindIP = sess.ClientAddress
 		a.refreshCompletions()
@@ -271,6 +283,12 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	default:
 		return fmt.Errorf("hypermesh: unknown tunnel status %s", sess.Status)
 	}
+}
+
+// sessionNeedsPeer is true when the plane has no host public key yet, or a
+// different one. A match means this box already registered the local key.
+func sessionNeedsPeer(planePub, localPub string) bool {
+	return strings.TrimSpace(planePub) != strings.TrimSpace(localPub)
 }
 
 func (a *Agent) liveCompletionsURL() string {

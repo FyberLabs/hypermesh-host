@@ -383,27 +383,92 @@ func TestTunnelGetAck(t *testing.T) {
 }
 
 func TestProposePeer(t *testing.T) {
-	var got string
+	const hostPub = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	const notSent = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+	var rawBody []byte
 	mux := http.NewServeMux()
 	mux.HandleFunc(PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
 		requireBearer(t, r)
+		if r.Method != http.MethodPost {
+			t.Errorf("method %s", r.Method)
+		}
 		if r.URL.Query().Get("device_id") != testDevice {
 			t.Errorf("peer query")
 		}
-		var body TunnelPeerRequest
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		got = body.PeerPublicKey
+		var err error
+		rawBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"allocated","peer_public_key":"` + hostPub + `"}`))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	c := NewClient(srv.URL, testTenant)
 	c.DeviceSecret = testSecret
-	if err := c.ProposePeer(context.Background(), testDevice, TunnelPeerRequest{PeerPublicKey: "hostpub"}); err != nil {
+	if err := c.ProposePeer(context.Background(), testDevice, TunnelPeerRequest{PeerPublicKey: hostPub}); err != nil {
 		t.Fatal(err)
 	}
-	if got != "hostpub" {
-		t.Fatalf("posted %q", got)
+	var obj map[string]any
+	if err := json.Unmarshal(rawBody, &obj); err != nil {
+		t.Fatal(err)
+	}
+	if len(obj) != 1 {
+		t.Fatalf("POST body must be public key only, got %s", rawBody)
+	}
+	if obj["peer_public_key"] != hostPub {
+		t.Fatalf("posted %#v", obj)
+	}
+	if _, ok := obj["peer_private_key"]; ok {
+		t.Fatal("private key field must not be posted")
+	}
+	if strings.Contains(string(rawBody), notSent) || strings.Contains(string(rawBody), "private") {
+		t.Fatalf("body leaked key material: %s", rawBody)
+	}
+}
+
+func TestGetTunnelWithoutPeerPrivateKey(t *testing.T) {
+	const leaked = "PLANEPRIVATEKEYMUSTNOTSTICK"
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireBearer(t, r)
+		n++
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"tunnel_id":"tun-1","lease_id":"lease-1","status":"allocated","endpoint":"wg.test.hyperme.sh:51820","server_public_key":"c2VydmVycHVi","allowed_ips":"10.77.0.0/24","client_address":"10.77.0.2/32"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"tunnel_id":"tun-1","lease_id":"lease-1","status":"allocated","endpoint":"wg.test.hyperme.sh:51820","server_public_key":"c2VydmVycHVi","peer_public_key":"aG9zdHB1Yg==","allowed_ips":"10.77.0.0/24","client_address":"10.77.0.2/32","peer_private_key":"` + leaked + `"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
+
+	sess, err := c.GetTunnel(context.Background(), testDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess == nil || sess.Status != TunnelAllocated || sess.PeerPublicKey != "" {
+		t.Fatalf("session without peer key: %+v", sess)
+	}
+	if sess.ClientAddress != "10.77.0.2/32" || sess.Endpoint != "wg.test.hyperme.sh:51820" {
+		t.Fatalf("session %+v", sess)
+	}
+
+	sess, err = c.GetTunnel(context.Background(), testDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.PeerPublicKey != "aG9zdHB1Yg==" {
+		t.Fatalf("peer public %+v", sess)
+	}
+	out, err := json.Marshal(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), leaked) || strings.Contains(string(out), "peer_private_key") {
+		t.Fatalf("parsed session kept a private key: %s", out)
 	}
 }
 

@@ -327,6 +327,142 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 	})
 }
 
+func TestSessionNeedsPeer(t *testing.T) {
+	if !sessionNeedsPeer("", "pub") {
+		t.Fatal("empty plane key needs a POST")
+	}
+	if !sessionNeedsPeer("other", "pub") {
+		t.Fatal("mismatch needs a POST")
+	}
+	if sessionNeedsPeer("pub", "pub") || sessionNeedsPeer("  pub  ", "pub") {
+		t.Fatal("matching plane key must not POST again")
+	}
+}
+
+func TestAllocatedTunnelPostsPublicKeyOnly(t *testing.T) {
+	var mu sync.Mutex
+	var peerBodies [][]byte
+	var hbBodies [][]byte
+	var registered string
+	acks, gets := 0, 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		hbBodies = append(hbBodies, raw)
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		acks++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Errorf("peer json: %v", err)
+		}
+		mu.Lock()
+		peerBodies = append(peerBodies, raw)
+		registered = body.PeerPublicKey
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gets++
+		pub := registered
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, api.TunnelSession{
+			TunnelID:        "tun-1",
+			LeaseID:         "lease-1",
+			Status:          api.TunnelAllocated,
+			Endpoint:        "wg.test.hyperme.sh:51820",
+			ServerPublicKey: "serverpub",
+			PeerPublicKey:   pub,
+			AllowedIPs:      "10.77.0.0/24",
+			ClientAddress:   "10.77.0.2/32",
+		})
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	waitLoop(t, a, func() bool {
+		ft.mu.Lock()
+		n := len(ft.applied)
+		ft.mu.Unlock()
+		mu.Lock()
+		nAck := acks
+		nPeer := len(peerBodies)
+		nGet := gets
+		mu.Unlock()
+		// GET 3 starts only after the previous sync finished, so an extra POST
+		// would already be counted.
+		return n >= 1 && nAck >= 1 && nPeer >= 1 && nGet >= 3
+	})
+
+	keyRaw, err := os.ReadFile(filepath.Join(a.keyDir, "hypermesh.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv := strings.TrimSpace(string(keyRaw))
+	pub, err := tunnel.PublicFromPrivate(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ft.mu.Lock()
+	if len(ft.applied) < 1 || ft.applied[0].PeerPrivateKey != priv {
+		ft.mu.Unlock()
+		t.Fatal("apply must use the local private key")
+	}
+	ft.mu.Unlock()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(peerBodies) != 1 {
+		t.Fatalf("peer POSTs = %d, want 1 (idempotent once the plane has the key)", len(peerBodies))
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(peerBodies[0], &obj); err != nil {
+		t.Fatal(err)
+	}
+	if len(obj) != 1 || obj["peer_public_key"] != pub {
+		t.Fatalf("peer body %s", peerBodies[0])
+	}
+	if strings.Contains(string(peerBodies[0]), priv) {
+		t.Fatal("peer POST contained the private key")
+	}
+	for _, raw := range hbBodies {
+		if strings.Contains(string(raw), priv) || strings.Contains(string(raw), "peer_private_key") {
+			t.Fatalf("heartbeat contained key material: %s", raw)
+		}
+	}
+}
+
 func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
 	var mu sync.Mutex
 	acks, gets := 0, 0
