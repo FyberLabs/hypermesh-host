@@ -494,7 +494,7 @@ func TestPeerNotRegisteredPostsThenRegets(t *testing.T) {
 		mu.Unlock()
 		if n == 1 {
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"detail":{"code":"peer_public_key_not_registered"}}`))
+			_, _ = w.Write([]byte(`{"code":"peer_public_key_not_registered","detail":"No host WireGuard public key is registered for this allocated tunnel. POST the public key to /api/v1/hypermesh/agent/tunnel/peer first."}`))
 			return
 		}
 		sess := allocatedTunnel("lease-1")
@@ -830,6 +830,101 @@ func TestRotationWaitsForGetThenAcksAgain(t *testing.T) {
 		t.Fatalf("rotation must ack the new config, acks %d", acks)
 	}
 	mu.Unlock()
+}
+
+func TestGetRevokedStatusDoesNotRepost(t *testing.T) {
+	var buf strings.Builder
+	var mu sync.Mutex
+	posts := 0
+	planePub := ""
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		posts++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pub := planePub
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, api.TunnelSession{
+			TunnelID:      "tun-revoked",
+			LeaseID:       "lease-revoked",
+			Status:        api.TunnelRevoked,
+			PeerPublicKey: pub,
+		})
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("revoked GET must not ack")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	if _, _, err := preloadPostedKey(a); err != nil {
+		t.Fatal(err)
+	}
+	a.applied = "was-up"
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	for i := 0; i < 2; i++ {
+		if err := a.syncTunnel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	if posts != 0 {
+		mu.Unlock()
+		t.Fatalf("null peer_public_key posts %d, want 0", posts)
+	}
+	mu.Unlock()
+	ft.mu.Lock()
+	if len(ft.applied) != 0 || ft.teardowns != 2 {
+		ft.mu.Unlock()
+		t.Fatalf("null key apply %d teardown %d", len(ft.applied), ft.teardowns)
+	}
+	ft.mu.Unlock()
+	if a.applied != "" {
+		t.Fatal("revoked GET must clear the applied fingerprint")
+	}
+	if strings.Count(buf.String(), "host peer revoked, torn down") != 1 {
+		t.Fatalf("revoked log should appear once, logs:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "posting the public key") || strings.Contains(buf.String(), "tunnel sync failed") {
+		t.Fatalf("revoked GET must not re-register or fail the sync, logs:\n%s", buf.String())
+	}
+
+	mu.Lock()
+	planePub = "OTHERPUBLICKEYNOTOURS++++++++++++++++++++="
+	mu.Unlock()
+	for i := 0; i < 2; i++ {
+		if err := a.syncTunnel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	if posts != 0 {
+		mu.Unlock()
+		t.Fatalf("mismatched peer_public_key posts %d, want 0", posts)
+	}
+	mu.Unlock()
+	ft.mu.Lock()
+	if len(ft.applied) != 0 || ft.teardowns != 4 {
+		ft.mu.Unlock()
+		t.Fatalf("mismatch apply %d teardown %d", len(ft.applied), ft.teardowns)
+	}
+	ft.mu.Unlock()
+	if strings.Count(buf.String(), "host peer revoked, torn down") != 1 {
+		t.Fatalf("revoked streak must not log again, logs:\n%s", buf.String())
+	}
 }
 
 func TestRevokedPeerDoesNotBringInterfaceUp(t *testing.T) {

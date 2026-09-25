@@ -105,41 +105,18 @@ func detailString(payload []byte) string {
 	return s
 }
 
-// peerCode reads a typed error code. The upcoming GET 409 uses
-// peer_public_key_not_registered. The envelope may be code, detail (string
-// or object), or error.code. The body is not returned to callers.
+// peerCode reads the top-level code field. Panopticon #197 (signed off, not
+// merged) uses ApiErrorBody: code is peer_public_key_not_registered and
+// detail is a sentence. detail is not the match.
 func peerCode(payload []byte) string {
 	if len(payload) == 0 {
 		return ""
 	}
 	var body struct {
-		Code   string          `json:"code"`
-		Detail json.RawMessage `json:"detail"`
-		Error  struct {
-			Code string `json:"code"`
-		} `json:"error"`
+		Code string `json:"code"`
 	}
 	if err := json.Unmarshal(payload, &body); err != nil {
 		return ""
 	}
-	if body.Code != "" {
-		return body.Code
-	}
-	if body.Error.Code != "" {
-		return body.Error.Code
-	}
-	if len(body.Detail) == 0 {
-		return ""
-	}
-	var asString string
-	if err := json.Unmarshal(body.Detail, &asString); err == nil {
-		return asString
-	}
-	var asObj struct {
-		Code string `json:"code"`
-	}
-	if err := json.Unmarshal(body.Detail, &asObj); err == nil {
-		return asObj.Code
-	}
-	return ""
+	return body.Code
 }

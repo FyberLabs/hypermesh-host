@@ -527,40 +527,41 @@ func TestProposePeerRevokedAndUnauthorized(t *testing.T) {
 
 func TestGetTunnelPeerNotRegistered(t *testing.T) {
 	const code = PeerPublicKeyNotRegistered
-	bodies := []string{
-		`{"detail":{"code":"` + code + `"}}`,
-		`{"detail":"` + code + `"}`,
-		`{"code":"` + code + `"}`,
-		`{"error":{"code":"` + code + `"}}`,
+	// Panopticon #197: code is the match. detail is a sentence, not the code.
+	raw := `{"code":"` + code + `","detail":"No host WireGuard public key is registered for this allocated tunnel. POST the public key to /api/v1/hypermesh/agent/tunnel/peer first."}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireBearer(t, r)
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(raw))
+	}))
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
+	_, err := c.GetTunnel(context.Background(), testDevice)
+	srv.Close()
+	if !errors.Is(err, ErrPeerPublicKeyNotRegistered) {
+		t.Fatalf("code field: %v", err)
 	}
-	for _, raw := range bodies {
+
+	for _, body := range []string{
+		`{"detail":"` + code + `"}`,
+		`{"detail":{"code":"` + code + `"}}`,
+		`{"error":{"code":"` + code + `"}}`,
+		`{"detail":"Tunnel is revoked"}`,
+	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requireBearer(t, r)
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(raw))
+			_, _ = w.Write([]byte(body))
 		}))
 		c := NewClient(srv.URL, testTenant)
 		c.DeviceSecret = testSecret
 		_, err := c.GetTunnel(context.Background(), testDevice)
 		srv.Close()
-		if !errors.Is(err, ErrPeerPublicKeyNotRegistered) {
-			t.Fatalf("body %s: %v", raw, err)
+		if errors.Is(err, ErrPeerPublicKeyNotRegistered) {
+			t.Fatalf("detail must not select the peer code: %s", body)
 		}
-	}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"detail":"Tunnel is revoked"}`))
-	}))
-	t.Cleanup(srv.Close)
-	c := NewClient(srv.URL, testTenant)
-	c.DeviceSecret = testSecret
-	_, err := c.GetTunnel(context.Background(), testDevice)
-	if errors.Is(err, ErrPeerPublicKeyNotRegistered) {
-		t.Fatal("revoked 409 must not look like a missing peer key")
-	}
-	if err == nil {
-		t.Fatal("expected error")
+		if err == nil {
+			t.Fatalf("expected error for %s", body)
+		}
 	}
 }
 

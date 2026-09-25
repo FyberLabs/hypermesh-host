@@ -40,6 +40,7 @@ type Agent struct {
 	peerPosted      bool   // this process already POSTed postedPub (404 counts: the device key was saved)
 	postedPub       string // last public key sent to POST /agent/tunnel/peer
 	loggedNoTunnel  bool   // already logged success-with-no-tunnel
+	loggedRevoked   bool   // already logged a GET 200 status=revoked streak
 	now             func() time.Time
 	sleep           func(time.Duration)
 	resultTries     int
@@ -222,10 +223,12 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	// Plane contract (panopticon routes.py): Bearer hm_dev_ plus X-Tenant-ID.
 	// POST /agent/tunnel/peer has no device_id. Body is only peer_public_key.
 	// 404 "Tunnel not found" still saved the device key. 409 "Tunnel is revoked"
-	// means do not bring WireGuard up. GET 204 is no tunnel. GET 200 may have
-	// a null peer_public_key. Null, a different key, or GET 409
-	// peer_public_key_not_registered means POST then re-GET. On rotation keep
-	// the live config until a GET shows the new public key, then switch and
+	// means do not bring WireGuard up. GET 204 is no tunnel. GET 200
+	// status=revoked is not an error: tear WireGuard down and do not POST,
+	// even when peer_public_key is null or different. GET 200 status=allocated
+	// with a null or different key, or GET 409 whose body code is
+	// peer_public_key_not_registered (not detail), means POST then re-GET.
+	// On rotation keep the live config until a GET shows the new public key, then switch and
 	// ack again (ack_applied is not cleared on the plane).
 	priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
 	if err != nil {
@@ -244,6 +247,11 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	}
 
 	sess, err := a.client.GetTunnel(ctx, a.state.DeviceID)
+	if err == nil && sess != nil && sess.Status == api.TunnelRevoked {
+		// 200 status=revoked is not an error. Do not POST because the
+		// public key is null or different.
+		return a.tunnelRevoked(ctx, sess)
+	}
 	sess, err = a.reregisterIfNeeded(ctx, sess, err, pub)
 	if errors.Is(err, errRevokedStop) {
 		return nil
@@ -262,12 +270,7 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 		}
 		return a.applyMatched(ctx, sess, priv)
 	case api.TunnelRevoked:
-		if err := a.tunnels.Teardown(ctx); err != nil {
-			return err
-		}
-		a.applied = ""
-		a.log.Info("host peer revoked, torn down", "tunnel_id", sess.TunnelID)
-		return nil
+		return a.tunnelRevoked(ctx, sess)
 	default:
 		return fmt.Errorf("hypermesh: unknown tunnel status %s", sess.Status)
 	}
@@ -323,6 +326,18 @@ func (a *Agent) registerPeer(ctx context.Context, pub string) error {
 	return nil
 }
 
+func (a *Agent) tunnelRevoked(ctx context.Context, sess *api.TunnelSession) error {
+	if err := a.tunnels.Teardown(ctx); err != nil {
+		return err
+	}
+	if !a.loggedRevoked {
+		a.log.Info("host peer revoked, torn down", "tunnel_id", sess.TunnelID)
+		a.loggedRevoked = true
+	}
+	a.applied = ""
+	return nil
+}
+
 func (a *Agent) tunnelGone(ctx context.Context) error {
 	if err := a.tunnels.Teardown(ctx); err != nil {
 		return err
@@ -335,6 +350,7 @@ func (a *Agent) tunnelGone(ctx context.Context) error {
 }
 
 func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv string) error {
+	a.loggedRevoked = false
 	a.bindIP = sess.ClientAddress
 	a.refreshCompletions()
 	ts := tunnel.Session{
