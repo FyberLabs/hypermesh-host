@@ -1,0 +1,28 @@
+version: 2
+
+project_name: hypermesh-host
+
+builds:
+  - id: hypermesh-deploy
+    main: ./cmd/hypermesh-deploy
+    binary: hypermesh-deploy
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: hypermesh-deploy
+    ids:
+      - hypermesh-deploy
+    formats: [tar.gz]
+    name_template: "hypermesh-deploy_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true

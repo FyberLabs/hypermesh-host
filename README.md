@@ -17,9 +17,14 @@ Go 1.22+.
 ```bash
 go test ./...
 go build -ldflags "-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=$(git rev-parse HEAD)" -o hypermesh-agent ./cmd/agent
+go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
 ```
 
 `build_commit` on the heartbeat prefers that ldflags value. If it is empty, this box uses the VCS revision from `debug.ReadBuildInfo` (`vcs.revision`). If that is empty too, the value is `unknown`.
+
+`hypermesh-deploy agx` preflights the pinned AGX image, writes the existing agent env and systemd units, then starts `hypermesh-wg` and `hypermesh-agent`. It stops on the first failure. `-serial` is required. The device id comes from the plane device list for that serial. Catalog must be HTTP 200 at `/api/v1/hypermesh/catalog`. The enroll token is `HYPERMESH_ENROLL_TOKEN` or `-enroll-token-file`, not a command-line value. A rerun on a box that already has `device.json` does not need a fresh token.
+
+Release archives are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
 
 Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
 
@@ -188,7 +193,8 @@ Leave `/etc/hypermesh/agent.env` and `/var/lib/hypermesh/device.json` alone.
 ## Layout
 
 ```
-cmd/agent           process
+cmd/agent             host process (hypermesh-agent)
+cmd/hypermesh-deploy  AGX preflight, configure, connect
 internal/api        locked HTTP client (agent routes + optional enroll-token helper)
 internal/pathb      thin-v1 (telem + optional local completions; path_b fails on reboot)
 internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (gated)
