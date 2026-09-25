@@ -44,7 +44,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake \
         git \
         ca-certificates \
-        libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Toolkit is in the NGC CUDA devel image. Host driver comes from the AGX
@@ -54,27 +53,39 @@ ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:/usr/local/lib:${LD_LIBRARY_PATH:-}"
 
 # AGX Orin is SM 8.7. Override LLAMA_CPP_REF if you need a different llama.cpp tag.
-# Pin b4689: upstream has no b4690 (gap b4689 → b4692). AGX64-1 built this tag.
-ARG LLAMA_CPP_REF=b4689
+# Pin v0.5.0 (latest stable ggml-org/llama.cpp release, 2026-09-23; tag
+# commit 7fe450e19305b828c199d602c23a8337aaa1f03b). Previous pin b4689
+# (90e4dba, 2025-02-11) predates streamed tool calls: llama-server returned
+# HTTP 500 "Cannot use tools with stream" and empty tool_call ids, so
+# editor clients (Cursor / Cline / Continue / Copilot stream with tools)
+# could not use a lease. Streamed tool calls + generated tool_call ids
+# landed in ggml-org/llama.cpp#12379 (merge f5cd27b, 2025-05-25).
+# In v0.5.0 --jinja is ON by default (LLAMA_ARG_JINJA env still honoured).
+ARG LLAMA_CPP_REF=v0.5.0
 WORKDIR /src
-# llama.cpp b4689 defaults BUILD_SHARED_LIBS=ON. CMAKE_LIBRARY_OUTPUT_DIRECTORY
-# is build/bin (same dir as llama-server). install(TARGETS) for the runtime
-# .so set is: llama, ggml, ggml-base, plus ggml_add_backend_library backends
-# (ggml-cpu always; ggml-cuda when GGML_CUDA=ON). common is STATIC.
-# cmake --install of the whole tree also install()s every example RUNTIME
-# (llama-cli, …) — those were not built (--target llama-server only), so
-# a full cmake --install fails. Copy the shared libs cmake actually wrote.
+# llama.cpp v0.5.0 defaults BUILD_SHARED_LIBS=ON. CMAKE_LIBRARY_OUTPUT_DIRECTORY
+# is build/bin (same dir as llama-server). cmake --install of the whole
+# tree also install()s every tool RUNTIME that was not built
+# (--target llama-server only), so copy the shared libs cmake actually wrote.
 # AGX64-1 live image that only installed the binary then rm -rf /src had
-# empty /usr/local/lib and Exit 127:
-#   llama-server: error while loading shared libraries: libllama.so
-# ldd: libllama.so, libggml.so, libggml-base.so => not found.
-# Install list (b4689, GGML_CUDA=ON, GGML_BACKEND_DL=OFF):
-#   /usr/local/bin/llama-server
-#   /usr/local/lib/libllama.so
-#   /usr/local/lib/libggml.so
-#   /usr/local/lib/libggml-base.so
-#   /usr/local/lib/libggml-cpu.so
-#   /usr/local/lib/libggml-cuda.so
+# empty /usr/local/lib and Exit 127 (libllama.so not found) — keep the copy.
+# v0.5.0 vs b4689 build changes:
+#   - llama-server now also links shared libllama-server-impl.so,
+#     libllama-common.so and libmtmd.so (b4689 had common STATIC and no
+#     mtmd), so copy build/bin/lib*.so* instead of the old
+#     libllama.so* libggml*.so* list (that list would Exit 127 again).
+#     The ldd guard below fails the build if anything but libcuda is missing.
+#   - GGML_CUDA is the CUDA switch (LLAMA_CUBLAS is a FATAL_ERROR; we
+#     already used GGML_CUDA). CMAKE_CUDA_ARCHITECTURES=87 unchanged.
+#   - LLAMA_CURL is deprecated/ignored; HTTPS is LLAMA_OPENSSL. The jailed
+#     workload has no egress and never downloads models, so OPENSSL=OFF and
+#     libcurl4-openssl-dev is dropped.
+#   - Web UI assets: LLAMA_USE_PREBUILT_UI=ON would fetch from a HF bucket
+#     at build time. OFF keeps the build offline/deterministic; the API
+#     (/v1/chat/completions) is unaffected.
+# Expected /usr/local/lib set (v0.5.0, GGML_CUDA=ON, GGML_BACKEND_DL=OFF):
+#   libllama.so libllama-common.so libllama-server-impl.so libmtmd.so
+#   libggml.so libggml-base.so libggml-cpu.so libggml-cuda.so (+ SONAME links)
 # CUDA devel stubs (NVIDIA standard link path): Docker 29 Buildx cannot
 # inject the host driver at build. The devel image ships
 # ${CUDA_HOME}/lib64/stubs/libcuda.so (SONAME libcuda.so.1). Symlink the
@@ -82,17 +93,22 @@ WORKDIR /src
 # libggml-cuda.so finish the link. Do not add stubs to LD_LIBRARY_PATH
 # — runtime --runtime=nvidia provides the real driver.
 RUN ln -sf "${CUDA_HOME}/lib64/stubs/libcuda.so" "${CUDA_HOME}/lib64/stubs/libcuda.so.1" \
-    && git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggerganov/llama.cpp.git \
+    && git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git \
     && cmake -S llama.cpp -B build \
         -DGGML_CUDA=ON \
         -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DLLAMA_BUILD_IS_DEV=OFF \
+        -DLLAMA_OPENSSL=OFF \
+        -DLLAMA_USE_PREBUILT_UI=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
         -DCMAKE_EXE_LINKER_FLAGS="-L${CUDA_HOME}/lib64/stubs -Wl,-rpath-link,${CUDA_HOME}/lib64/stubs" \
         -DCMAKE_SHARED_LINKER_FLAGS="-L${CUDA_HOME}/lib64/stubs -Wl,-rpath-link,${CUDA_HOME}/lib64/stubs" \
     && cmake --build build -j"$(nproc)" --target llama-server \
     && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server \
     && mkdir -p /usr/local/lib \
-    && cp -a build/bin/libllama.so* build/bin/libggml*.so* /usr/local/lib/ \
+    && cp -a build/bin/lib*.so* /usr/local/lib/ \
     && ldconfig \
+    && ! (ldd /usr/local/bin/llama-server | grep -v 'libcuda.so' | grep 'not found') \
     && rm -rf /src
 
 # Weights stay on the host. Catalog id stays llama-3.1-8b-q4.
