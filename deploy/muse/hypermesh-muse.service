@@ -1,0 +1,22 @@
+[Unit]
+Description=Hypermesh Muse supervisor
+Documentation=https://github.com/FyberLabs/hypermesh-host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HYPERMESH_MUSE_PLACEMENT=outside
+EnvironmentFile=-/etc/hypermesh/muse.env
+# Renter API key, not written to muse.json. Use one of:
+#   LoadCredential=renter_api_key:/etc/hypermesh/renter.key
+#   HYPERMESH_MUSE_API_KEY in the EnvironmentFile (mode 0600)
+#   HYPERMESH_MUSE_API_KEY_FILE
+# Enroll token: HYPERMESH_ENROLL_TOKEN or HYPERMESH_ENROLL_TOKEN_FILE.
+# It is dropped after enroll. Do not pass either secret on the command line.
+ExecStart=/usr/local/bin/hypermesh-muse
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

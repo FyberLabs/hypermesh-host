@@ -58,6 +58,13 @@ type Config struct {
 	// "1" / "userspace" forces that unit. "0" / "kernel" forces wg-quick.
 	// Empty stays on wg-quick (tests). The agent never spawns wireguard-go.
 	WGMode string
+	// HostType is "model" (default, omitted on the wire) or "supervisor".
+	// A supervisor host enrolls and heartbeats and refuses lease_start.
+	// The value is sent as host_type so the plane can keep it out of offers.
+	HostType string
+	// WGKeyDir is the host WireGuard private key directory.
+	// Empty uses /etc/wireguard. The key stays on this host.
+	WGKeyDir string
 	// MetricsAddr is the Prometheus text /metrics listener.
 	// Default 127.0.0.1:9464. Non-loopback is refused unless
 	// MetricsAllowNonLoopback is set. Never the tunnel address by default.
@@ -86,6 +93,8 @@ func FromEnv() Config {
 		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
 		WGMode:                  wgModeFromEnv(),
+		HostType:                strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
+		WGKeyDir:                strings.TrimSpace(os.Getenv("HYPERMESH_WG_KEY_DIR")),
 		MetricsAddr:             envOr("HYPERMESH_METRICS_ADDR", metrics.DefaultAddr),
 		MetricsAllowNonLoopback: envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
 	}
@@ -143,7 +152,38 @@ func (c Config) Validate() error {
 	if !tunnel.ValidWGMode(c.WGMode) {
 		return fmt.Errorf("hypermesh: HYPERMESH_WG_USERSPACE must be auto, 1, or 0")
 	}
+	switch strings.ToLower(strings.TrimSpace(c.HostType)) {
+	case "", HostTypeModel, HostTypeSupervisor:
+	default:
+		return fmt.Errorf("hypermesh: host type must be model or supervisor")
+	}
 	return nil
+}
+
+// ReportedHostType is the host_type sent on enroll and heartbeat.
+// Empty stays off the wire so a model host matches the previous body.
+func (c Config) ReportedHostType() string {
+	switch strings.ToLower(strings.TrimSpace(c.HostType)) {
+	case HostTypeSupervisor:
+		return HostTypeSupervisor
+	case HostTypeModel:
+		return HostTypeModel
+	default:
+		return ""
+	}
+}
+
+// SupervisorHost is a non-model host. It enrolls and heartbeats.
+// lease_start for a weight is refused.
+func (c Config) SupervisorHost() bool {
+	return strings.EqualFold(strings.TrimSpace(c.HostType), HostTypeSupervisor)
+}
+
+func (c Config) wireguardDir() string {
+	if d := strings.TrimSpace(c.WGKeyDir); d != "" {
+		return d
+	}
+	return tunnel.DefaultKeyDir
 }
 
 func validPort(s string) bool {

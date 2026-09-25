@@ -19,9 +19,12 @@ const (
 )
 
 // EnrollRequest is POST /agent/enroll.
+// HostType is "model" or "supervisor". supervisor must not be offered
+// a weight. Empty omits the field so older agents stay unchanged.
 type EnrollRequest struct {
 	EnrollToken string `json:"enroll_token"`
 	ImageHash   string `json:"image_hash,omitempty"`
+	HostType    string `json:"host_type,omitempty"`
 }
 
 // EnrollResponse is the 200 body from enroll.
@@ -43,6 +46,9 @@ type HeartbeatRequest struct {
 	ThermalC        *float64    `json:"thermal_c,omitempty"`
 	SellState       SellState   `json:"sell_state,omitempty"`
 	Health          *HostHealth `json:"health,omitempty"`
+	// HostType matches enroll. "supervisor" is a host the plane should
+	// keep out of offers. Empty omits the field.
+	HostType string `json:"host_type,omitempty"`
 }
 
 // Sync error classes for HostHealth.LastSyncErrorClass. Empty means none

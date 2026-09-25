@@ -64,6 +64,9 @@ type Agent struct {
 	// countLeases counts running lease containers. Nil uses docker ps.
 	// A false ok omits lease_container_count. Tests stub this.
 	countLeases func(ctx context.Context) (n int, ok bool)
+	// OnEnrolled runs after enroll has succeeded, including when
+	// device.json was already on disk. It drops the one-time token.
+	OnEnrolled func()
 
 	healthMu   sync.Mutex
 	lastSyncAt time.Time
@@ -77,6 +80,17 @@ type Agent struct {
 }
 
 const certLeaseID = "cert-bench"
+
+const (
+	// HostTypeModel is a host that can load a weight.
+	HostTypeModel = "model"
+	// HostTypeSupervisor enrolls and heartbeats, owns no weight, and
+	// refuses lease_start. The plane should keep this host out of offers.
+	HostTypeSupervisor = "supervisor"
+)
+
+// SupervisorLeaseRefuse is the lease_start reason for a supervisor host.
+const SupervisorLeaseRefuse = "supervisor host refuses lease_start"
 
 // New builds an agent. log may be nil.
 func New(cfg Config, log *slog.Logger) (*Agent, error) {
@@ -105,7 +119,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		hip:     runtime.NewHIP(),
 		metal:   runtime.NewMetal(),
 		tunnels: wg,
-		keyDir:  "/etc/wireguard",
+		keyDir:  cfg.wireguardDir(),
 		log:     log,
 	}, nil
 }
@@ -162,6 +176,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		a.state = st
 		a.client.DeviceSecret = st.DeviceSecret
 		a.log.Info("using stored device", "device_id", st.DeviceID)
+		a.forgetEnrollToken()
 		return nil
 	}
 	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) == "" {
@@ -180,6 +195,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	resp, err := a.client.Enroll(ctx, api.EnrollRequest{
 		EnrollToken: a.cfg.EnrollToken,
 		ImageHash:   image,
+		HostType:    a.cfg.ReportedHostType(),
 	})
 	if err != nil {
 		return fmt.Errorf("hypermesh: could not enroll this box: %w", err)
@@ -198,7 +214,16 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	a.state = st
 	a.client.DeviceSecret = st.DeviceSecret
 	a.log.Info("enrolled", "device_id", st.DeviceID, "credential_prefix", st.CredentialPrefix)
+	a.forgetEnrollToken()
 	return nil
+}
+
+// forgetEnrollToken drops the one-time token after enroll has succeeded.
+func (a *Agent) forgetEnrollToken() {
+	a.cfg.EnrollToken = ""
+	if a.OnEnrolled != nil {
+		a.OnEnrolled()
+	}
 }
 
 func (a *Agent) heartbeat(ctx context.Context) error {
@@ -217,6 +242,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		ThermalC:        snap.ThermalC,
 		SellState:       sell.SellState,
 		Health:          a.safeHealth(ctx),
+		HostType:        a.cfg.ReportedHostType(),
 	})
 	if err != nil {
 		a.recordHeartbeat(err)
@@ -789,6 +815,10 @@ func (a *Agent) backendStub(job api.Job) (pathb.Result, bool) {
 }
 
 func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
+	if a.cfg.SupervisorHost() {
+		a.log.Info("lease_start refused", "reason", SupervisorLeaseRefuse, "host_type", HostTypeSupervisor)
+		return pathb.Result{Passed: false, Reason: SupervisorLeaseRefuse}
+	}
 	if res, stub := a.backendStub(job); stub {
 		return res
 	}

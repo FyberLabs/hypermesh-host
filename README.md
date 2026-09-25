@@ -21,6 +21,8 @@ go build -ldflags "-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Com
 
 `build_commit` on the heartbeat prefers that ldflags value. If it is empty, this box uses the VCS revision from `debug.ReadBuildInfo` (`vcs.revision`). If that is empty too, the value is `unknown`.
 
+`hypermesh-muse` is one Linux image (`deploy/muse/Dockerfile`, Alpine runtime) and three placements (`HYPERMESH_MUSE_PLACEMENT`): `outside` (off the network), `host` (enrolls and heartbeats with `host_type=supervisor` so the plane can keep it out of offers, and refuses `lease_start`), and `renter` (`POST /v1/chat/completions` on the chat gateway). It restarts the local runtime. The renter API key comes from `HYPERMESH_MUSE_API_KEY`, `HYPERMESH_MUSE_API_KEY_FILE`, or a systemd credential named `renter_api_key`. The enroll token comes from `HYPERMESH_ENROLL_TOKEN` or `HYPERMESH_ENROLL_TOKEN_FILE` and is dropped after enroll. Neither value is written to `muse.json`. Host WireGuard keys stay on the host. This does not certify a host.
+
 Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
 
 Tests use `net/http/httptest` fixtures of the locked shapes. They do not need a live Panopticon.
