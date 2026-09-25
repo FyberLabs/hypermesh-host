@@ -429,13 +429,16 @@ func (a *Agent) ensureCertSample(ctx context.Context) func() {
 		return noop
 	}
 	handle, err := a.runtime.Start(ctx, runtime.Spec{
-		LeaseID:     certLeaseID,
-		CatalogID:   catalog.Llama318BQ4,
-		ImageDigest: digest,
-		Runtime:     "nvidia",
-		HostPort:    a.cfg.PublishPort(),
-		BindAddress: a.bindIP,
-		GGUFPath:    gguf,
+		LeaseID:      certLeaseID,
+		CatalogID:    catalog.Llama318BQ4,
+		ImageDigest:  digest,
+		Runtime:      "nvidia",
+		HostPort:     a.cfg.PublishPort(),
+		BindAddress:  a.bindIP,
+		GGUFPath:     gguf,
+		LlamaJinja:   a.cfg.LlamaJinja,
+		LlamaCtxSize: a.cfg.LlamaCtxSize,
+		LlamaTimeout: a.cfg.LlamaTimeout,
 	})
 	if err != nil {
 		a.log.Info("cert sample skipped", "reason", err.Error())
@@ -642,14 +645,17 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
-		LeaseID:     job.LeaseID,
-		CatalogID:   job.CatalogID,
-		ImageDigest: job.ImageDigest,
-		Runtime:     job.Runtime,
-		HostPort:    a.cfg.PublishPort(),
-		BindAddress: a.bindIP,
-		GGUFPath:    gguf,
-		Backend:     job.Backend,
+		LeaseID:      job.LeaseID,
+		CatalogID:    job.CatalogID,
+		ImageDigest:  job.ImageDigest,
+		Runtime:      job.Runtime,
+		HostPort:     a.cfg.PublishPort(),
+		BindAddress:  a.bindIP,
+		GGUFPath:     gguf,
+		Backend:      job.Backend,
+		LlamaJinja:   a.cfg.LlamaJinja,
+		LlamaCtxSize: a.cfg.LlamaCtxSize,
+		LlamaTimeout: a.cfg.LlamaTimeout,
 	})
 	if err != nil {
 		reason := leaseStartFailReason(err)
@@ -701,6 +707,8 @@ func leaseStartFailReason(err error) string {
 		return "image_digest is not repo@digest"
 	case errors.Is(err, runtime.ErrNoLeaseID):
 		return "lease_start requires lease_id"
+	case errors.Is(err, runtime.ErrNoCatalogID):
+		return "catalog_id required for llama-server alias"
 	case errors.Is(err, runtime.ErrNoGGUF):
 		return "no GGUF path"
 	case errors.Is(err, runtime.ErrGGUFNotFile):

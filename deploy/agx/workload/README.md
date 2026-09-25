@@ -112,3 +112,5 @@ sudo docker run --runtime=nvidia --platform linux/arm64 \
 - `POST /v1/chat/completions`
 - GPU path: `--runtime=nvidia` (not x86 `--gpus`)
 - CUDA build target: SM **87** (`CMAKE_CUDA_ARCHITECTURES=87`)
+
+`entrypoint.sh` still checks `/models/model.gguf` and execs `llama-server` with `--alias hypermesh-test`. The host agent does not use that alias: llama.cpp CLI flags beat `LLAMA_ARG_*`, so `lease_start` overrides the entrypoint and serves the lease catalog id (for example `llama-3.1-8b-q4`) with `LLAMA_ARG_JINJA=1`, `LLAMA_ARG_CTX_SIZE=16384`, and `LLAMA_ARG_TIMEOUT=1800`. A later image that keeps this entrypoint contract does not need a rebuild for those settings.

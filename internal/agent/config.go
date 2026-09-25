@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
 const (
@@ -42,6 +44,12 @@ type Config struct {
 	// GGUFPath is the host file bind-mounted at /models/model.gguf:ro.
 	// Required for lease_start. Empty refuses; do not fall back to a cottage path.
 	GGUFPath string
+	// LlamaJinja, LlamaCtxSize, and LlamaTimeout are the lease container's
+	// llama-server settings (LLAMA_ARG_JINJA, LLAMA_ARG_CTX_SIZE,
+	// LLAMA_ARG_TIMEOUT). Empty uses the runtime defaults (1, 16384, 1800).
+	LlamaJinja   string
+	LlamaCtxSize string
+	LlamaTimeout string
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
@@ -59,6 +67,9 @@ func FromEnv() Config {
 		ListenPort:      envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
 		CompletionsURL:  os.Getenv("HYPERMESH_COMPLETIONS_URL"),
 		GGUFPath:        os.Getenv("HYPERMESH_GGUF_PATH"),
+		LlamaJinja:      envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
+		LlamaCtxSize:    envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
+		LlamaTimeout:    envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
 	}
 }
 

@@ -30,6 +30,9 @@ func main() {
 	flag.StringVar(&cfg.ListenPort, "listen-port", cfg.ListenPort, "host port published to the workload :8080 (HYPERMESH_LISTEN_PORT)")
 	flag.StringVar(&cfg.CompletionsURL, "completions-url", cfg.CompletionsURL, "local OpenAI-shaped completions URL (HYPERMESH_COMPLETIONS_URL)")
 	flag.StringVar(&cfg.GGUFPath, "gguf-path", cfg.GGUFPath, "host GGUF bind-mounted at /models/model.gguf:ro (HYPERMESH_GGUF_PATH)")
+	flag.StringVar(&cfg.LlamaJinja, "llama-jinja", cfg.LlamaJinja, "lease llama-server LLAMA_ARG_JINJA (HYPERMESH_LLAMA_JINJA)")
+	flag.StringVar(&cfg.LlamaCtxSize, "llama-ctx-size", cfg.LlamaCtxSize, "lease llama-server LLAMA_ARG_CTX_SIZE (HYPERMESH_LLAMA_CTX_SIZE)")
+	flag.StringVar(&cfg.LlamaTimeout, "llama-timeout", cfg.LlamaTimeout, "lease llama-server LLAMA_ARG_TIMEOUT seconds (HYPERMESH_LLAMA_TIMEOUT)")
 
 	if pre, ownerArgs, ok := splitOwnerArgs(os.Args[1:]); ok {
 		if err := flag.CommandLine.Parse(pre); err != nil {

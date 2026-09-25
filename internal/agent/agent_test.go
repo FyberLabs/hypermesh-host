@@ -637,9 +637,43 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	if !strings.Contains(joined, "hypermesh-lease-2") || !strings.Contains(joined, ref) {
 		t.Fatalf("name/ref %v", runArgs)
 	}
+	assertLeaseLlamaServer(t, runArgs, "llama-3.1-8b-q4", "1", "16384", "1800")
 	if postedHash != wantHash {
 		t.Fatalf("lease_start result image_hash %q want GGUF %q", postedHash, wantHash)
 	}
+}
+
+func assertLeaseLlamaServer(t *testing.T, args []string, catalog, jinja, ctxSize, timeout string) {
+	t.Helper()
+	if got := dockerEnvValue(args, "LLAMA_ARG_JINJA"); got != jinja {
+		t.Fatalf("LLAMA_ARG_JINJA=%q want %q in %v", got, jinja, args)
+	}
+	if got := dockerEnvValue(args, "LLAMA_ARG_CTX_SIZE"); got != ctxSize {
+		t.Fatalf("LLAMA_ARG_CTX_SIZE=%q want %q in %v", got, ctxSize, args)
+	}
+	if got := dockerEnvValue(args, "LLAMA_ARG_TIMEOUT"); got != timeout {
+		t.Fatalf("LLAMA_ARG_TIMEOUT=%q want %q in %v", got, timeout, args)
+	}
+	if got := dockerEnvValue(args, runtime.ServeAliasEnv); got != catalog {
+		t.Fatalf("alias %q want catalog %q in %v", got, catalog, args)
+	}
+	joined := strings.Join(args, "\n")
+	if !strings.Contains(joined, "--entrypoint") || !strings.Contains(joined, "/bin/sh") {
+		t.Fatalf("entrypoint override: %v", args)
+	}
+	if !strings.Contains(joined, "--alias") || strings.Contains(joined, "hypermesh-test") {
+		t.Fatalf("alias must be the catalog id, not hypermesh-test: %v", args)
+	}
+}
+
+func dockerEnvValue(args []string, key string) string {
+	prefix := key + "="
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-e" && strings.HasPrefix(args[i+1], prefix) {
+			return strings.TrimPrefix(args[i+1], prefix)
+		}
+	}
+	return ""
 }
 
 func findDockerRun(calls [][]string) []string {
@@ -691,6 +725,13 @@ func TestLeaseStartBackends(t *testing.T) {
 			if tc.wantPass {
 				_ = readyLeaseStart(t, a)
 			}
+			wantJinja, wantCtx, wantTimeout := "1", "16384", "1800"
+			if tc.name == "cuda-jetson" {
+				a.cfg.LlamaJinja = "1"
+				a.cfg.LlamaCtxSize = "32768"
+				a.cfg.LlamaTimeout = "2400"
+				wantCtx, wantTimeout = "32768", "2400"
+			}
 			a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 				dockerCalls = append(dockerCalls, append([]string{}, args...))
 				return []byte("cid\n"), nil
@@ -723,6 +764,7 @@ func TestLeaseStartBackends(t *testing.T) {
 				if strings.Contains(joined, "--network=host") || !strings.Contains(joined, runtime.WorkloadNetworkName) {
 					t.Fatalf("workload jail network: %v", runArgs)
 				}
+				assertLeaseLlamaServer(t, runArgs, "llama-3.1-8b-q4", wantJinja, wantCtx, wantTimeout)
 			} else if len(dockerCalls) != 0 {
 				t.Fatalf("stub must not call docker, calls=%v", dockerCalls)
 			}
@@ -1088,6 +1130,35 @@ func TestLeaseStartCUDAJetsonEmptyDigestStillFails(t *testing.T) {
 	}
 	if dockerCalls != 0 {
 		t.Fatalf("empty digest must not invoke docker, calls=%d", dockerCalls)
+	}
+}
+
+func TestLeaseStartRequiresCatalogAlias(t *testing.T) {
+	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
+	var dockerCalls int
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	_ = readyLeaseStart(t, a)
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		dockerCalls++
+		return []byte("cid\n"), nil
+	}}
+	got := a.runJob(context.Background(), api.Job{
+		JobID:       "j-noalias",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-noalias",
+		ImageDigest: ref,
+		Runtime:     "nvidia",
+		Backend:     "cuda-jetson",
+	})
+	if got.Passed || got.Reason != "catalog_id required for llama-server alias" {
+		t.Fatalf("missing catalog id must fail closed: %+v", got)
+	}
+	if dockerCalls != 0 {
+		t.Fatalf("missing catalog id must not invoke docker, calls=%d", dockerCalls)
 	}
 }
 
@@ -1675,6 +1746,19 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	}
 	if cfg.GGUFHostPath() != "" {
 		t.Fatalf("unset GGUF path must be empty, got %q", cfg.GGUFHostPath())
+	}
+	if cfg.LlamaJinja != "1" || cfg.LlamaCtxSize != "16384" || cfg.LlamaTimeout != "1800" {
+		t.Fatalf("llama defaults %+v", cfg)
+	}
+}
+
+func TestLlamaServerEnvOverrides(t *testing.T) {
+	t.Setenv("HYPERMESH_LLAMA_JINJA", "1")
+	t.Setenv("HYPERMESH_LLAMA_CTX_SIZE", "32768")
+	t.Setenv("HYPERMESH_LLAMA_TIMEOUT", "900")
+	cfg := FromEnv()
+	if cfg.LlamaJinja != "1" || cfg.LlamaCtxSize != "32768" || cfg.LlamaTimeout != "900" {
+		t.Fatalf("llama env %+v", cfg)
 	}
 }
 
