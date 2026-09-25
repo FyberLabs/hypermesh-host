@@ -1,4 +1,4 @@
-package muse
+package supervisor
 
 import (
 	"context"
@@ -69,7 +69,7 @@ func TestOutsideRestartsRuntimeAndDoesNotEnroll(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "hm_renter_secret") || strings.Contains(string(raw), "api_key") {
-		t.Fatalf("muse.json stored the renter key\n%s", raw)
+		t.Fatalf("supervisor.json stored the renter key\n%s", raw)
 	}
 	if loaded.APIKey != "" || loaded.Placement != PlacementOutside {
 		t.Fatalf("loaded %+v", loaded)
@@ -255,12 +255,12 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "one-time") || strings.Contains(string(raw), "enroll_token") {
-		t.Fatalf("enroll token remained in muse.json\n%s", raw)
+		t.Fatalf("enroll token remained in supervisor.json\n%s", raw)
 	}
 }
 
 func TestDockerfileIsOneImage(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "muse", "Dockerfile"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "supervisor", "Dockerfile"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,8 +268,8 @@ func TestDockerfileIsOneImage(t *testing.T) {
 	if strings.Count(text, "\nFROM ")+boolTo(strings.HasPrefix(text, "FROM ")) != 2 {
 		t.Fatalf("want a build stage and one runtime image\n%s", text)
 	}
-	if !strings.Contains(text, "hypermesh-muse") {
-		t.Fatal("image does not carry hypermesh-muse")
+	if !strings.Contains(text, "hypermesh-supervisor") {
+		t.Fatal("image does not carry hypermesh-supervisor")
 	}
 	if !strings.Contains(text, "golang:1.22-bookworm") {
 		t.Fatal("build stage should stay on the golang bookworm image")
@@ -288,7 +288,7 @@ func TestDockerfileIsOneImage(t *testing.T) {
 	}
 }
 
-func TestSecretsStayOutOfMuseJSON(t *testing.T) {
+func TestSecretsStayOutOfSupervisorJSON(t *testing.T) {
 	dir := t.TempDir()
 	legacy := "{\n  \"placement\": \"outside\",\n  \"enroll_token\": \"legacy-token\",\n  \"api_key\": \"hm_renter_secret\"\n}\n"
 	if err := os.WriteFile(filepath.Join(dir, credFile), []byte(legacy), 0o600); err != nil {
@@ -321,7 +321,7 @@ func TestSecretsStayOutOfMuseJSON(t *testing.T) {
 		t.Fatal("legacy enroll token was not kept until enroll succeeded")
 	}
 	if strings.Contains(string(raw), "hm_renter_secret") {
-		t.Fatalf("api key rewritten into muse.json\n%s", raw)
+		t.Fatalf("api key rewritten into supervisor.json\n%s", raw)
 	}
 	secret := `{"device_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","device_secret":"hm_dev_fixture"}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, deviceFile), []byte(secret), 0o600); err != nil {
@@ -370,7 +370,7 @@ func TestRenterKeyFromEnvironmentOrCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "hm_from_env") || strings.Contains(string(raw), "env-token") {
-		t.Fatalf("env secrets were copied into muse.json\n%s", raw)
+		t.Fatalf("env secrets were written into supervisor.json\n%s", raw)
 	}
 
 	credDir := t.TempDir()

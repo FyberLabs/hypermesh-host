@@ -1,4 +1,4 @@
-// Package muse is the supervisor that restarts a local runtime and
+// Package supervisor is the supervisor that restarts a local runtime and
 // keeps placement settings. One process, three placements:
 //
 //   - outside: not on the network
@@ -7,8 +7,8 @@
 //
 // The supervisor owns the local AI process. The renter API key and the
 // one-time enroll token stay in the environment or a systemd credential.
-// They are not rewritten into muse.json on start.
-package muse
+// They are not rewritten into supervisor.json on start.
+package supervisor
 
 import (
 	"bytes"
@@ -42,7 +42,7 @@ const (
 	ControlPlaneStubPath = "/api/v1/hypermesh/renter/chat/completions"
 
 	DefaultChatBase = "https://chat.test.hyperme.sh"
-	credFile        = "muse.json"
+	credFile        = "supervisor.json"
 	deviceFile      = "device.json"
 
 	credAPIKey      = "hypermesh-api-key"
@@ -59,23 +59,23 @@ func ParsePlacement(s string) (string, error) {
 	case PlacementRenter:
 		return PlacementRenter, nil
 	default:
-		return "", fmt.Errorf("muse: placement must be outside, host, or renter")
+		return "", fmt.Errorf("supervisor: placement must be outside, host, or renter")
 	}
 }
 
 // Credentials are the in-memory settings for this process.
-// muse.json is mode 0600 and stores placement, tenant, lease, and chat
+// supervisor.json is mode 0600 and stores placement, tenant, lease, and chat
 // base. APIKey is never written. EnrollToken is kept in memory. A legacy
-// enroll_token already in muse.json stays until enroll succeeds, then
+// enroll_token already in supervisor.json stays until enroll succeeds, then
 // it is removed. Device secrets stay in device.json.
 type Credentials struct {
 	Placement string `json:"placement"`
 	TenantID  string `json:"tenant_id,omitempty"`
 	// EnrollToken is the one-time host token. Not a device secret.
-	// json marshaling of the on-disk copy clears it after enroll.
+	// json marshaling of the file on disk clears it after enroll.
 	EnrollToken string `json:"enroll_token,omitempty"`
 	// APIKey is the renter key from the environment or a systemd
-	// credential. It is not stored in muse.json.
+	// credential. It is not stored in supervisor.json.
 	APIKey   string `json:"-"`
 	LeaseID  string `json:"lease_id,omitempty"`
 	ChatBase string `json:"chat_base,omitempty"`
@@ -99,10 +99,10 @@ type Supervisor struct {
 	ListenAddr string
 }
 
-// SaveCredentials writes muse.json at mode 0600 without the renter API
+// SaveCredentials writes supervisor.json at mode 0600 without the renter API
 // key. A legacy enroll token stays only until device.json shows enroll
 // succeeded. An enroll token that lives only in the environment is not
-// copied into the file.
+// written into the file.
 func (s *Supervisor) SaveCredentials() error {
 	legacy := ""
 	if onDisk, err := LoadCredentials(s.StateDir); err == nil {
@@ -122,7 +122,7 @@ func (s *Supervisor) SaveCredentials() error {
 
 func writeCredentials(stateDir string, creds Credentials) error {
 	if strings.TrimSpace(stateDir) == "" {
-		return fmt.Errorf("muse: state dir is required")
+		return fmt.Errorf("supervisor: state dir is required")
 	}
 	creds.APIKey = ""
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -217,7 +217,7 @@ func (s *Supervisor) watchEnroll(ctx context.Context) {
 	}
 }
 
-// LoadCredentials reads muse.json.
+// LoadCredentials reads supervisor.json.
 func LoadCredentials(stateDir string) (Credentials, error) {
 	b, err := os.ReadFile(filepath.Join(stateDir, credFile))
 	if err != nil {
@@ -256,7 +256,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	case PlacementRenter:
 		return s.runRenter(ctx)
 	default:
-		return fmt.Errorf("muse: placement %q", place)
+		return fmt.Errorf("supervisor: placement %q", place)
 	}
 }
 
@@ -270,7 +270,7 @@ func (s *Supervisor) backoff() time.Duration {
 // Supervise restarts run until ctx is cancelled.
 func Supervise(ctx context.Context, run Runtime, backoff time.Duration) error {
 	if run == nil {
-		return fmt.Errorf("muse: local runtime is required")
+		return fmt.Errorf("supervisor: local runtime is required")
 	}
 	if backoff <= 0 {
 		backoff = time.Second
@@ -293,7 +293,7 @@ func Supervise(ctx context.Context, run Runtime, backoff time.Duration) error {
 
 func (s *Supervisor) runHost(ctx context.Context) error {
 	if s.Runtime == nil {
-		return fmt.Errorf("muse: host placement owns the local runtime")
+		return fmt.Errorf("supervisor: host placement owns the local runtime")
 	}
 	cfg := s.Agent
 	cfg.HostType = agent.HostTypeSupervisor
@@ -425,7 +425,7 @@ func (s *Supervisor) PostChat(ctx context.Context, content string) (json.RawMess
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("muse: chat gateway HTTP %d", status)
+		return nil, fmt.Errorf("supervisor: chat gateway HTTP %d", status)
 	}
 	return raw, nil
 }
@@ -435,26 +435,26 @@ func (s *Supervisor) PostChat(ctx context.Context, content string) (json.RawMess
 func CompletionsURL(chatBase string) (string, error) {
 	chatBase = strings.TrimSpace(chatBase)
 	if chatBase == "" {
-		return "", fmt.Errorf("muse: chat base is required")
+		return "", fmt.Errorf("supervisor: chat base is required")
 	}
 	if strings.Contains(chatBase, ControlPlaneStubPath) {
-		return "", fmt.Errorf("muse: refusing control-plane chat stub")
+		return "", fmt.Errorf("supervisor: refusing control-plane chat stub")
 	}
 	u, err := url.Parse(chatBase)
 	if err != nil {
 		return "", err
 	}
 	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
-		return "", fmt.Errorf("muse: chat base must be an http(s) URL")
+		return "", fmt.Errorf("supervisor: chat base must be an http(s) URL")
 	}
 	if u.Path == "" || u.Path == "/" {
 		u.Path = ChatCompletionsPath
 	}
 	if strings.Contains(u.Path, ControlPlaneStubPath) || strings.Contains(u.RequestURI(), ControlPlaneStubPath) {
-		return "", fmt.Errorf("muse: refusing control-plane chat stub")
+		return "", fmt.Errorf("supervisor: refusing control-plane chat stub")
 	}
 	if u.Path != ChatCompletionsPath {
-		return "", fmt.Errorf("muse: chat path must be %s", ChatCompletionsPath)
+		return "", fmt.Errorf("supervisor: chat path must be %s", ChatCompletionsPath)
 	}
 	return u.String(), nil
 }
@@ -465,10 +465,10 @@ func postChat(ctx context.Context, client *http.Client, chatBase, apiKey, tenant
 		return 0, nil, err
 	}
 	if strings.TrimSpace(apiKey) == "" {
-		return 0, nil, fmt.Errorf("muse: renter API key is required")
+		return 0, nil, fmt.Errorf("supervisor: renter API key is required")
 	}
 	if strings.TrimSpace(lease) == "" {
-		return 0, nil, fmt.Errorf("muse: lease id is required")
+		return 0, nil, fmt.Errorf("supervisor: lease id is required")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -495,7 +495,7 @@ func postChat(ctx context.Context, client *http.Client, chatBase, apiKey, tenant
 		return resp.StatusCode, nil, err
 	}
 	if strings.Contains(endpoint, ControlPlaneStubPath) {
-		return resp.StatusCode, nil, fmt.Errorf("muse: refusing control-plane chat stub")
+		return resp.StatusCode, nil, fmt.Errorf("supervisor: refusing control-plane chat stub")
 	}
 	return resp.StatusCode, raw, nil
 }

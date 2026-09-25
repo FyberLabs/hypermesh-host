@@ -82,7 +82,7 @@ const (
 	// HostTypeModel is the AGX (and any box that can load a weight).
 	HostTypeModel = "model"
 	// HostTypeSupervisor enrolls and heartbeats, owns no weight, and
-	// refuses lease_start. Muse uses this host type.
+	// refuses lease_start. hypermesh-supervisor uses this host type.
 	HostTypeSupervisor = "supervisor"
 )
 
