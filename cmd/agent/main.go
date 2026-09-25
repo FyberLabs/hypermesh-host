@@ -33,6 +33,7 @@ func main() {
 	flag.StringVar(&cfg.LlamaJinja, "llama-jinja", cfg.LlamaJinja, "lease llama-server LLAMA_ARG_JINJA (HYPERMESH_LLAMA_JINJA)")
 	flag.StringVar(&cfg.LlamaCtxSize, "llama-ctx-size", cfg.LlamaCtxSize, "lease llama-server LLAMA_ARG_CTX_SIZE (HYPERMESH_LLAMA_CTX_SIZE)")
 	flag.StringVar(&cfg.LlamaTimeout, "llama-timeout", cfg.LlamaTimeout, "lease llama-server LLAMA_ARG_TIMEOUT seconds (HYPERMESH_LLAMA_TIMEOUT)")
+	flag.StringVar(&cfg.WGMode, "wg-userspace", cfg.WGMode, "WireGuard backend: auto, 1 (hypermesh-wg.service), or 0 (kernel wg-quick) (HYPERMESH_WG_USERSPACE)")
 
 	if pre, ownerArgs, ok := splitOwnerArgs(os.Args[1:]); ok {
 		if err := flag.CommandLine.Parse(pre); err != nil {

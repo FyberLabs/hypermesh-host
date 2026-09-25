@@ -1,7 +1,7 @@
 [Unit]
 Description=Hypermesh on this box
 Documentation=https://github.com/FyberLabs/hypermesh-host
-After=network-online.target docker.service
+After=network-online.target docker.service hypermesh-wg.service
 Wants=network-online.target
 
 [Service]
@@ -11,6 +11,10 @@ EnvironmentFile=-/etc/hypermesh/agent.env
 ExecStart=/usr/local/bin/hypermesh-agent
 Restart=on-failure
 RestartSec=5
+# Default cgroup kill. wireguard-go is not a child of this unit;
+# hypermesh-wg.service owns it on hosts without the kernel module.
+# Do not set KillMode=process or KillMode=mixed.
+KillMode=control-group
 # Enroll token may be in agent.env (mode 0600) for first boot only.
 # device_secret lives in $HYPERMESH_STATE_DIR/device.json (0600), not agent.env.
 # Do not put secrets on the unit command line or in journal extra fields.

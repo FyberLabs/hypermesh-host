@@ -74,6 +74,10 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		log = logsafe.New()
 	}
 	src := telem.Default()
+	wg := tunnel.NewRunnerMode(cfg.WGMode)
+	if wg.Userspace {
+		log.Info("userspace wireguard", "unit", "hypermesh-wg.service")
+	}
 	return &Agent{
 		cfg:    cfg,
 		client: api.NewClient(cfg.ControlPlaneURL, cfg.TenantID),
@@ -86,7 +90,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		runtime: runtime.NewNVIDIA(),
 		hip:     runtime.NewHIP(),
 		metal:   runtime.NewMetal(),
-		tunnels: tunnel.NewRunner(),
+		tunnels: wg,
 		keyDir:  "/etc/wireguard",
 		log:     log,
 	}, nil
@@ -242,6 +246,7 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 			if errors.Is(err, errRevokedStop) {
 				return nil
 			}
+			a.noteSyncFailure(ctx)
 			return err
 		}
 	}
@@ -257,6 +262,8 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 		return nil
 	}
 	if err != nil {
+		// 401/503 is not a revoke. A handshaking userspace interface stays up.
+		a.noteSyncFailure(ctx)
 		return err
 	}
 	if sess == nil {
@@ -324,6 +331,26 @@ func (a *Agent) registerPeer(ctx context.Context, pub string) error {
 	a.peerPosted = true
 	a.postedPub = pub
 	return nil
+}
+
+// noteSyncFailure leaves a userspace interface alone when the plane fetch
+// fails. Revoke and 204 still call Teardown; this path must not.
+func (a *Agent) noteSyncFailure(ctx context.Context) {
+	type preserver interface {
+		OnSyncError(context.Context) (bool, error)
+	}
+	p, ok := a.tunnels.(preserver)
+	if !ok {
+		return
+	}
+	kept, err := p.OnSyncError(ctx)
+	if err != nil {
+		a.log.Warn("tunnel preserve failed", "err", err)
+		return
+	}
+	if kept {
+		a.log.Info("tunnel sync failed; leaving handshaking interface up")
+	}
 }
 
 func (a *Agent) tunnelRevoked(ctx context.Context, sess *api.TunnelSession) error {
