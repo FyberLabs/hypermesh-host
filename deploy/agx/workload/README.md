@@ -70,13 +70,14 @@ Plain `cuda:*-ubuntu24.04` does **not** ship Jetson cuDNN / TensorRT. llama.cpp 
 # On AGX64-1, after first-boot overlay.
 # Docker 29 Buildx rejects --runtime=nvidia on docker build. Link uses
 # CUDA devel stubs (see Dockerfile). Do not COPY model.gguf. Do not commit it.
+# Tag :llama-v0.5.0 only. :latest is retagged separately, after the
+# control-plane image_digest pin moves to this build.
 sudo docker build --platform linux/arm64 \
-  -t ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0 \
-  -t ghcr.io/fyberlabs/hypermesh-test .
+  -t ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0 .
 
 # Pin the sha256 after a good on-box build. The host program will not invent
 # image_hash or a repo@digest.
-sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test
+sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0
 ```
 
 ## Field lock
