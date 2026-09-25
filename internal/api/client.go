@@ -97,6 +97,9 @@ func (c *Client) GetTunnel(ctx context.Context, deviceID string) (*TunnelSession
 }
 
 // ProposePeer posts the host WireGuard public key. The private key stays here.
+// 200 is AgentTunnelResponse (body optional for the caller). 404 is ErrNoTunnel:
+// nothing is allocated yet. Auth is the device hm_dev_ bearer, same as other
+// /agent calls.
 func (c *Client) ProposePeer(ctx context.Context, deviceID string, req TunnelPeerRequest) error {
 	q := url.Values{"device_id": {deviceID}}
 	return c.doJSON(ctx, http.MethodPost, PathTunnelPeer, q, req, http.StatusOK, nil, true)
@@ -172,7 +175,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		return errNoContent
 	}
 	if resp.StatusCode != want {
-		return mapStatus(method, path, resp.StatusCode)
+		return mapStatus(method, path, resp.StatusCode, payload)
 	}
 	if dest == nil {
 		return nil

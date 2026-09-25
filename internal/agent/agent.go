@@ -37,6 +37,9 @@ type Agent struct {
 	applied         string // fingerprint of the host peer we last acked (not tunnel_id)
 	bindIP          string // last tunnel client address, used to publish completions
 	keyDir          string // host WireGuard private key lives here only
+	peerPosted      bool   // this process has successfully POSTed postedPub
+	postedPub       string // last public key accepted by POST /agent/tunnel/peer
+	loggedNoTunnel  bool   // already logged the benign peer 404 this wait
 	now             func() time.Time
 	sleep           func(time.Duration)
 	resultTries     int
@@ -212,7 +215,37 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 }
 
 func (a *Agent) syncTunnel(ctx context.Context) error {
+	// Owner contract: Bearer hm_dev_ on GET and POST. POST body is only
+	// {"peer_public_key":"<base64>"}. 200 stores device wg_public_key and
+	// returns AgentTunnelResponse. POST 404 means no tunnel yet: benign,
+	// retry next sync. GET 200 is AgentTunnelResponse with no
+	// peer_private_key. GET 409 code peer_public_key_not_registered means
+	// POST again, then GET again. POST on startup, when the local key
+	// changes, on that 409, and when GET peer_public_key differs.
+	priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(priv) == "" {
+		return tunnel.ErrNoHostKey
+	}
+	if !a.peerPosted || a.postedPub != pub {
+		if err := a.postPeer(ctx, pub); err != nil && !errors.Is(err, api.ErrNoTunnel) {
+			return err
+		}
+	}
+
 	sess, err := a.client.GetTunnel(ctx, a.state.DeviceID)
+	if errors.Is(err, api.ErrPeerPublicKeyNotRegistered) {
+		a.log.Info("tunnel peer not registered; posting public key and reading the session again")
+		if err := a.postPeer(ctx, pub); err != nil {
+			if errors.Is(err, api.ErrNoTunnel) {
+				return nil
+			}
+			return err
+		}
+		sess, err = a.client.GetTunnel(ctx, a.state.DeviceID)
+	}
 	if err != nil {
 		return err
 	}
@@ -228,22 +261,11 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	}
 	switch sess.Status {
 	case api.TunnelAllocated:
-		// Panopticon POST /api/v1/hypermesh/agent/tunnel/peer (PR #128, fc1dfa1):
-		// JSON is only {"peer_public_key":"<standard base64>"}. Auth is Bearer
-		// device secret plus X-Tenant-ID (device_id query is not checked).
-		// 200 is the session with no host private key; 404 if no tunnel; 409
-		// if revoked. The same public key may be posted again. POST when GET
-		// status=allocated and peer_public_key is empty or not ours, before
-		// wg-quick and ack. The private key stays in keyDir.
-		priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(priv) == "" {
-			return tunnel.ErrNoHostKey
-		}
 		if sessionNeedsPeer(sess.PeerPublicKey, pub) {
-			if err := a.client.ProposePeer(ctx, a.state.DeviceID, api.TunnelPeerRequest{PeerPublicKey: pub}); err != nil {
+			if err := a.postPeer(ctx, pub); err != nil {
+				if errors.Is(err, api.ErrNoTunnel) {
+					return nil
+				}
 				return err
 			}
 		}
@@ -283,6 +305,26 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	default:
 		return fmt.Errorf("hypermesh: unknown tunnel status %s", sess.Status)
 	}
+}
+
+// postPeer sends only the public key. A 404 is remembered quietly so the
+// next sync retries without a warning on every tick.
+func (a *Agent) postPeer(ctx context.Context, pub string) error {
+	err := a.client.ProposePeer(ctx, a.state.DeviceID, api.TunnelPeerRequest{PeerPublicKey: pub})
+	if errors.Is(err, api.ErrNoTunnel) {
+		if !a.loggedNoTunnel {
+			a.log.Info("no tunnel allocated yet; host public key will be registered on a later sync")
+			a.loggedNoTunnel = true
+		}
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	a.loggedNoTunnel = false
+	a.peerPosted = true
+	a.postedPub = pub
+	return nil
 }
 
 // sessionNeedsPeer is true when the plane has no host public key yet, or a

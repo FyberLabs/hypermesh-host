@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -469,6 +470,66 @@ func TestGetTunnelWithoutPeerPrivateKey(t *testing.T) {
 	}
 	if strings.Contains(string(out), leaked) || strings.Contains(string(out), "peer_private_key") {
 		t.Fatalf("parsed session kept a private key: %s", out)
+	}
+}
+
+func TestProposePeerNoTunnelIsDistinct(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireBearer(t, r)
+		if r.URL.Path != PathTunnelPeer {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Tunnel not found"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
+	err := c.ProposePeer(context.Background(), testDevice, TunnelPeerRequest{PeerPublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="})
+	if !errors.Is(err, ErrNoTunnel) {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(err.Error(), "Tunnel not found") {
+		t.Fatalf("404 body leaked into error: %v", err)
+	}
+}
+
+func TestGetTunnelPeerNotRegistered(t *testing.T) {
+	const code = PeerPublicKeyNotRegistered
+	bodies := []string{
+		`{"detail":{"code":"` + code + `"}}`,
+		`{"detail":"` + code + `"}`,
+		`{"code":"` + code + `"}`,
+		`{"error":{"code":"` + code + `"}}`,
+	}
+	for _, raw := range bodies {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requireBearer(t, r)
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(raw))
+		}))
+		c := NewClient(srv.URL, testTenant)
+		c.DeviceSecret = testSecret
+		_, err := c.GetTunnel(context.Background(), testDevice)
+		srv.Close()
+		if !errors.Is(err, ErrPeerPublicKeyNotRegistered) {
+			t.Fatalf("body %s: %v", raw, err)
+		}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"Tunnel is revoked"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
+	_, err := c.GetTunnel(context.Background(), testDevice)
+	if errors.Is(err, ErrPeerPublicKeyNotRegistered) {
+		t.Fatal("revoked 409 must not look like a missing peer key")
+	}
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
 

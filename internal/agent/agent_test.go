@@ -463,6 +463,204 @@ func TestAllocatedTunnelPostsPublicKeyOnly(t *testing.T) {
 	}
 }
 
+func TestPeerNotRegisteredPostsThenRegets(t *testing.T) {
+	var mu sync.Mutex
+	gets, posts := 0, 0
+	var bodies [][]byte
+	var registered string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		posts++
+		bodies = append(bodies, raw)
+		registered = body.PeerPublicKey
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]string{"peer_public_key": body.PeerPublicKey})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gets++
+		n := gets
+		pub := registered
+		mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"detail":{"code":"peer_public_key_not_registered"}}`))
+			return
+		}
+		sess := allocatedTunnel("lease-1")
+		sess.PeerPublicKey = pub
+		writeJSON(w, http.StatusOK, sess)
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	_ = os.WriteFile(filepath.Join(dir, "uptime"), []byte("1 1\n"), 0o644)
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	pub, _, err := preloadPostedKey(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets != 2 {
+		t.Fatalf("gets %d, want GET, POST, re-GET", gets)
+	}
+	if posts != 1 {
+		t.Fatalf("posts %d, want one recovery POST", posts)
+	}
+	if strings.Contains(string(bodies[0]), "peer_private_key") {
+		t.Fatal("recovery POST included a private key field")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(bodies[0], &obj); err != nil {
+		t.Fatal(err)
+	}
+	if obj["peer_public_key"] != pub {
+		t.Fatalf("posted %#v", obj)
+	}
+	ft.mu.Lock()
+	if len(ft.applied) != 1 {
+		ft.mu.Unlock()
+		t.Fatalf("apply %d", len(ft.applied))
+	}
+	ft.mu.Unlock()
+}
+
+func TestPeerMismatchAndKeyChangeRepost(t *testing.T) {
+	var mu sync.Mutex
+	posts := 0
+	planePub := "OTHERPUBLICKEYNOTOURS++++++++++++++++++++="
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		posts++
+		planePub = body.PeerPublicKey
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pub := planePub
+		mu.Unlock()
+		sess := allocatedTunnel("lease-1")
+		sess.PeerPublicKey = pub
+		writeJSON(w, http.StatusOK, sess)
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	localPub, _, err := preloadPostedKey(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tunnels = &fakeTunnel{}
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if posts != 1 {
+		mu.Unlock()
+		t.Fatalf("mismatch posts %d", posts)
+	}
+	mu.Unlock()
+	if a.postedPub != localPub {
+		t.Fatal("posted pub must be the local public key")
+	}
+
+	a.postedPub = "stale-public-key"
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if posts != 2 {
+		mu.Unlock()
+		t.Fatalf("key-change posts %d, want 2", posts)
+	}
+	mu.Unlock()
+}
+
+func TestPeer404IsBenignAndNotRepeatedAsError(t *testing.T) {
+	var buf strings.Builder
+	posts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Tunnel not found"}`))
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	a.tunnels = &fakeTunnel{}
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 2 {
+		t.Fatalf("posts %d, want a retry on the next sync", posts)
+	}
+	logs := buf.String()
+	if strings.Count(logs, "no tunnel allocated yet") != 1 {
+		t.Fatalf("benign 404 should log once, logs:\n%s", logs)
+	}
+	if strings.Contains(logs, "tunnel sync failed") {
+		t.Fatalf("404 must not be a sync failure: %s", logs)
+	}
+}
+
+func preloadPostedKey(a *Agent) (pub, priv string, err error) {
+	priv, pub, err = tunnel.LoadOrCreatePrivateKey(a.keyDir)
+	if err != nil {
+		return "", "", err
+	}
+	a.peerPosted = true
+	a.postedPub = pub
+	return pub, priv, nil
+}
+
 func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
 	var mu sync.Mutex
 	acks, gets := 0, 0
