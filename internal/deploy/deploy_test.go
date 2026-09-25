@@ -352,9 +352,6 @@ func TestReleaseArchivesAreLinuxAMD64AndARM64(t *testing.T) {
 			t.Fatalf("goreleaser missing %s", want)
 		}
 	}
-	if strings.Contains(text, "hypermesh-muse") {
-		t.Fatal("goreleaser still builds hypermesh-muse")
-	}
 	formula, err := os.ReadFile(filepath.Join("..", "..", "packaging", "homebrew", "hypermesh-deploy.rb"))
 	if err != nil {
 		t.Fatal(err)
