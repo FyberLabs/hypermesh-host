@@ -133,6 +133,8 @@ Allocated: this box generates the host WireGuard private key (`/etc/wireguard/hy
 
 Revoked (host peer revoked) or 204 (no host session): `wg-quick down` and shred `/etc/wireguard/hypermesh.conf` so the peer key does not stay on disk. Do not teardown because `lease_id` changed. `lease_start` / `lease_stop` do not `wg-quick` down/up.
 
+**Userspace (no kernel module).** AGX64-1 / L4T R39 has no wireguard module. [deploy/agx/hypermesh-wg.service](deploy/agx/hypermesh-wg.service) runs `/usr/bin/wireguard-go -f hypermesh` outside the agent cgroup (`Restart=on-failure`). Set `HYPERMESH_WG_USERSPACE=1` (or leave `auto`, which picks userspace when the module is missing). The agent never spawns `wireguard-go` and does not use `KillMode=process` or `KillMode=mixed`. It programs the existing interface with `wg syncconf` plus `ip addr` / `ip link`, including `PersistentKeepalive = 25`. A restart that still sees that peer and a handshake under 180s does not reset it, including when the first plane sync fails (401/503). Only a real config change is applied. Revoke (GET 200 `status=revoked` or POST 409 `Tunnel is revoked`) and 204 remove peers and set the link down; the unit stays up and the tunnel does not return until a new allocated session is applied. Kernel-module hosts keep `wg-quick` (`HYPERMESH_WG_USERSPACE=0` or `auto` when the module loads). Install and the AGX64-1 migration are in [deploy/agx/first-boot.md](deploy/agx/first-boot.md).
+
 The container is reachable at the WG `client_address` on port 8080. The router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
 
 ### Workload jail
@@ -147,7 +149,7 @@ Tenant id and token from [host enroll](https://portal.test.hyperme.sh/dashboard/
 
 Module **P3701-0005**, board `jetson-agx-orin-devkit`. **JetPack 7.2.1 / L4T R39.2.1**. If the box is already there, skip the flash.
 
-Flash and install: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Unit: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service). Workload: [deploy/agx/workload/README.md](deploy/agx/workload/README.md). Optional witness sidecar: [deploy/agx/aiuditor-witness.service](deploy/agx/aiuditor-witness.service).
+Flash and install: [deploy/agx/first-boot.md](deploy/agx/first-boot.md). Units: [deploy/agx/hypermesh-agent.service](deploy/agx/hypermesh-agent.service), [deploy/agx/hypermesh-wg.service](deploy/agx/hypermesh-wg.service) (userspace WireGuard; no kernel module on this image). Workload: [deploy/agx/workload/README.md](deploy/agx/workload/README.md). Optional witness sidecar: [deploy/agx/aiuditor-witness.service](deploy/agx/aiuditor-witness.service).
 
 AGX 64GB nvpmodel default is **30W (id 2)**. GPU path is `--runtime=nvidia`.
 

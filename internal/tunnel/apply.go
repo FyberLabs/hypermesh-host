@@ -51,14 +51,25 @@ type Applier interface {
 	Teardown(ctx context.Context) error
 }
 
-// Runner writes a wg-quick config and runs `wg-quick up|down`.
+// Runner writes a wg-quick config and runs `wg-quick up|down` on kernel
+// hosts. Userspace hosts leave wireguard-go to hypermesh-wg.service and
+// only configure the existing interface.
 type Runner struct {
 	// Iface is the WireGuard interface name (default hypermesh, ≤15 chars).
 	Iface string
 	// ConfigDir holds <iface>.conf at mode 0600. The file contains the peer key.
 	ConfigDir string
 	// Quick overrides wg-quick. Args are ("up"|"down", configPath).
+	// Kernel mode only. Userspace mode never calls it.
 	Quick func(ctx context.Context, args ...string) error
+	// Userspace is true when hypermesh-wg.service owns wireguard-go.
+	// The agent configures that interface and never spawns the process.
+	Userspace bool
+	// Run overrides wg and ip. Tests fake the UAPI and address commands.
+	// Output can contain the private key and must not be logged.
+	Run func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// Now is the clock for handshake age. Nil uses time.Now.
+	Now func() time.Time
 }
 
 // NewRunner uses /etc/wireguard and wg-quick on PATH.
@@ -123,6 +134,9 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if strings.TrimSpace(sess.PeerPrivateKey) == "" {
 		return ErrMissingPrivateKey
 	}
+	if r.Userspace {
+		return r.applyUserspace(ctx, sess)
+	}
 	if r.alreadyApplied(sess) {
 		return nil
 	}
@@ -156,6 +170,9 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 func (r *Runner) Teardown(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if r.Userspace {
+		return r.teardownUserspace(ctx)
 	}
 	if !r.hasLocal() {
 		return nil
@@ -235,7 +252,11 @@ func (r *Runner) quick(ctx context.Context, args ...string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "wg-quick", args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "wg-quick", args...)
+	// A userspace implementation set in the environment would fork
+	// wireguard-go inside this cgroup. The kernel path must not do that.
+	cmd.Env = withoutUserspaceWG(os.Environ())
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Combined output may include keys if wg-quick dumps the conf.
 		// Do not wrap stdout/stderr into the returned error.

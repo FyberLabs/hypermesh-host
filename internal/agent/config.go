@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
+	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
 
 const (
@@ -50,6 +51,12 @@ type Config struct {
 	LlamaJinja   string
 	LlamaCtxSize string
 	LlamaTimeout string
+	// WGMode selects the WireGuard backend (HYPERMESH_WG_USERSPACE).
+	// "auto" uses the kernel module when it is loaded or loadable, and
+	// otherwise configures the interface owned by hypermesh-wg.service.
+	// "1" / "userspace" forces that unit. "0" / "kernel" forces wg-quick.
+	// Empty stays on wg-quick (tests). The agent never spawns wireguard-go.
+	WGMode string
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
@@ -70,7 +77,16 @@ func FromEnv() Config {
 		LlamaJinja:      envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
 		LlamaCtxSize:    envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:    envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
+		WGMode:          wgModeFromEnv(),
 	}
+}
+
+func wgModeFromEnv() string {
+	v := strings.TrimSpace(os.Getenv("HYPERMESH_WG_USERSPACE"))
+	if v == "" {
+		return "auto"
+	}
+	return v
 }
 
 func envOr(key, def string) string {
@@ -104,6 +120,9 @@ func (c Config) Validate() error {
 		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 			return fmt.Errorf("hypermesh: completions URL must be http(s)")
 		}
+	}
+	if !tunnel.ValidWGMode(c.WGMode) {
+		return fmt.Errorf("hypermesh: HYPERMESH_WG_USERSPACE must be auto, 1, or 0")
 	}
 	return nil
 }

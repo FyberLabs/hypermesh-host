@@ -1,0 +1,19 @@
+[Unit]
+Description=Hypermesh userspace WireGuard
+Documentation=https://github.com/FyberLabs/hypermesh-host
+After=network-online.target
+Wants=network-online.target
+Before=hypermesh-agent.service
+
+[Service]
+Type=simple
+User=root
+# Foreground. This process is the only owner of interface hypermesh on
+# hosts with no wireguard kernel module (AGX64-1, L4T R39). The agent
+# configures keys and peers through wg; it must not spawn wireguard-go.
+ExecStart=/usr/bin/wireguard-go -f hypermesh
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

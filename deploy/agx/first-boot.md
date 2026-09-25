@@ -51,16 +51,18 @@ sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 sudo mkdir -p /etc/hypermesh /var/lib/hypermesh
 sudo chmod 0700 /var/lib/hypermesh
 sudo cp deploy/agx/hypermesh-agent.service /etc/systemd/system/
+sudo cp deploy/agx/hypermesh-wg.service /etc/systemd/system/
 sudo cp deploy/agx/agent.env.example /etc/hypermesh/agent.env
 ```
 
-Set tenant id, enroll token, and `HYPERMESH_GGUF_PATH` to a regular file. `chmod 0600` the env file.
+Set tenant id, enroll token, and `HYPERMESH_GGUF_PATH` to a regular file. On AGX64-1 set `HYPERMESH_WG_USERSPACE=1` (there is no wireguard kernel module). `chmod 0600` the env file. Install `wireguard-go` so `/usr/bin/wireguard-go` exists, plus `wireguard-tools` (`wg`, and `ip` from iproute2).
 
 ```bash
 sudo chmod 0600 /etc/hypermesh/agent.env
 sudo systemctl daemon-reload
+sudo systemctl enable --now hypermesh-wg
 sudo systemctl enable --now hypermesh-agent
-sudo systemctl status hypermesh-agent
+sudo systemctl status hypermesh-wg hypermesh-agent
 ```
 
 Optional AIuditor witness sidecar (loopback only, hydrate, cannot fulfill): [aiuditor-witness.service](aiuditor-witness.service). Enable it only after parent token and tenant exist. Not this Go agent.
@@ -73,7 +75,37 @@ After enroll, this box persists the secret in `/var/lib/hypermesh/device.json` (
 
 ### WireGuard
 
-Install `wireguard-tools`. One WireGuard peer per host, not per lease. This box generates the host private key at `/etc/wireguard/hypermesh.key` (0600, directory 0700), reuses it on restart, replaces it only when absent or invalid, and POSTs only the public key (`POST /agent/tunnel/peer`, no `device_id`) on boot and whenever that key does not match an allocated session, then GETs. POST 404 means the device key was saved and there is no tunnel. POST 409 `Tunnel is revoked` leaves WireGuard down. GET 200 `status=allocated` with a null or different `peer_public_key`, or GET 409 whose body `code` is `peer_public_key_not_registered` (`detail` is not the match), POSTs again and re-GETs. GET 200 `status=revoked` tears WireGuard down and does not POST again, even when `peer_public_key` is null or different; that line is logged once until a later allocated session is applied. The current config stays up until a GET shows the new public key, then this box switches and acks again. GET `/agent/tunnel` never includes `peer_private_key`. When a session is allocated, this box applies GET `endpoint`, `server_public_key`, `allowed_ips`, and `client_address` plus that local private key, writes a 0600 wg-quick config, `wg-quick up`, then acks. A later GET with a different `lease_id` / `tunnel_id` but the same peer fields is a ticket on that tunnel — no second `wg-quick up`. `wg-quick` down/up does not run on `lease_start` or `lease_stop`. Teardown only when GET is `revoked` (host peer revoked) or 204 (no host session). Router endpoint is `wg.test.hyperme.sh:51820`. There is no `listen_port` on the GET. Do not invent a lab peer. The host private key is never logged, never sent to the plane, and is shredded on teardown. A person on this box should never need to see that key. Chat stays on `client_address:8080`.
+Install `wireguard-tools`. AGX64-1 also needs `/usr/bin/wireguard-go` and [hypermesh-wg.service](hypermesh-wg.service). One WireGuard peer per host, not per lease. This box generates the host private key at `/etc/wireguard/hypermesh.key` (0600, directory 0700), reuses it on restart, replaces it only when absent or invalid, and POSTs only the public key (`POST /agent/tunnel/peer`, no `device_id`) on boot and whenever that key does not match an allocated session, then GETs. POST 404 means the device key was saved and there is no tunnel. POST 409 `Tunnel is revoked` leaves WireGuard down. GET 200 `status=allocated` with a null or different `peer_public_key`, or GET 409 whose body `code` is `peer_public_key_not_registered` (`detail` is not the match), POSTs again and re-GETs. GET 200 `status=revoked` tears WireGuard down and does not POST again, even when `peer_public_key` is null or different; that line is logged once until a later allocated session is applied. The current config stays up until a GET shows the new public key, then this box switches and acks again. GET `/agent/tunnel` never includes `peer_private_key`. When a session is allocated, this box applies GET `endpoint`, `server_public_key`, `allowed_ips`, and `client_address` plus that local private key, writes a 0600 wg-quick config, `wg-quick up`, then acks. A later GET with a different `lease_id` / `tunnel_id` but the same peer fields is a ticket on that tunnel — no second `wg-quick up`. `wg-quick` down/up does not run on `lease_start` or `lease_stop`. Teardown only when GET is `revoked` (host peer revoked) or 204 (no host session). Router endpoint is `wg.test.hyperme.sh:51820`. There is no `listen_port` on the GET. Do not invent a lab peer. The host private key is never logged, never sent to the plane, and is shredded on teardown. A person on this box should never need to see that key. Chat stays on `client_address:8080`.
+
+#### Userspace interface (AGX64-1)
+
+L4T R39.2.1 has TUN and no wireguard kernel module. `hypermesh-wg.service` runs `/usr/bin/wireguard-go -f hypermesh` in its own cgroup (`Restart=on-failure`). The agent does not spawn `wireguard-go` and does not set `KillMode=process` or `KillMode=mixed` (the agent unit stays `KillMode=control-group`). With `HYPERMESH_WG_USERSPACE=1`, or `auto` when the module is missing, the agent configures the existing `hypermesh` interface with `wg syncconf` and `ip addr` / `ip link`. It does not call `wg-quick`, which would fork `wireguard-go` inside `hypermesh-agent.service`.
+
+An agent restart leaves that process up. If the interface already has the desired peer and a handshake newer than 180s, the agent does not rewrite it. A failed plane sync (HTTP 401 or 503) does not tear the link down. The agent applies a new config only when the desired peer fields differ (`PersistentKeepalive = 25` stays).
+
+Revoke (GET 200 `status=revoked`, or POST 409 `Tunnel is revoked`) and GET 204 remove every peer, flush the address, and `ip link set dev hypermesh down`. The unit keeps running, so the device stays, but with no peer and the link down it cannot handshake. The agent sets the link up again only when a later allocated session is applied. It does not `systemctl stop` the unit.
+
+Kernel-module hosts leave `HYPERMESH_WG_USERSPACE` unset or set it to `0`. Those boxes keep `wg-quick`. Do not enable `hypermesh-wg.service` there.
+
+##### Migrate AGX64-1 off an agent-spawned wireguard-go
+
+Today the agent (or `wg-quick` with `WG_QUICK_USERSPACE_IMPLEMENTATION=/usr/bin/wireguard-go`) starts `wireguard-go` as a child of `hypermesh-agent.service`. A restart kills it, the link drops, and the new process brings the tunnel back only after a sync succeeds. Cut over once:
+
+```bash
+# Stop the agent first so its child releases the hypermesh interface.
+sudo systemctl stop hypermesh-agent
+# Drop WG_QUICK_USERSPACE_IMPLEMENTATION from /etc/hypermesh/agent.env if it is set.
+# Set HYPERMESH_WG_USERSPACE=1 in that file (mode 0600).
+
+sudo cp deploy/agx/hypermesh-wg.service /etc/systemd/system/
+sudo cp deploy/agx/hypermesh-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hypermesh-wg
+sudo systemctl restart hypermesh-agent
+sudo systemctl status hypermesh-wg hypermesh-agent
+```
+
+Later agent restarts do not stop `hypermesh-wg`. `wg show hypermesh` should keep the latest handshake across `systemctl restart hypermesh-agent`.
 
 ### Workload
 
@@ -107,7 +139,7 @@ In-tree P2 id: `llama-3.1-8b-q4`. Uncertified until a soak hash exists.
 
 ## Update
 
-Leave `agent.env` and `device.json` alone.
+Leave `agent.env` and `device.json` alone. The first boot that picks up userspace WireGuard follows the migration under WireGuard above (install `hypermesh-wg.service`, `daemon-reload`, `enable --now hypermesh-wg`, then restart the agent). After that unit is enabled, later updates are:
 
 ```bash
 cd hypermesh-host
