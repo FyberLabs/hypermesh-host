@@ -22,6 +22,22 @@ Catalog id stays **`llama-3.1-8b-q4`**.
 | No sensors/cameras/robots | no `--device` grants (GPU via `--runtime=nvidia` only) |
 
 Agent and witness stay on host network; they reach completions via the WG publish address like the gateway door.
+## llama.cpp pin (streaming + tools)
+
+`LLAMA_CPP_REF=v0.5.0` (ggml-org/llama.cpp stable release 2026-09-23, commit `7fe450e`). The earlier pin `b4689` (`90e4dba`, 2025-02) answered `stream:true` + `tools` with HTTP 500 `Cannot use tools with stream` and returned empty `tool_call` ids, so editor clients (Cursor, Cline, Continue, Copilot) could not use a lease. Streamed tool-call deltas with generated ids arrived in ggml-org/llama.cpp#12379 (merged 2025-05-25). v0.5.0 also turns `--jinja` on by default.
+
+The entrypoint stays the same (`llama-server -m /models/model.gguf --host 0.0.0.0 --port 8080 --alias hypermesh-test`). llama-server reads `LLAMA_ARG_*` from the environment, so Host can tune a lease with `docker run -e` without changing the image:
+
+| Env | Effect | v0.5.0 default |
+|---|---|---|
+| `LLAMA_ARG_JINJA=1` | jinja chat template (tool calling) | enabled |
+| `LLAMA_ARG_CTX_SIZE=<n>` | context size | from model |
+| `LLAMA_ARG_TIMEOUT=<s>` | HTTP read/write timeout | 3600 |
+
+The entrypoint does not forward CMD args (`"$@"`). Use env, not extra argv.
+
+This does not publish anything by itself. No CI workflow builds `hypermesh-test`. Rebuild on AGX64-1 as described below, push, then pin the new `repo@digest`.
+
 ## Build this on AGX64-1
 
 This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L4T R39.2.1 / Ubuntu 24.04.5 / CUDA 13**, after the overlay. **Run** with `--runtime=nvidia` (not `--gpus`). Docker 29 Buildx does not accept `--runtime=nvidia` at **build**; the Dockerfile links CUDA devel stubs instead.
@@ -54,12 +70,14 @@ Plain `cuda:*-ubuntu24.04` does **not** ship Jetson cuDNN / TensorRT. llama.cpp 
 # On AGX64-1, after first-boot overlay.
 # Docker 29 Buildx rejects --runtime=nvidia on docker build. Link uses
 # CUDA devel stubs (see Dockerfile). Do not COPY model.gguf. Do not commit it.
+# Tag :llama-v0.5.0 only. :latest is retagged separately, after the
+# control-plane image_digest pin moves to this build.
 sudo docker build --platform linux/arm64 \
-  -t ghcr.io/fyberlabs/hypermesh-test .
+  -t ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0 .
 
 # Pin the sha256 after a good on-box build. The host program will not invent
 # image_hash or a repo@digest.
-sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test
+sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0
 ```
 
 ## Field lock
