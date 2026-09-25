@@ -61,6 +61,19 @@ type Agent struct {
 	dockerRun runtime.DockerRunner
 	// egressSample samples host-visible connections. Nil uses ss/conntrack.
 	egressSample runtime.ConnSampler
+	// countLeases counts running lease containers. Nil uses docker ps.
+	// A false ok omits lease_container_count. Tests stub this.
+	countLeases func(ctx context.Context) (n int, ok bool)
+
+	healthMu   sync.Mutex
+	lastSyncAt time.Time
+	haveSync   bool
+	syncClass  string
+	syncHTTP   int
+	hbOK       uint64
+	hbFail     map[string]uint64
+	syncOK     uint64
+	syncFail   map[string]uint64
 }
 
 const certLeaseID = "cert-bench"
@@ -110,9 +123,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.heartbeat(ctx); err != nil {
 		a.log.Warn("heartbeat failed", "err", err)
 	}
-	if err := a.syncTunnel(ctx); err != nil {
-		a.log.Warn("tunnel sync failed", "err", err)
-	}
+	a.syncAndRecord(ctx)
 	if err := a.pullAndRun(ctx); err != nil {
 		a.log.Warn("job pull failed", "err", err)
 	}
@@ -131,9 +142,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.log.Warn("heartbeat failed", "err", err)
 			}
 		case <-jobs.C:
-			if err := a.syncTunnel(ctx); err != nil {
-				a.log.Warn("tunnel sync failed", "err", err)
-			}
+			a.syncAndRecord(ctx)
 			if err := a.pullAndRun(ctx); err != nil {
 				a.log.Warn("job pull failed", "err", err)
 			}
@@ -195,6 +204,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 func (a *Agent) heartbeat(ctx context.Context) error {
 	snap, err := a.telem.Collect(ctx)
 	if err != nil {
+		a.recordHeartbeat(err)
 		return err
 	}
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
@@ -206,10 +216,13 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		UptimeS:         snap.UptimeS,
 		ThermalC:        snap.ThermalC,
 		SellState:       sell.SellState,
+		Health:          a.safeHealth(ctx),
 	})
 	if err != nil {
+		a.recordHeartbeat(err)
 		return err
 	}
+	a.recordHeartbeat(nil)
 	a.log.Info("heartbeat accepted",
 		"device_id", hb.DeviceID,
 		"path_b_state", hb.PathBState,

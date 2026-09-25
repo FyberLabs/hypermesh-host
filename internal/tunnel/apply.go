@@ -82,6 +82,9 @@ type Runner struct {
 	// Log receives route add and delete lines. Nil stays quiet.
 	// Prefixes and tunnel ids are safe; key material is not written here.
 	Log *slog.Logger
+	// FindPID overrides the wireguard-go pid lookup for Snapshot.
+	// Nil scans /proc when Userspace is set. Kernel mode omits the pid.
+	FindPID func(iface string) (pid int, ok bool)
 
 	logTunnel   string
 	logLease    string

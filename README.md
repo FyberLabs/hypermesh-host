@@ -16,8 +16,10 @@ Go 1.22+.
 
 ```bash
 go test ./...
-go build -o hypermesh-agent ./cmd/agent
+go build -ldflags "-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=$(git rev-parse HEAD)" -o hypermesh-agent ./cmd/agent
 ```
+
+`build_commit` on the heartbeat prefers that ldflags value. If it is empty, this box uses the VCS revision from `debug.ReadBuildInfo` (`vcs.revision`). If that is empty too, the value is `unknown`.
 
 Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
 
@@ -44,7 +46,7 @@ After enroll, these routes send `Authorization: Bearer <device_secret>`, `X-Tena
 
 | Call | Path |
 |---|---|
-| Heartbeat | `POST /api/v1/hypermesh/agent/heartbeat` (includes `loaded_model_hash` = running lease `repo@digest` when a handle exists; omitempty otherwise) |
+| Heartbeat | `POST /api/v1/hypermesh/agent/heartbeat` (includes `loaded_model_hash` = running lease `repo@digest` when a handle exists; omitempty otherwise). Optional `health` object; see Host health. Older planes ignore it. |
 | Job pull | `GET /api/v1/hypermesh/agent/jobs?device_id=` |
 | Result | `POST /api/v1/hypermesh/agent/jobs/{job_id}/result?device_id=` |
 | Tunnel | `GET /api/v1/hypermesh/agent/tunnel?device_id=` |
@@ -137,6 +139,16 @@ Revoked (host peer revoked) or 204 (no host session): `wg-quick down` and shred 
 
 The container is reachable at the WG `client_address` on port 8080. The router is the only customer HTTPS path (`http://<client_address>:8080/v1/chat/completions`).
 
+### Host health
+
+Heartbeat may include a top-level `health` object. Existing fields are unchanged. This box still heartbeats when health collection fails; unknown fields are omitted. `last_sync_error_class` is `""` when there is no class. `last_sync_http_status` is `0` when there is no status. Nothing secret is added: no WireGuard keys, no tokens, no device secret, no raw HTTP body, no renter id, no prompt. Lease containers are a count.
+
+`tunnel_state` is `up` (handshake within 180s), `handshaking` (peer configured, or userspace process up, without a recent handshake), `down` (no peer, or kernel interface absent), or `disabled` (userspace mode, no `wireguard-go` process, no interface). `last_sync_at` is RFC3339 UTC of the last successful tunnel sync. `last_sync_error_class` is `http_5xx`, `http_4xx`, `network`, `timeout`, `decode`, or empty (local failures such as `wg syncconf` stay empty; the sync failure counter still increments). `handshake_age_s` is seconds since the latest handshake. `wg_pid` is the `wireguard-go` pid (omitted on the kernel path). `wg_port` is the listen port. `lease_container_count` is running containers whose names start with `hypermesh-`. `build_commit` is the ldflags commit, else VCS revision, else `unknown`.
+
+`GET /metrics` on this process exposes the same signals as Prometheus text gauges and counters (`hypermesh_heartbeat_success_total`, `hypermesh_heartbeat_failure_total{class=...}`, `hypermesh_tunnel_sync_success_total`, `hypermesh_tunnel_sync_failure_total{class=...}`, `hypermesh_tunnel_state{state=...}`, `hypermesh_handshake_age_seconds`, `hypermesh_wg_pid`, `hypermesh_wg_port`, `hypermesh_lease_container_count`, `hypermesh_last_sync_timestamp_seconds`, `hypermesh_last_sync_http_status`, `hypermesh_last_sync_error_class{class=...}`, `hypermesh_build_info{commit=...}`). There is no scrape path on the tunnel.
+
+The listener defaults to `127.0.0.1:9464` (`HYPERMESH_METRICS_ADDR`, flag `-metrics-addr`). A non-loopback address, including `0.0.0.0`, `::`, a hostname, or the WireGuard address, is refused and nothing is bound. Set `HYPERMESH_METRICS_ALLOW_NON_LOOPBACK=1` (flag `-metrics-allow-non-loopback`) to allow it; this box then logs a warning that `/metrics` is reachable beyond localhost. A refused or failed listen does not stop heartbeats.
+
 ### Workload jail
 
 Every hosted artifact container (lab soak or renter `lease_start`) runs on the internal Docker network `hypermesh-workload` (created `--internal` if missing). Publish is only `-p <client_address>:8080:8080` — not the default bridge with LAN egress, not `--network=host`. Caps are dropped (`--cap-drop ALL`), rootfs is read-only (`--read-only` + `/tmp` tmpfs), and the only host bind is the GGUF `:ro`. No Docker socket. No host devices for sensors/cameras/robots (GPU stays via `--runtime=nvidia` or HIP kfd/dri). Agent and witness stay on host network and talk to the workload over the overlay address, same as the door.
@@ -182,6 +194,8 @@ internal/pathb      thin-v1 (telem + optional local completions; path_b fails on
 internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (gated)
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
+internal/metrics    loopback Prometheus text /metrics
+internal/buildinfo  build commit (ldflags, else VCS revision)
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
 deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit
 deploy/seeed-j4012  Super J4012 first-boot and overlay

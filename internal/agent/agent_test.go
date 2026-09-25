@@ -2393,6 +2393,8 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	t.Setenv("HYPERMESH_LISTEN_PORT", "")
 	t.Setenv("HYPERMESH_COMPLETIONS_URL", "")
 	t.Setenv("HYPERMESH_GGUF_PATH", "")
+	t.Setenv("HYPERMESH_METRICS_ADDR", "")
+	t.Setenv("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK", "")
 	cfg := FromEnv()
 	if cfg.ControlPlaneURL != "https://api.test.hyperme.sh" {
 		t.Fatalf("default control plane %q", cfg.ControlPlaneURL)
@@ -2405,6 +2407,9 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	}
 	if cfg.GGUFHostPath() != "" {
 		t.Fatalf("unset GGUF path must be empty, got %q", cfg.GGUFHostPath())
+	}
+	if cfg.MetricsAddr != "127.0.0.1:9464" || cfg.MetricsAllowNonLoopback {
+		t.Fatalf("metrics default %+v", cfg.MetricsAddr)
 	}
 	if cfg.LlamaJinja != "1" || cfg.LlamaCtxSize != "16384" || cfg.LlamaTimeout != "1800" {
 		t.Fatalf("llama defaults %+v", cfg)
@@ -2531,6 +2536,12 @@ func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
 	}
 	a.pathb.Collector = a.telem
 	a.keyDir = t.TempDir()
+	a.countLeases = func(context.Context) (int, bool) {
+		if a.lease != nil && strings.TrimSpace(a.lease.LeaseID) != "" {
+			return 1, true
+		}
+		return 0, true
+	}
 	return a
 }
 

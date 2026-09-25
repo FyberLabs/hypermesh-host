@@ -33,13 +33,54 @@ type EnrollResponse struct {
 }
 
 // HeartbeatRequest is POST /agent/heartbeat.
+// Health is additive. Older planes ignore it (pydantic extra='ignore').
+// Existing fields stay. A missing Health is the pre-health body.
 type HeartbeatRequest struct {
-	DeviceID        string    `json:"device_id"`
-	ImageHash       string    `json:"image_hash,omitempty"`
-	LoadedModelHash string    `json:"loaded_model_hash,omitempty"`
-	UptimeS         int64     `json:"uptime_s"`
-	ThermalC        *float64  `json:"thermal_c,omitempty"`
-	SellState       SellState `json:"sell_state,omitempty"`
+	DeviceID        string      `json:"device_id"`
+	ImageHash       string      `json:"image_hash,omitempty"`
+	LoadedModelHash string      `json:"loaded_model_hash,omitempty"`
+	UptimeS         int64       `json:"uptime_s"`
+	ThermalC        *float64    `json:"thermal_c,omitempty"`
+	SellState       SellState   `json:"sell_state,omitempty"`
+	Health          *HostHealth `json:"health,omitempty"`
+}
+
+// Sync error classes for HostHealth.LastSyncErrorClass. Empty means none
+// or a failure that is not one of these classes. Do not put response bodies here.
+const (
+	ErrClassHTTP5xx = "http_5xx"
+	ErrClassHTTP4xx = "http_4xx"
+	ErrClassNetwork = "network"
+	ErrClassTimeout = "timeout"
+	ErrClassDecode  = "decode"
+)
+
+// HealthErrorClasses is the fixed class set, including empty.
+func HealthErrorClasses() []string {
+	return []string{ErrClassHTTP5xx, ErrClassHTTP4xx, ErrClassNetwork, ErrClassTimeout, ErrClassDecode, ""}
+}
+
+// TunnelHealthStates is the tunnel_state enum.
+func TunnelHealthStates() []string {
+	return []string{"up", "handshaking", "down", "disabled"}
+}
+
+// HostHealth is optional host and tunnel health on the heartbeat.
+// No WireGuard keys, tokens, device secrets, raw HTTP bodies, renter ids,
+// or model prompts. Lease containers are a count only.
+// Fields this box cannot compute are omitted. last_sync_error_class is
+// an empty string when there is no class. last_sync_http_status is 0
+// when there is no status. A failed collection must not fail the heartbeat.
+type HostHealth struct {
+	TunnelState         string `json:"tunnel_state,omitempty"`
+	LastSyncAt          string `json:"last_sync_at,omitempty"`
+	LastSyncErrorClass  string `json:"last_sync_error_class"`
+	LastSyncHTTPStatus  int    `json:"last_sync_http_status"`
+	HandshakeAgeS       *int   `json:"handshake_age_s,omitempty"`
+	WGPID               *int   `json:"wg_pid,omitempty"`
+	WGPort              *int   `json:"wg_port,omitempty"`
+	LeaseContainerCount *int   `json:"lease_container_count,omitempty"`
+	BuildCommit         string `json:"build_commit,omitempty"`
 }
 
 // PathBState is the control-plane view of Path B.
