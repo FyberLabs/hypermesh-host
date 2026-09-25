@@ -19,8 +19,8 @@ const (
 )
 
 // EnrollRequest is POST /agent/enroll.
-// HostType is "model" or "supervisor". supervisor must not be offered
-// a weight. Empty omits the field so older agents stay unchanged.
+// HostType is "model" or "supervisor". The plane does not offer a supervisor.
+// This is not a certification result.
 type EnrollRequest struct {
 	EnrollToken string `json:"enroll_token"`
 	ImageHash   string `json:"image_hash,omitempty"`
@@ -46,9 +46,6 @@ type HeartbeatRequest struct {
 	ThermalC        *float64    `json:"thermal_c,omitempty"`
 	SellState       SellState   `json:"sell_state,omitempty"`
 	Health          *HostHealth `json:"health,omitempty"`
-	// HostType matches enroll. "supervisor" is a host the plane should
-	// keep out of offers. Empty omits the field.
-	HostType string `json:"host_type,omitempty"`
 }
 
 // Sync error classes for HostHealth.LastSyncErrorClass. Empty means none
@@ -87,6 +84,9 @@ type HostHealth struct {
 	WGPort              *int   `json:"wg_port,omitempty"`
 	LeaseContainerCount *int   `json:"lease_container_count,omitempty"`
 	BuildCommit         string `json:"build_commit,omitempty"`
+	// HostType is model or supervisor. The plane reads this field and
+	// does not offer a supervisor. It is not a certification result.
+	HostType string `json:"host_type,omitempty"`
 }
 
 // PathBState is the control-plane view of Path B.

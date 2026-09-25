@@ -129,6 +129,7 @@ func TestHeartbeatHealthShape(t *testing.T) {
 	wantHealth := []string{
 		"tunnel_state", "last_sync_at", "last_sync_error_class", "last_sync_http_status",
 		"handshake_age_s", "wg_pid", "wg_port", "lease_container_count", "build_commit",
+		"host_type",
 	}
 	if !sameKeys(health, wantHealth) {
 		t.Fatalf("health keys %s", top["health"])
@@ -156,6 +157,9 @@ func TestHeartbeatHealthShape(t *testing.T) {
 	}
 	if hb.Health.BuildCommit != "abc123deadbeef" {
 		t.Fatalf("build_commit %q", hb.Health.BuildCommit)
+	}
+	if hb.Health.HostType != HostTypeModel {
+		t.Fatalf("host_type %q", hb.Health.HostType)
 	}
 	for _, leak := range []string{
 		priv, pub, "hm_dev_", "renter-prompt", "device_secret", "peer_private_key",

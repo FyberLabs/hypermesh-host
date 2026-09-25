@@ -233,7 +233,9 @@ func TestHostPlacementReportsSupervisorAndDropsToken(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		mu.Lock()
 		heartbeats++
-		hbHost = req.HostType
+		if req.Health != nil {
+			hbHost = req.Health.HostType
+		}
 		mu.Unlock()
 		writeJSON(w, api.HeartbeatResponse{DeviceID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", PathBState: api.PathBNeverRun})
 	})

@@ -242,7 +242,6 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		ThermalC:        snap.ThermalC,
 		SellState:       sell.SellState,
 		Health:          a.safeHealth(ctx),
-		HostType:        a.cfg.ReportedHostType(),
 	})
 	if err != nil {
 		a.recordHeartbeat(err)

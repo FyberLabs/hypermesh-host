@@ -58,9 +58,10 @@ type Config struct {
 	// "1" / "userspace" forces that unit. "0" / "kernel" forces wg-quick.
 	// Empty stays on wg-quick (tests). The agent never spawns wireguard-go.
 	WGMode string
-	// HostType is "model" (default, omitted on the wire) or "supervisor".
+	// HostType is "model" (default) or "supervisor".
 	// A supervisor host enrolls and heartbeats and refuses lease_start.
-	// The value is sent as host_type so the plane can keep it out of offers.
+	// Enroll sends host_type. Heartbeat sends it as health.host_type
+	// so the plane can keep a supervisor out of offers.
 	HostType string
 	// WGKeyDir is the host WireGuard private key directory.
 	// Empty uses /etc/wireguard. The key stays on this host.
@@ -160,17 +161,14 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// ReportedHostType is the host_type sent on enroll and heartbeat.
-// Empty stays off the wire so a model host matches the previous body.
+// ReportedHostType is the host_type sent on enroll and on heartbeat
+// health. Empty means model. The plane reads health.host_type and
+// does not offer a supervisor.
 func (c Config) ReportedHostType() string {
-	switch strings.ToLower(strings.TrimSpace(c.HostType)) {
-	case HostTypeSupervisor:
+	if c.SupervisorHost() {
 		return HostTypeSupervisor
-	case HostTypeModel:
-		return HostTypeModel
-	default:
-		return ""
 	}
+	return HostTypeModel
 }
 
 // SupervisorHost is a non-model host. It enrolls and heartbeats.

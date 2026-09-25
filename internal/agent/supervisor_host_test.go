@@ -149,15 +149,19 @@ func TestSupervisorHostTypeOnEnrollAndHeartbeat(t *testing.T) {
 	if err := json.Unmarshal(hbBody, &hb); err != nil {
 		t.Fatal(err)
 	}
-	if hb.HostType != HostTypeSupervisor {
-		t.Fatalf("heartbeat host_type %q body %s", hb.HostType, hbBody)
+	if hb.Health == nil || hb.Health.HostType != HostTypeSupervisor {
+		t.Fatalf("heartbeat health.host_type missing in %s", hbBody)
 	}
-	if hb.Health == nil {
-		t.Fatal("supervisor heartbeat dropped the health object")
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(hbBody, &top); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := top["host_type"]; ok {
+		t.Fatalf("host_type must sit on health, not the heartbeat root: %s", hbBody)
 	}
 }
 
-func TestModelHeartbeatOmitsHostType(t *testing.T) {
+func TestModelHeartbeatHostTypeLivesOnHealth(t *testing.T) {
 	var hbBody []byte
 	mux := http.NewServeMux()
 	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +189,13 @@ func TestModelHeartbeatOmitsHostType(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := top["host_type"]; ok {
-		t.Fatalf("model heartbeat sent host_type: %s", hbBody)
+		t.Fatalf("host_type must sit on health: %s", hbBody)
+	}
+	var hb api.HeartbeatRequest
+	if err := json.Unmarshal(hbBody, &hb); err != nil {
+		t.Fatal(err)
+	}
+	if hb.Health == nil || hb.Health.HostType != HostTypeModel {
+		t.Fatalf("health.host_type %s", hbBody)
 	}
 }
