@@ -94,6 +94,8 @@ func (r *Runner) OnSyncError(ctx context.Context) (bool, error) {
 }
 
 func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
+	r.logTunnel = sess.TunnelID
+	r.logLease = sess.LeaseID
 	if err := os.MkdirAll(r.configDir(), 0o700); err != nil {
 		return err
 	}
@@ -111,9 +113,10 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 		// Desired peer is already on the link. Do not syncconf or set the
 		// link down; either would drop a live handshake. Routes are still
 		// reconciled: wg-quick installed them, syncconf does not.
-		if err := r.reconcileRoutes(ctx, sess.AllowedIPs); err != nil {
+		if err := r.reconcileRoutes(ctx, sess); err != nil {
 			return err
 		}
+		r.noteApply(applySkipped)
 		if r.alreadyApplied(sess) {
 			return nil
 		}
@@ -143,9 +146,10 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 	if _, err := r.runCmd(ctx, "ip", "link", "set", "dev", r.iface(), "up"); err != nil {
 		return err
 	}
-	if err := r.reconcileRoutes(ctx, sess.AllowedIPs); err != nil {
+	if err := r.reconcileRoutes(ctx, sess); err != nil {
 		return err
 	}
+	r.noteApply(applySyncconf)
 	return r.saveApplied(PeerFingerprint(sess))
 }
 
@@ -591,8 +595,10 @@ type devRoute struct {
 	v6   bool
 }
 
-func (r *Runner) reconcileRoutes(ctx context.Context, allowed string) error {
-	want, err := wantedRoutes(allowed, r.InstallDefaultRoute)
+func (r *Runner) reconcileRoutes(ctx context.Context, sess Session) error {
+	r.logTunnel = sess.TunnelID
+	r.logLease = sess.LeaseID
+	want, err := wantedRoutes(sess.AllowedIPs, r.InstallDefaultRoute)
 	if err != nil {
 		return err
 	}
@@ -600,20 +606,30 @@ func (r *Runner) reconcileRoutes(ctx context.Context, allowed string) error {
 	if err != nil {
 		return err
 	}
+	haveSet := map[string]bool{}
+	for _, h := range have {
+		haveSet[routeKey(h.cidr, h.v6)] = true
+	}
 	wantSet := map[string]bool{}
 	for _, cidr := range want {
-		wantSet[cidr] = true
+		key := routeKey(cidr, strings.Contains(cidr, ":"))
+		wantSet[key] = true
 		if err := r.ipRoute(ctx, strings.Contains(cidr, ":"), "replace", cidr); err != nil {
 			return err
 		}
+		if !haveSet[key] {
+			r.logRoute("add", key)
+		}
 	}
 	for _, h := range have {
-		if wantSet[routeKey(h.cidr, h.v6)] {
+		key := routeKey(h.cidr, h.v6)
+		if wantSet[key] {
 			continue
 		}
 		if err := r.ipRoute(ctx, h.v6, "del", h.cidr); err != nil {
 			return err
 		}
+		r.logRoute("delete", key)
 	}
 	return nil
 }
@@ -627,10 +643,15 @@ func (r *Runner) deleteDevRoutes(ctx context.Context) error {
 		if err := r.ipRoute(ctx, h.v6, "del", h.cidr); err != nil {
 			return err
 		}
+		r.logRoute("delete", routeKey(h.cidr, h.v6))
 	}
 	return nil
 }
 
+// listDevRoutes returns prefixes on the interface that this agent may delete.
+// proto kernel routes (the connected route installed with the interface
+// address) and the IPv6 link-local fe80::/64 are not ours. AllowedIPs
+// prefixes, including a stale one from an earlier apply, are.
 func (r *Runner) listDevRoutes(ctx context.Context) ([]devRoute, error) {
 	var out []devRoute
 	for _, v6 := range []bool{false, true} {
@@ -643,18 +664,88 @@ func (r *Runner) listDevRoutes(ctx context.Context) ([]devRoute, error) {
 			return nil, err
 		}
 		for _, line := range strings.Split(string(b), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) == 0 {
-				continue
-			}
-			cidr := fields[0]
-			if cidr != "default" && !strings.Contains(cidr, "/") {
+			cidr, ok := parseDevRoute(line)
+			if !ok {
 				continue
 			}
 			out = append(out, devRoute{cidr: cidr, v6: v6})
 		}
 	}
 	return out, nil
+}
+
+// routeTypes are the words iproute2 may print before the destination.
+var routeTypes = map[string]bool{
+	"unicast": true, "local": true, "broadcast": true, "multicast": true,
+	"anycast": true, "throw": true, "unreachable": true, "prohibit": true,
+	"blackhole": true, "nat": true, "xresolve": true,
+}
+
+// parseDevRoute reads one line from `ip route show` or `ip -6 route show`.
+// The destination is the first field, or the field after a route type.
+// iproute2 prints an IPv4 /32 and an IPv6 /128 as a bare address; those are
+// restored so a stale AllowedIPs host route can still be deleted.
+// ok is false for blank lines, routes whose proto is kernel, and fe80::/64.
+// scope, metric, src, pref, and dev are not destinations, so
+// "proto kernel scope link ... metric N" stays skipped.
+func parseDevRoute(line string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return "", false
+	}
+	if routeTypes[fields[0]] {
+		fields = fields[1:]
+		if len(fields) == 0 {
+			return "", false
+		}
+	}
+	cidr := fields[0]
+	switch {
+	case cidr == "default" || strings.Contains(cidr, "/"):
+	default:
+		addr, err := netip.ParseAddr(cidr)
+		if err != nil {
+			return "", false
+		}
+		bits := 32
+		if addr.Is6() {
+			bits = 128
+		}
+		cidr = netip.PrefixFrom(addr, bits).String()
+	}
+	if protoName(fields) == "kernel" || isLinkLocal64(cidr) {
+		return "", false
+	}
+	return cidr, true
+}
+
+func protoName(fields []string) string {
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "proto" {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+func isLinkLocal64(cidr string) bool {
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return false
+	}
+	return p.Masked().String() == "fe80::/64"
+}
+
+func (r *Runner) logRoute(action, cidr string) {
+	if r.Log == nil {
+		return
+	}
+	r.Log.Info("route "+action,
+		"cidr", cidr,
+		"dev", r.iface(),
+		"tunnel_id", r.logTunnel,
+		"lease_id", r.logLease,
+	)
 }
 
 func (r *Runner) ipRoute(ctx context.Context, v6 bool, op, cidr string) error {

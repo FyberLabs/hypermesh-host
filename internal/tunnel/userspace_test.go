@@ -1,10 +1,12 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -260,6 +262,9 @@ func TestUserspaceRestartIdenticalConfigDoesNotSync(t *testing.T) {
 	if link.port != 33469 {
 		t.Fatalf("listen port changed to %d", link.port)
 	}
+	if r.ApplyOutcome() != "skip" {
+		t.Fatalf("outcome %q", r.ApplyOutcome())
+	}
 }
 
 func TestUserspaceAllowedIPsChangeUpdatesRoutes(t *testing.T) {
@@ -280,6 +285,9 @@ func TestUserspaceAllowedIPsChangeUpdatesRoutes(t *testing.T) {
 	if !link.synced {
 		t.Fatal("AllowedIPs change must syncconf")
 	}
+	if r.ApplyOutcome() != "syncconf" {
+		t.Fatalf("outcome %q", r.ApplyOutcome())
+	}
 	if !strings.Contains(link.syncBody, "ListenPort = 33469") || link.port != 33469 {
 		t.Fatalf("listen port not pinned: port=%d body=%s", link.port, link.syncBody)
 	}
@@ -294,6 +302,153 @@ func TestUserspaceAllowedIPsChangeUpdatesRoutes(t *testing.T) {
 			t.Fatalf("stale route still installed: %v", link.routes)
 		}
 	}
+}
+
+// TestUserspaceReconcileKeepsKernelAndLinkLocal is a fake `ip route` /
+// `ip -6 route` listing. A proto kernel connected route and fe80::/64 stay.
+// A stale agent prefix (proto boot, with scope link and metric) is deleted,
+// and the current AllowedIPs prefix is installed.
+func TestUserspaceReconcileKeepsKernelAndLinkLocal(t *testing.T) {
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	sess := allocated()
+	sess.AllowedIPs = "10.88.0.0/24"
+	sess.ClientAddress = "10.77.0.3/24"
+	link := newScriptedLink(sess, now)
+	link.routes = []string{"10.77.0.0/24", "10.66.0.0/24"}
+	link.routes6 = []string{"fe80::/64"}
+	link.lineFor = func(cidr string, _ bool) string {
+		switch cidr {
+		case "10.77.0.0/24":
+			// Connected route from a non-/32 address. dev is omitted, which
+			// is what `ip route show dev hypermesh` prints, and metric follows
+			// proto kernel scope link.
+			return "10.77.0.0/24 proto kernel scope link src 10.77.0.3 metric 256"
+		case "10.66.0.0/24":
+			return "10.66.0.0/24 proto boot scope link metric 1024"
+		case "fe80::/64":
+			// No "proto kernel": the link-local check has to save this line
+			// on its own. metric and pref are present so they are not parsed
+			// as the destination.
+			return "fe80::/64 metric 256 pref medium"
+		default:
+			return ""
+		}
+	}
+	var logs bytes.Buffer
+	r := newUserspaceRunner(t, link, now)
+	r.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	if err := r.Apply(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	link.mu.Lock()
+	if link.synced || link.saw("syncconf") {
+		link.mu.Unlock()
+		t.Fatalf("matching peer was rewritten: %v", link.cmds)
+	}
+	if r.ApplyOutcome() != "skip" {
+		link.mu.Unlock()
+		t.Fatalf("outcome %q", r.ApplyOutcome())
+	}
+	if !hasCIDR(link.routes, "10.77.0.0/24") {
+		link.mu.Unlock()
+		t.Fatalf("proto kernel route deleted: %v", link.routes)
+	}
+	if hasCIDR(link.routes, "10.66.0.0/24") {
+		link.mu.Unlock()
+		t.Fatalf("stale prefix kept: %v", link.routes)
+	}
+	if !hasCIDR(link.routes, "10.88.0.0/24") {
+		link.mu.Unlock()
+		t.Fatalf("wanted prefix missing: %v", link.routes)
+	}
+	if !hasCIDR(link.routes6, "fe80::/64") {
+		link.mu.Unlock()
+		t.Fatalf("link-local deleted: %v", link.routes6)
+	}
+	if link.saw("ip route del 10.77.0.0/24") || link.saw("ip -6 route del fe80::/64") {
+		link.mu.Unlock()
+		t.Fatalf("reconcile deleted an unmanaged route: %v", link.cmds)
+	}
+	if !link.saw("ip route del 10.66.0.0/24 dev hypermesh") {
+		link.mu.Unlock()
+		t.Fatalf("stale prefix not deleted: %v", link.cmds)
+	}
+	if !link.saw("ip route replace 10.88.0.0/24 dev hypermesh") {
+		link.mu.Unlock()
+		t.Fatalf("wanted prefix not installed: %v", link.cmds)
+	}
+	link.mu.Unlock()
+
+	text := logs.String()
+	if !strings.Contains(text, `msg="route add"`) || !strings.Contains(text, "cidr=10.88.0.0/24") ||
+		!strings.Contains(text, "tunnel_id=tun-1") || !strings.Contains(text, "lease_id=lease-1") {
+		t.Fatalf("route add log: %s", text)
+	}
+	if !strings.Contains(text, `msg="route delete"`) || !strings.Contains(text, "cidr=10.66.0.0/24") {
+		t.Fatalf("route delete log: %s", text)
+	}
+	if strings.Contains(text, "10.77.0.0/24") || strings.Contains(text, "fe80::/64") {
+		t.Fatalf("unmanaged route logged as a change: %s", text)
+	}
+
+	if err := r.Teardown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	link.mu.Lock()
+	defer link.mu.Unlock()
+	if !hasCIDR(link.routes, "10.77.0.0/24") || !hasCIDR(link.routes6, "fe80::/64") {
+		t.Fatalf("teardown deleted unmanaged routes: v4=%v v6=%v", link.routes, link.routes6)
+	}
+	if hasCIDR(link.routes, "10.88.0.0/24") || hasCIDR(link.routes, "10.66.0.0/24") {
+		t.Fatalf("teardown left an agent route: %v", link.routes)
+	}
+	if link.saw("ip route del 10.77.0.0/24") || link.saw("ip -6 route del fe80::/64") {
+		t.Fatalf("teardown deleted an unmanaged route: %v", link.cmds)
+	}
+}
+
+func TestParseDevRouteSkipsKernelAndLinkLocal(t *testing.T) {
+	cases := []struct {
+		line string
+		keep bool
+		cidr string
+	}{
+		{"10.77.0.0/24 proto kernel scope link src 10.77.0.3 metric 256", false, ""},
+		{"10.77.0.0/24 dev hypermesh proto kernel scope link src 10.77.0.3 metric 256 linkdown", false, ""},
+		{"10.77.0.0/24 metric 256 proto kernel scope link", false, ""},
+		{"fe80::/64 proto kernel metric 256 pref medium", false, ""},
+		{"fe80::/64 metric 256 pref medium", false, ""},
+		{"FE80::/64 proto kernel metric 256", false, ""},
+		{"fe80:0:0:0:0:0:0:0/64 metric 1024 pref medium", false, ""},
+		{"10.66.0.0/24 dev hypermesh scope link metric 1024", true, "10.66.0.0/24"},
+		{"10.66.0.0/24 proto boot scope link metric 20", true, "10.66.0.0/24"},
+		{"unicast 10.88.0.0/24 proto static scope link metric 10", true, "10.88.0.0/24"},
+		{"default dev hypermesh scope link metric 1024", true, "default"},
+		{"default proto kernel metric 256 pref medium", false, ""},
+		{"broadcast 10.77.0.255 proto kernel scope link src 10.77.0.3 metric 256", false, ""},
+		{"local 10.77.0.3 proto kernel scope host src 10.77.0.3", false, ""},
+		{"10.77.0.3 proto kernel scope link src 10.77.0.3 metric 256", false, ""},
+		{"10.77.0.5 proto boot scope link metric 20", true, "10.77.0.5/32"},
+		{"fd00::5 metric 1024 pref medium", true, "fd00::5/128"},
+		{"fe80::1 proto kernel metric 256 pref medium", false, ""},
+		{"", false, ""},
+		{"proto kernel scope link metric 256", false, ""},
+	}
+	for _, tc := range cases {
+		got, ok := parseDevRoute(tc.line)
+		if ok != tc.keep || got != tc.cidr {
+			t.Fatalf("parse %q: got (%q, %v) want (%q, %v)", tc.line, got, ok, tc.cidr, tc.keep)
+		}
+	}
+}
+
+func hasCIDR(list []string, cidr string) bool {
+	for _, have := range list {
+		if have == cidr {
+			return true
+		}
+	}
+	return false
 }
 
 func stripPad(t *testing.T, std string) string {
@@ -352,6 +507,9 @@ type scriptedLink struct {
 	port     int
 	routes   []string
 	routes6  []string
+	// lineFor is the text `ip route show` returns for a stored prefix.
+	// Nil, or an empty result, prints "<cidr> dev hypermesh scope link".
+	lineFor  func(cidr string, v6 bool) string
 	down     bool
 	removed  bool
 	spawned  bool
@@ -460,7 +618,13 @@ func (s *scriptedLink) route(args []string) ([]byte, error) {
 		}
 		var b strings.Builder
 		for _, cidr := range list {
-			fmt.Fprintf(&b, "%s dev hypermesh scope link\n", cidr)
+			line := cidr + " dev hypermesh scope link"
+			if s.lineFor != nil {
+				if custom := s.lineFor(cidr, v6); custom != "" {
+					line = custom
+				}
+			}
+			fmt.Fprintln(&b, line)
 		}
 		return []byte(b.String()), nil
 	case containsAll(args, "replace"):
