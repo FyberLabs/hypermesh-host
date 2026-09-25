@@ -2,11 +2,16 @@ package tunnel
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -102,9 +107,13 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 	if !live.Exists {
 		return fmt.Errorf("hypermesh tunnel: interface %s does not exist; enable hypermesh-wg.service", r.iface())
 	}
-	if live.matches(sess) {
-		// Desired config is already on the link. Do not syncconf or
-		// set the link down; either would drop a live handshake.
+	if r.liveMatches(ctx, live, sess) {
+		// Desired peer is already on the link. Do not syncconf or set the
+		// link down; either would drop a live handshake. Routes are still
+		// reconciled: wg-quick installed them, syncconf does not.
+		if err := r.reconcileRoutes(ctx, sess.AllowedIPs); err != nil {
+			return err
+		}
 		if r.alreadyApplied(sess) {
 			return nil
 		}
@@ -119,7 +128,7 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 		return err
 	}
 	syncPath := filepath.Join(r.configDir(), r.iface()+".sync")
-	if err := os.WriteFile(syncPath, []byte(wgSetConfig(sess)), 0o600); err != nil {
+	if err := os.WriteFile(syncPath, []byte(wgSetConfig(sess, live.ListenPort)), 0o600); err != nil {
 		return err
 	}
 	defer func() { _ = shredFile(syncPath) }()
@@ -132,6 +141,9 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 		}
 	}
 	if _, err := r.runCmd(ctx, "ip", "link", "set", "dev", r.iface(), "up"); err != nil {
+		return err
+	}
+	if err := r.reconcileRoutes(ctx, sess.AllowedIPs); err != nil {
 		return err
 	}
 	return r.saveApplied(PeerFingerprint(sess))
@@ -147,6 +159,9 @@ func (r *Runner) teardownUserspace(ctx context.Context) error {
 		return err
 	}
 	if live.Exists {
+		if err := r.deleteDevRoutes(ctx); err != nil {
+			return err
+		}
 		for _, p := range live.Peers {
 			if strings.TrimSpace(p.PublicKey) == "" || p.PublicKey == "(none)" {
 				continue
@@ -178,6 +193,7 @@ func (r *Runner) writeQuickConf(sess Session) error {
 type liveIface struct {
 	Exists     bool
 	PrivateKey string
+	ListenPort int
 	Address    string
 	Peers      []livePeer
 }
@@ -210,36 +226,165 @@ func (p livePeer) recent(now time.Time) bool {
 	return age >= -30*time.Second && age <= recentHandshakeWindow
 }
 
-// matches is true when the live interface already has the desired host peer.
+// liveMatches is true when the live interface already has the desired host peer.
 // tunnel_id and lease_id are not compared. A recent handshake is not required;
 // an identical config must not be rewritten.
-func (l liveIface) matches(s Session) bool {
+//
+// wg show dump does not echo the config text. Keys are re-encoded, the endpoint
+// is the resolved numeric address, and AllowedIPs are comma-joined with no
+// spaces in trie order. Those differences are the same peer.
+func (r *Runner) liveMatches(ctx context.Context, l liveIface, s Session) bool {
 	if !l.Exists || len(l.Peers) != 1 {
 		return false
 	}
 	if strings.TrimSpace(l.PrivateKey) == "" || l.PrivateKey == "(none)" {
 		return false
 	}
-	if l.PrivateKey != strings.TrimSpace(s.PeerPrivateKey) {
+	if !sameWGKey(l.PrivateKey, s.PeerPrivateKey) {
 		return false
 	}
-	if addr := strings.TrimSpace(s.ClientAddress); addr != "" && l.Address != addr {
+	if addr := strings.TrimSpace(s.ClientAddress); addr != "" && !sameAddr(l.Address, addr) {
 		return false
 	}
 	p := l.Peers[0]
-	if p.PublicKey != strings.TrimSpace(s.ServerPublicKey) {
+	if !sameWGKey(p.PublicKey, s.ServerPublicKey) {
 		return false
 	}
-	if p.Endpoint != strings.TrimSpace(s.Endpoint) {
+	if !r.endpointsMatch(ctx, s.Endpoint, p.Endpoint) {
 		return false
 	}
-	if p.AllowedIPs != strings.TrimSpace(s.AllowedIPs) {
+	if !sameAllowed(p.AllowedIPs, s.AllowedIPs) {
 		return false
 	}
 	if p.Keepalive != persistentKeepaliveSec {
 		return false
 	}
 	return true
+}
+
+func sameWGKey(a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" || b == "" || a == "(none)" || b == "(none)" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	ab, aok := decodeWGKey(a)
+	bb, bok := decodeWGKey(b)
+	if !aok || !bok {
+		return false
+	}
+	return subtle.ConstantTimeCompare(ab, bb) == 1
+}
+
+func decodeWGKey(s string) ([]byte, bool) {
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	} {
+		raw, err := enc.DecodeString(s)
+		if err == nil && len(raw) == 32 {
+			return raw, true
+		}
+	}
+	return nil, false
+}
+
+func sameAddr(live, want string) bool {
+	live = strings.TrimSpace(live)
+	want = strings.TrimSpace(want)
+	if live == want {
+		return true
+	}
+	lp, e1 := netip.ParsePrefix(live)
+	wp, e2 := netip.ParsePrefix(want)
+	if e1 != nil || e2 != nil {
+		return false
+	}
+	return lp.String() == wp.String()
+}
+
+func sameAllowed(live, want string) bool {
+	a := canonPrefixes(live)
+	b := canonPrefixes(want)
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func canonPrefixes(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "(none)" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(part); err == nil {
+			part = p.String()
+		}
+		out = append(out, part)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// endpointsMatch treats the numeric address from `wg show dump` as the same
+// endpoint as the hostname the control plane sent, when that name resolves
+// to the address. Ports must match. A different address is a real change.
+func (r *Runner) endpointsMatch(ctx context.Context, desired, live string) bool {
+	desired = strings.TrimSpace(desired)
+	live = strings.TrimSpace(live)
+	if desired == live {
+		return true
+	}
+	dh, dp, err1 := net.SplitHostPort(desired)
+	lh, lp, err2 := net.SplitHostPort(live)
+	if err1 != nil || err2 != nil || dp != lp {
+		return false
+	}
+	if strings.EqualFold(dh, lh) {
+		return true
+	}
+	dip := net.ParseIP(dh)
+	lip := net.ParseIP(lh)
+	if dip != nil && lip != nil {
+		return dip.Equal(lip)
+	}
+	if dip != nil || lip == nil {
+		return false
+	}
+	ips, err := r.lookupHost(ctx, dh)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if net.ParseIP(ip).Equal(lip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) lookupHost(ctx context.Context, host string) ([]string, error) {
+	if r.LookupHost != nil {
+		return r.LookupHost(ctx, host)
+	}
+	return net.DefaultResolver.LookupHost(ctx, host)
 }
 
 func (r *Runner) inspect(ctx context.Context) (liveIface, error) {
@@ -272,7 +417,8 @@ func parseWGDump(text string) (liveIface, error) {
 	if len(fields) < 4 {
 		return liveIface{}, errors.New("hypermesh tunnel: unexpected wg dump")
 	}
-	live := liveIface{Exists: true, PrivateKey: fields[0]}
+	port, _ := strconv.Atoi(strings.TrimSpace(fields[2]))
+	live := liveIface{Exists: true, PrivateKey: strings.TrimSpace(fields[0]), ListenPort: port}
 	for _, line := range lines[1:] {
 		p := strings.Split(line, "\t")
 		if len(p) < 8 {
@@ -284,9 +430,9 @@ func parseWGDump(text string) (liveIface, error) {
 			ka, _ = strconv.Atoi(tail)
 		}
 		live.Peers = append(live.Peers, livePeer{
-			PublicKey:  p[0],
-			Endpoint:   p[2],
-			AllowedIPs: p[3],
+			PublicKey:  strings.TrimSpace(p[0]),
+			Endpoint:   strings.TrimSpace(p[2]),
+			AllowedIPs: strings.TrimSpace(p[3]),
 			Keepalive:  ka,
 			Handshake:  time.Unix(hs, 0),
 		})
@@ -372,12 +518,21 @@ func withoutUserspaceWG(env []string) []string {
 }
 
 // wgSetConfig is the wg syncconf file. Address is not valid here; ip addr sets it.
-func wgSetConfig(s Session) string {
+//
+// ListenPort is pinned to the port the interface already bound. wireguard-tools
+// sets WGDEVICE_HAS_LISTEN_PORT even when the file omits the key, then sends
+// listen_port=0. wireguard-go treats 0 as "bind a new port", which drops the
+// handshake. A port of 0 means the process has not bound yet; omit the line.
+func wgSetConfig(s Session, listenPort int) string {
 	var b strings.Builder
 	b.WriteString("[Interface]\n")
 	b.WriteString("PrivateKey = ")
 	b.WriteString(s.PeerPrivateKey)
-	b.WriteString("\n\n[Peer]\n")
+	b.WriteString("\n")
+	if listenPort > 0 && listenPort <= 65535 {
+		fmt.Fprintf(&b, "ListenPort = %d\n", listenPort)
+	}
+	b.WriteString("\n[Peer]\n")
 	if s.ServerPublicKey != "" {
 		b.WriteString("PublicKey = ")
 		b.WriteString(s.ServerPublicKey)
@@ -396,4 +551,130 @@ func wgSetConfig(s Session) string {
 	b.WriteString(persistentKeepaliveLine())
 	b.WriteString("\n")
 	return b.String()
+}
+
+// wantedRoutes is the AllowedIPs prefixes to install on the interface.
+// 0.0.0.0/0 and ::/0 are omitted unless InstallDefaultRoute is set. Installing
+// them would replace the LAN default route (on AGX64-1, 192.168.6.1 dev end0)
+// that reaches the control plane and the WireGuard endpoint.
+func wantedRoutes(allowed string, installDefault bool) ([]string, error) {
+	allowed = strings.TrimSpace(allowed)
+	if allowed == "" || allowed == "(none)" {
+		return nil, nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(allowed, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("hypermesh tunnel: allowed ip %q: %w", part, err)
+		}
+		s := p.String()
+		if !installDefault && (s == "0.0.0.0/0" || s == "::/0") {
+			continue
+		}
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+type devRoute struct {
+	cidr string
+	v6   bool
+}
+
+func (r *Runner) reconcileRoutes(ctx context.Context, allowed string) error {
+	want, err := wantedRoutes(allowed, r.InstallDefaultRoute)
+	if err != nil {
+		return err
+	}
+	have, err := r.listDevRoutes(ctx)
+	if err != nil {
+		return err
+	}
+	wantSet := map[string]bool{}
+	for _, cidr := range want {
+		wantSet[cidr] = true
+		if err := r.ipRoute(ctx, strings.Contains(cidr, ":"), "replace", cidr); err != nil {
+			return err
+		}
+	}
+	for _, h := range have {
+		if wantSet[routeKey(h.cidr, h.v6)] {
+			continue
+		}
+		if err := r.ipRoute(ctx, h.v6, "del", h.cidr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) deleteDevRoutes(ctx context.Context) error {
+	have, err := r.listDevRoutes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, h := range have {
+		if err := r.ipRoute(ctx, h.v6, "del", h.cidr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) listDevRoutes(ctx context.Context) ([]devRoute, error) {
+	var out []devRoute
+	for _, v6 := range []bool{false, true} {
+		args := []string{"route", "show", "dev", r.iface()}
+		if v6 {
+			args = append([]string{"-6"}, args...)
+		}
+		b, err := r.runCmd(ctx, "ip", args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 0 {
+				continue
+			}
+			cidr := fields[0]
+			if cidr != "default" && !strings.Contains(cidr, "/") {
+				continue
+			}
+			out = append(out, devRoute{cidr: cidr, v6: v6})
+		}
+	}
+	return out, nil
+}
+
+func (r *Runner) ipRoute(ctx context.Context, v6 bool, op, cidr string) error {
+	args := []string{"route", op, cidr, "dev", r.iface()}
+	if v6 {
+		args = append([]string{"-6"}, args...)
+	}
+	_, err := r.runCmd(ctx, "ip", args...)
+	return err
+}
+
+func routeKey(cidr string, v6 bool) string {
+	if cidr == "default" {
+		if v6 {
+			return "::/0"
+		}
+		return "0.0.0.0/0"
+	}
+	if p, err := netip.ParsePrefix(cidr); err == nil {
+		return p.String()
+	}
+	return cidr
 }
