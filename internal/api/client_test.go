@@ -393,8 +393,8 @@ func TestProposePeer(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method %s", r.Method)
 		}
-		if r.URL.Query().Get("device_id") != testDevice {
-			t.Errorf("peer query")
+		if r.URL.RawQuery != "" {
+			t.Errorf("peer POST takes no query, got %q", r.URL.RawQuery)
 		}
 		var err error
 		rawBody, err = io.ReadAll(r.Body)
@@ -408,7 +408,7 @@ func TestProposePeer(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := NewClient(srv.URL, testTenant)
 	c.DeviceSecret = testSecret
-	if err := c.ProposePeer(context.Background(), testDevice, TunnelPeerRequest{PeerPublicKey: hostPub}); err != nil {
+	if err := c.ProposePeer(context.Background(), TunnelPeerRequest{PeerPublicKey: "  " + hostPub + "  "}); err != nil {
 		t.Fatal(err)
 	}
 	var obj map[string]any
@@ -485,12 +485,43 @@ func TestProposePeerNoTunnelIsDistinct(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := NewClient(srv.URL, testTenant)
 	c.DeviceSecret = testSecret
-	err := c.ProposePeer(context.Background(), testDevice, TunnelPeerRequest{PeerPublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="})
+	err := c.ProposePeer(context.Background(), TunnelPeerRequest{PeerPublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="})
 	if !errors.Is(err, ErrNoTunnel) {
 		t.Fatalf("got %v", err)
 	}
 	if strings.Contains(err.Error(), "Tunnel not found") {
 		t.Fatalf("404 body leaked into error: %v", err)
+	}
+}
+
+func TestProposePeerRevokedAndUnauthorized(t *testing.T) {
+	const hostPub = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(HeaderAuthorization) != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"Invalid device credential"}`))
+			return
+		}
+		if r.URL.RawQuery != "" {
+			t.Errorf("peer POST takes no device_id, got %q", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"Tunnel is revoked"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = "hm_dev_wrong"
+	err := c.ProposePeer(context.Background(), TunnelPeerRequest{PeerPublicKey: hostPub})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("bad secret: %v", err)
+	}
+	c.DeviceSecret = testSecret
+	err = c.ProposePeer(context.Background(), TunnelPeerRequest{PeerPublicKey: hostPub})
+	if !errors.Is(err, ErrTunnelRevoked) {
+		t.Fatalf("revoked: %v", err)
+	}
+	if err := c.ProposePeer(context.Background(), TunnelPeerRequest{PeerPublicKey: "short"}); !errors.Is(err, ErrPeerKeyLength) {
+		t.Fatalf("length: %v", err)
 	}
 }
 

@@ -25,12 +25,18 @@ var (
 	ErrMissingSecret = errors.New("hypermesh api: Bearer device secret is required")
 	// ErrUnknownDevice is a 404 from heartbeat, job pull, or tunnel GET.
 	ErrUnknownDevice = errors.New("hypermesh api: unknown device")
-	// ErrNoTunnel is POST /agent/tunnel/peer 404: nothing allocated yet.
-	// The agent retries on the next sync and does not treat this as a failure.
+	// ErrNoTunnel is POST /agent/tunnel/peer 404 detail "Tunnel not found".
+	// The plane still saved wg_public_key on the device. The agent treats
+	// this as success with no session to apply.
 	ErrNoTunnel = errors.New("hypermesh api: no tunnel allocated")
+	// ErrTunnelRevoked is POST /agent/tunnel/peer 409 detail "Tunnel is revoked".
+	// Do not bring the WireGuard interface up.
+	ErrTunnelRevoked = errors.New("hypermesh api: tunnel is revoked")
 	// ErrPeerPublicKeyNotRegistered is GET /agent/tunnel 409 with code
 	// peer_public_key_not_registered. POST the public key, then GET again.
 	ErrPeerPublicKeyNotRegistered = errors.New("hypermesh api: peer public key not registered")
+	// ErrPeerKeyLength is a local check: the plane accepts 32 to 64 characters.
+	ErrPeerKeyLength = errors.New("hypermesh api: peer public key must be 32 to 64 characters")
 	// ErrUnknownJob is a 404 from job result.
 	ErrUnknownJob = errors.New("hypermesh api: unknown job")
 	// ErrMissingTenant is a local client error before any HTTP call.
@@ -64,6 +70,9 @@ func mapStatus(method, path string, code int, payload []byte) error {
 	if method == http.MethodPost && path == PathTunnelPeer && code == http.StatusNotFound {
 		return ErrNoTunnel
 	}
+	if method == http.MethodPost && path == PathTunnelPeer && code == http.StatusConflict && detailString(payload) == "Tunnel is revoked" {
+		return ErrTunnelRevoked
+	}
 	switch code {
 	case http.StatusUnauthorized:
 		return ErrUnauthorized
@@ -79,9 +88,26 @@ func mapStatus(method, path string, code int, payload []byte) error {
 	}
 }
 
-// peerCode reads a typed error code. The owner named the code; the JSON
-// envelope is code, detail (string or object), or error.code. The body is
-// not returned to callers.
+func detailString(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var body struct {
+		Detail json.RawMessage `json:"detail"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil || len(body.Detail) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(body.Detail, &s); err != nil {
+		return ""
+	}
+	return s
+}
+
+// peerCode reads a typed error code. The upcoming GET 409 uses
+// peer_public_key_not_registered. The envelope may be code, detail (string
+// or object), or error.code. The body is not returned to callers.
 func peerCode(payload []byte) string {
 	if len(payload) == 0 {
 		return ""

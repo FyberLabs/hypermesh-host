@@ -37,9 +37,9 @@ type Agent struct {
 	applied         string // fingerprint of the host peer we last acked (not tunnel_id)
 	bindIP          string // last tunnel client address, used to publish completions
 	keyDir          string // host WireGuard private key lives here only
-	peerPosted      bool   // this process has successfully POSTed postedPub
-	postedPub       string // last public key accepted by POST /agent/tunnel/peer
-	loggedNoTunnel  bool   // already logged the benign peer 404 this wait
+	peerPosted      bool   // this process already POSTed postedPub (404 counts: the device key was saved)
+	postedPub       string // last public key sent to POST /agent/tunnel/peer
+	loggedNoTunnel  bool   // already logged success-with-no-tunnel
 	now             func() time.Time
 	sleep           func(time.Duration)
 	resultTries     int
@@ -214,14 +214,19 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	return nil
 }
 
+// errRevokedStop ends this sync after a POST 409 "Tunnel is revoked".
+// The warning is already logged and the interface is down.
+var errRevokedStop = errors.New("hypermesh: tunnel revoked")
+
 func (a *Agent) syncTunnel(ctx context.Context) error {
-	// Owner contract: Bearer hm_dev_ on GET and POST. POST body is only
-	// {"peer_public_key":"<base64>"}. 200 stores device wg_public_key and
-	// returns AgentTunnelResponse. POST 404 means no tunnel yet: benign,
-	// retry next sync. GET 200 is AgentTunnelResponse with no
-	// peer_private_key. GET 409 code peer_public_key_not_registered means
-	// POST again, then GET again. POST on startup, when the local key
-	// changes, on that 409, and when GET peer_public_key differs.
+	// Plane contract (panopticon routes.py): Bearer hm_dev_ plus X-Tenant-ID.
+	// POST /agent/tunnel/peer has no device_id. Body is only peer_public_key.
+	// 404 "Tunnel not found" still saved the device key. 409 "Tunnel is revoked"
+	// means do not bring WireGuard up. GET 204 is no tunnel. GET 200 may have
+	// a null peer_public_key. Null, a different key, or GET 409
+	// peer_public_key_not_registered means POST then re-GET. On rotation keep
+	// the live config until a GET shows the new public key, then switch and
+	// ack again (ack_applied is not cleared on the plane).
 	priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
 	if err != nil {
 		return err
@@ -230,71 +235,32 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 		return tunnel.ErrNoHostKey
 	}
 	if !a.peerPosted || a.postedPub != pub {
-		if err := a.postPeer(ctx, pub); err != nil && !errors.Is(err, api.ErrNoTunnel) {
+		if err := a.registerPeer(ctx, pub); err != nil {
+			if errors.Is(err, errRevokedStop) {
+				return nil
+			}
 			return err
 		}
 	}
 
 	sess, err := a.client.GetTunnel(ctx, a.state.DeviceID)
-	if errors.Is(err, api.ErrPeerPublicKeyNotRegistered) {
-		a.log.Info("tunnel peer not registered; posting public key and reading the session again")
-		if err := a.postPeer(ctx, pub); err != nil {
-			if errors.Is(err, api.ErrNoTunnel) {
-				return nil
-			}
-			return err
-		}
-		sess, err = a.client.GetTunnel(ctx, a.state.DeviceID)
+	sess, err = a.reregisterIfNeeded(ctx, sess, err, pub)
+	if errors.Is(err, errRevokedStop) {
+		return nil
 	}
 	if err != nil {
 		return err
 	}
 	if sess == nil {
-		if err := a.tunnels.Teardown(ctx); err != nil {
-			return err
-		}
-		if a.applied != "" {
-			a.log.Info("tunnel gone (204), torn down")
-		}
-		a.applied = ""
-		return nil
+		return a.tunnelGone(ctx)
 	}
 	switch sess.Status {
 	case api.TunnelAllocated:
 		if sessionNeedsPeer(sess.PeerPublicKey, pub) {
-			if err := a.postPeer(ctx, pub); err != nil {
-				if errors.Is(err, api.ErrNoTunnel) {
-					return nil
-				}
-				return err
-			}
+			a.log.Info("session peer key does not match yet; keeping the current WireGuard config")
+			return nil
 		}
-		a.bindIP = sess.ClientAddress
-		a.refreshCompletions()
-		ts := tunnel.Session{
-			TunnelID:        sess.TunnelID,
-			LeaseID:         sess.LeaseID,
-			Status:          string(sess.Status),
-			Endpoint:        sess.Endpoint,
-			ServerPublicKey: sess.ServerPublicKey,
-			PeerPrivateKey:  priv,
-			AllowedIPs:      sess.AllowedIPs,
-			ClientAddress:   sess.ClientAddress,
-		}
-		// lease_id / tunnel_id are tickets on the same host peer.
-		// Apply is a no-op unless the peer fields change.
-		if err := a.tunnels.Apply(ctx, ts); err != nil {
-			return err
-		}
-		fp := tunnel.PeerFingerprint(ts)
-		if a.applied != fp {
-			if err := a.client.AckTunnel(ctx, a.state.DeviceID, api.TunnelAckRequest{Applied: true}); err != nil {
-				return err
-			}
-			a.applied = fp
-			a.log.Info("host peer applied", "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
-		}
-		return nil
+		return a.applyMatched(ctx, sess, priv)
 	case api.TunnelRevoked:
 		if err := a.tunnels.Teardown(ctx); err != nil {
 			return err
@@ -307,16 +273,46 @@ func (a *Agent) syncTunnel(ctx context.Context) error {
 	}
 }
 
-// postPeer sends only the public key. A 404 is remembered quietly so the
-// next sync retries without a warning on every tick.
-func (a *Agent) postPeer(ctx context.Context, pub string) error {
-	err := a.client.ProposePeer(ctx, a.state.DeviceID, api.TunnelPeerRequest{PeerPublicKey: pub})
+// reregisterIfNeeded POSTs and re-GETs when the session has no matching
+// public key, or when GET returns peer_public_key_not_registered.
+func (a *Agent) reregisterIfNeeded(ctx context.Context, sess *api.TunnelSession, err error, pub string) (*api.TunnelSession, error) {
+	needs := errors.Is(err, api.ErrPeerPublicKeyNotRegistered)
+	if err == nil && sess != nil && sess.Status == api.TunnelAllocated && sessionNeedsPeer(sess.PeerPublicKey, pub) {
+		needs = true
+	}
+	if !needs {
+		return sess, err
+	}
+	a.log.Info("tunnel peer key does not match; posting the public key and reading the session again")
+	if err := a.registerPeer(ctx, pub); err != nil {
+		return nil, err
+	}
+	return a.client.GetTunnel(ctx, a.state.DeviceID)
+}
+
+// registerPeer POSTs only the public key. 404 is success with no tunnel
+// (the plane saved wg_public_key first). 409 revoked is logged and the
+// interface stays down.
+func (a *Agent) registerPeer(ctx context.Context, pub string) error {
+	err := a.client.ProposePeer(ctx, api.TunnelPeerRequest{PeerPublicKey: pub})
 	if errors.Is(err, api.ErrNoTunnel) {
+		a.peerPosted = true
+		a.postedPub = pub
 		if !a.loggedNoTunnel {
-			a.log.Info("no tunnel allocated yet; host public key will be registered on a later sync")
+			a.log.Info("host public key saved; no tunnel allocated yet")
 			a.loggedNoTunnel = true
 		}
-		return err
+		return nil
+	}
+	if errors.Is(err, api.ErrTunnelRevoked) {
+		a.peerPosted = true
+		a.postedPub = pub
+		a.log.Warn("tunnel is revoked; not bringing WireGuard up")
+		if terr := a.tunnels.Teardown(ctx); terr != nil {
+			return terr
+		}
+		a.applied = ""
+		return errRevokedStop
 	}
 	if err != nil {
 		return err
@@ -324,6 +320,47 @@ func (a *Agent) postPeer(ctx context.Context, pub string) error {
 	a.loggedNoTunnel = false
 	a.peerPosted = true
 	a.postedPub = pub
+	return nil
+}
+
+func (a *Agent) tunnelGone(ctx context.Context) error {
+	if err := a.tunnels.Teardown(ctx); err != nil {
+		return err
+	}
+	if a.applied != "" {
+		a.log.Info("tunnel gone (204), torn down")
+	}
+	a.applied = ""
+	return nil
+}
+
+func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv string) error {
+	a.bindIP = sess.ClientAddress
+	a.refreshCompletions()
+	ts := tunnel.Session{
+		TunnelID:        sess.TunnelID,
+		LeaseID:         sess.LeaseID,
+		Status:          string(sess.Status),
+		Endpoint:        sess.Endpoint,
+		ServerPublicKey: sess.ServerPublicKey,
+		PeerPrivateKey:  priv,
+		AllowedIPs:      sess.AllowedIPs,
+		ClientAddress:   sess.ClientAddress,
+	}
+	// lease_id / tunnel_id are tickets on the same host peer.
+	// Apply is a no-op unless the peer fields change.
+	if err := a.tunnels.Apply(ctx, ts); err != nil {
+		return err
+	}
+	fp := tunnel.PeerFingerprint(ts)
+	if a.applied != fp {
+		// Rotation does not clear ack_applied on the plane, so a new config acks again.
+		if err := a.client.AckTunnel(ctx, a.state.DeviceID, api.TunnelAckRequest{Applied: true}); err != nil {
+			return err
+		}
+		a.applied = fp
+		a.log.Info("host peer applied", "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
+	}
 	return nil
 }
 
