@@ -88,8 +88,14 @@ func TestApplyIdempotentSkipsSecondUp(t *testing.T) {
 	if err := r.Apply(ctx, allocated()); err != nil {
 		t.Fatal(err)
 	}
+	if r.ApplyOutcome() != "" {
+		t.Fatalf("first apply outcome %q", r.ApplyOutcome())
+	}
 	if err := r.Apply(ctx, allocated()); err != nil {
 		t.Fatal(err)
+	}
+	if r.ApplyOutcome() != "skip" {
+		t.Fatalf("second apply outcome %q", r.ApplyOutcome())
 	}
 	if ups != 1 {
 		t.Fatalf("wg-quick up count %d", ups)

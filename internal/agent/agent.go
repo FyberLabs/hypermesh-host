@@ -75,6 +75,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	}
 	src := telem.Default()
 	wg := tunnel.NewRunnerMode(cfg.WGMode)
+	wg.Log = log
 	if wg.Userspace {
 		log.Info("userspace wireguard", "unit", "hypermesh-wg.service")
 	}
@@ -402,9 +403,29 @@ func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv 
 			return err
 		}
 		a.applied = fp
-		a.log.Info("host peer applied", "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
+		a.log.Info(a.peerApplyMessage(), "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
 	}
 	return nil
+}
+
+// peerApplyMessage distinguishes a restart that left the peer in place
+// from one that programmed it. tunnel_id and lease_id stay on the line.
+func (a *Agent) peerApplyMessage() string {
+	type outcome interface {
+		ApplyOutcome() string
+	}
+	o, ok := a.tunnels.(outcome)
+	if !ok {
+		return "host peer applied"
+	}
+	switch o.ApplyOutcome() {
+	case "skip":
+		return "host peer unchanged (skip apply)"
+	case "syncconf":
+		return "host peer applied (syncconf)"
+	default:
+		return "host peer applied"
+	}
 }
 
 // sessionNeedsPeer is true when the plane has no host public key yet, or a

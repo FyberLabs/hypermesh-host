@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -150,6 +152,105 @@ func TestUserspace204RemovesRoutes(t *testing.T) {
 	if !link.tornDown() || link.spawned {
 		t.Fatalf("204 cmds %v", link.commands())
 	}
+}
+
+func TestHostPeerLogDistinguishesSkipAndSyncconf(t *testing.T) {
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+
+	t.Run("unchanged", func(t *testing.T) {
+		a, buf, link := peerLogAgent(t, now, true)
+		if err := a.syncTunnel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if link.saw("syncconf") {
+			t.Fatalf("unchanged peer called syncconf: %v", link.commands())
+		}
+		got := buf.String()
+		if !strings.Contains(got, `msg="host peer unchanged (skip apply)"`) ||
+			!strings.Contains(got, "tunnel_id=tun-1") || !strings.Contains(got, "lease_id=lease-1") {
+			t.Fatalf("log: %s", got)
+		}
+		if strings.Contains(got, "host peer applied") {
+			t.Fatalf("unchanged peer logged an apply: %s", got)
+		}
+		buf.Reset()
+		if err := a.syncTunnel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(buf.String(), "host peer") {
+			t.Fatalf("repeat sync logged again: %s", buf.String())
+		}
+	})
+
+	t.Run("syncconf", func(t *testing.T) {
+		a, buf, link := peerLogAgent(t, now, false)
+		if err := a.syncTunnel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if !link.saw("syncconf") {
+			t.Fatalf("changed peer did not syncconf: %v", link.commands())
+		}
+		got := buf.String()
+		if !strings.Contains(got, `msg="host peer applied (syncconf)"`) ||
+			!strings.Contains(got, "tunnel_id=tun-1") || !strings.Contains(got, "lease_id=lease-1") {
+			t.Fatalf("log: %s", got)
+		}
+		if strings.Contains(got, "host peer unchanged") {
+			t.Fatalf("syncconf logged as unchanged: %s", got)
+		}
+		if !strings.Contains(got, `msg="route add"`) || !strings.Contains(got, "cidr=10.77.0.0/24") ||
+			!strings.Contains(got, "tunnel_id=tun-1") || !strings.Contains(got, "lease_id=lease-1") {
+			t.Fatalf("route add log: %s", got)
+		}
+	})
+}
+
+func peerLogAgent(t *testing.T, now time.Time, unchanged bool) (*Agent, *bytes.Buffer, *cmdLog) {
+	t.Helper()
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "", "")
+	if r, ok := a.tunnels.(*tunnel.Runner); !ok || r.Log == nil {
+		t.Fatal("agent logger was not passed to the tunnel runner")
+	}
+	var buf bytes.Buffer
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	pub, priv, err := preloadPostedKey(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := api.TunnelSession{
+		TunnelID:        "tun-1",
+		LeaseID:         "lease-1",
+		Status:          api.TunnelAllocated,
+		Endpoint:        "198.51.100.10:51820",
+		ServerPublicKey: "serverpub",
+		PeerPublicKey:   pub,
+		AllowedIPs:      "10.77.0.0/24",
+		ClientAddress:   "10.77.0.3/32",
+	}
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, sess)
+	})
+	link := &cmdLog{addr: sess.ClientAddress}
+	if unchanged {
+		link.dump = fmt.Sprintf("%s\tifacepub\t33469\toff\n%s\t(none)\t%s\t%s\t%d\t0\t0\t25\n",
+			priv, sess.ServerPublicKey, sess.Endpoint, sess.AllowedIPs, now.Unix())
+		link.routes = []string{sess.AllowedIPs}
+	} else {
+		link.dump = fmt.Sprintf("%s\tifacepub\t33469\toff\n", priv)
+	}
+	runner := userspaceRunner(t, link, now)
+	runner.Log = a.log
+	a.tunnels = runner
+	return a, &buf, link
 }
 
 func userspaceRunner(t *testing.T, link *cmdLog, now time.Time) *tunnel.Runner {

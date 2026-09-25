@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,7 +79,24 @@ type Runner struct {
 	// route this host uses to reach the control plane and the WireGuard
 	// endpoint. Set it only when this deployment explicitly intends a full tunnel.
 	InstallDefaultRoute bool
+	// Log receives route add and delete lines. Nil stays quiet.
+	// Prefixes and tunnel ids are safe; key material is not written here.
+	Log *slog.Logger
+
+	logTunnel   string
+	logLease    string
+	applyAction applyAction
 }
+
+// applyAction is what the last Apply did to the host peer.
+type applyAction int
+
+const (
+	applyNone applyAction = iota
+	applySkipped
+	applySyncconf
+	applyQuick
+)
 
 // NewRunner uses /etc/wireguard and wg-quick on PATH.
 func NewRunner() *Runner {
@@ -146,6 +164,7 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 		return r.applyUserspace(ctx, sess)
 	}
 	if r.alreadyApplied(sess) {
+		r.noteApply(applySkipped)
 		return nil
 	}
 	if err := os.MkdirAll(r.configDir(), 0o700); err != nil {
@@ -169,7 +188,27 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if err := r.quick(ctx, "up", r.confPath()); err != nil {
 		return err
 	}
+	r.noteApply(applyQuick)
 	return r.saveApplied(PeerFingerprint(sess))
+}
+
+func (r *Runner) noteApply(a applyAction) {
+	r.applyAction = a
+}
+
+// ApplyOutcome describes the last Apply for the agent log.
+// "skip" means the peer was already in place, so neither syncconf nor
+// wg-quick up ran. "syncconf" means the userspace path programmed the
+// interface. "" means wg-quick up ran.
+func (r *Runner) ApplyOutcome() string {
+	switch r.applyAction {
+	case applySkipped:
+		return "skip"
+	case applySyncconf:
+		return "syncconf"
+	default:
+		return ""
+	}
 }
 
 // Teardown runs wg-quick down and shreds the conf so the peer key does not stay on disk.
