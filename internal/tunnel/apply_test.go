@@ -252,6 +252,54 @@ func TestPeerFingerprintIgnoresTickets(t *testing.T) {
 	}
 }
 
+func TestWgQuickConfigUsesLocalPrivateKey(t *testing.T) {
+	dir := t.TempDir()
+	priv, pub, err := LoadOrCreatePrivateKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := allocated()
+	sess.PeerPrivateKey = priv
+	text := wgQuickConfig(sess)
+	if !strings.Contains(text, "PrivateKey = "+priv) {
+		t.Fatal("config must use the local private key")
+	}
+	if strings.Contains(text, pub) {
+		t.Fatal("config must not embed the public key")
+	}
+	if !strings.Contains(text, "PersistentKeepalive = 25") {
+		t.Fatal("keepalive")
+	}
+	var ops []string
+	r := &Runner{
+		Iface:     "hypermesh",
+		ConfigDir: t.TempDir(),
+		Quick: func(_ context.Context, args ...string) error {
+			ops = append(ops, args[0])
+			return nil
+		},
+	}
+	if err := r.Apply(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	if r.iface() != "hypermesh" {
+		t.Fatalf("iface %s", r.iface())
+	}
+	raw, err := os.ReadFile(r.confPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "PrivateKey = "+priv) {
+		t.Fatal("on-disk conf must use the local private key")
+	}
+	if !strings.HasSuffix(r.confPath(), "hypermesh.conf") {
+		t.Fatalf("conf path %s", r.confPath())
+	}
+	if len(ops) != 1 || ops[0] != "up" {
+		t.Fatalf("quick %v", ops)
+	}
+}
+
 func TestApplyRequiresAllocatedKey(t *testing.T) {
 	r := &Runner{ConfigDir: t.TempDir(), Quick: func(context.Context, ...string) error { return nil }}
 	if err := r.Apply(context.Background(), Session{Status: "revoked", PeerPrivateKey: "x"}); err != ErrNotAllocated {

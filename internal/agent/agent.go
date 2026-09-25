@@ -37,6 +37,10 @@ type Agent struct {
 	applied         string // fingerprint of the host peer we last acked (not tunnel_id)
 	bindIP          string // last tunnel client address, used to publish completions
 	keyDir          string // host WireGuard private key lives here only
+	peerPosted      bool   // this process already POSTed postedPub (404 counts: the device key was saved)
+	postedPub       string // last public key sent to POST /agent/tunnel/peer
+	loggedNoTunnel  bool   // already logged success-with-no-tunnel
+	loggedRevoked   bool   // already logged a GET 200 status=revoked streak
 	now             func() time.Time
 	sleep           func(time.Duration)
 	resultTries     int
@@ -211,66 +215,175 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	return nil
 }
 
+// errRevokedStop ends this sync after a POST 409 "Tunnel is revoked".
+// The warning is already logged and the interface is down.
+var errRevokedStop = errors.New("hypermesh: tunnel revoked")
+
 func (a *Agent) syncTunnel(ctx context.Context) error {
+	// Plane contract (panopticon routes.py): Bearer hm_dev_ plus X-Tenant-ID.
+	// POST /agent/tunnel/peer has no device_id. Body is only peer_public_key.
+	// 404 "Tunnel not found" still saved the device key. 409 "Tunnel is revoked"
+	// means do not bring WireGuard up. GET 204 is no tunnel. GET 200
+	// status=revoked is not an error: tear WireGuard down and do not POST,
+	// even when peer_public_key is null or different. GET 200 status=allocated
+	// with a null or different key, or GET 409 whose body code is
+	// peer_public_key_not_registered (not detail), means POST then re-GET.
+	// On rotation keep the live config until a GET shows the new public key, then switch and
+	// ack again (ack_applied is not cleared on the plane).
+	priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(priv) == "" {
+		return tunnel.ErrNoHostKey
+	}
+	if !a.peerPosted || a.postedPub != pub {
+		if err := a.registerPeer(ctx, pub); err != nil {
+			if errors.Is(err, errRevokedStop) {
+				return nil
+			}
+			return err
+		}
+	}
+
 	sess, err := a.client.GetTunnel(ctx, a.state.DeviceID)
+	if err == nil && sess != nil && sess.Status == api.TunnelRevoked {
+		// 200 status=revoked is not an error. Do not POST because the
+		// public key is null or different.
+		return a.tunnelRevoked(ctx, sess)
+	}
+	sess, err = a.reregisterIfNeeded(ctx, sess, err, pub)
+	if errors.Is(err, errRevokedStop) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	if sess == nil {
-		if err := a.tunnels.Teardown(ctx); err != nil {
-			return err
-		}
-		if a.applied != "" {
-			a.log.Info("tunnel gone (204), torn down")
-		}
-		a.applied = ""
-		return nil
+		return a.tunnelGone(ctx)
 	}
 	switch sess.Status {
 	case api.TunnelAllocated:
-		priv, pub, err := tunnel.LoadOrCreatePrivateKey(a.keyDir)
-		if err != nil {
-			return err
+		if sessionNeedsPeer(sess.PeerPublicKey, pub) {
+			a.log.Info("session peer key does not match yet; keeping the current WireGuard config")
+			return nil
 		}
-		if err := a.client.ProposePeer(ctx, a.state.DeviceID, api.TunnelPeerRequest{PeerPublicKey: pub}); err != nil {
-			return err
-		}
-		a.bindIP = sess.ClientAddress
-		a.refreshCompletions()
-		ts := tunnel.Session{
-			TunnelID:        sess.TunnelID,
-			LeaseID:         sess.LeaseID,
-			Status:          string(sess.Status),
-			Endpoint:        sess.Endpoint,
-			ServerPublicKey: sess.ServerPublicKey,
-			PeerPrivateKey:  priv,
-			AllowedIPs:      sess.AllowedIPs,
-			ClientAddress:   sess.ClientAddress,
-		}
-		// lease_id / tunnel_id are tickets on the same host peer.
-		// Apply is a no-op unless the peer fields change.
-		if err := a.tunnels.Apply(ctx, ts); err != nil {
-			return err
-		}
-		fp := tunnel.PeerFingerprint(ts)
-		if a.applied != fp {
-			if err := a.client.AckTunnel(ctx, a.state.DeviceID, api.TunnelAckRequest{Applied: true}); err != nil {
-				return err
-			}
-			a.applied = fp
-			a.log.Info("host peer applied", "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
-		}
-		return nil
+		return a.applyMatched(ctx, sess, priv)
 	case api.TunnelRevoked:
-		if err := a.tunnels.Teardown(ctx); err != nil {
-			return err
-		}
-		a.applied = ""
-		a.log.Info("host peer revoked, torn down", "tunnel_id", sess.TunnelID)
-		return nil
+		return a.tunnelRevoked(ctx, sess)
 	default:
 		return fmt.Errorf("hypermesh: unknown tunnel status %s", sess.Status)
 	}
+}
+
+// reregisterIfNeeded POSTs and re-GETs when the session has no matching
+// public key, or when GET returns peer_public_key_not_registered.
+func (a *Agent) reregisterIfNeeded(ctx context.Context, sess *api.TunnelSession, err error, pub string) (*api.TunnelSession, error) {
+	needs := errors.Is(err, api.ErrPeerPublicKeyNotRegistered)
+	if err == nil && sess != nil && sess.Status == api.TunnelAllocated && sessionNeedsPeer(sess.PeerPublicKey, pub) {
+		needs = true
+	}
+	if !needs {
+		return sess, err
+	}
+	a.log.Info("tunnel peer key does not match; posting the public key and reading the session again")
+	if err := a.registerPeer(ctx, pub); err != nil {
+		return nil, err
+	}
+	return a.client.GetTunnel(ctx, a.state.DeviceID)
+}
+
+// registerPeer POSTs only the public key. 404 is success with no tunnel
+// (the plane saved wg_public_key first). 409 revoked is logged and the
+// interface stays down.
+func (a *Agent) registerPeer(ctx context.Context, pub string) error {
+	err := a.client.ProposePeer(ctx, api.TunnelPeerRequest{PeerPublicKey: pub})
+	if errors.Is(err, api.ErrNoTunnel) {
+		a.peerPosted = true
+		a.postedPub = pub
+		if !a.loggedNoTunnel {
+			a.log.Info("host public key saved; no tunnel allocated yet")
+			a.loggedNoTunnel = true
+		}
+		return nil
+	}
+	if errors.Is(err, api.ErrTunnelRevoked) {
+		a.peerPosted = true
+		a.postedPub = pub
+		a.log.Warn("tunnel is revoked; not bringing WireGuard up")
+		if terr := a.tunnels.Teardown(ctx); terr != nil {
+			return terr
+		}
+		a.applied = ""
+		return errRevokedStop
+	}
+	if err != nil {
+		return err
+	}
+	a.loggedNoTunnel = false
+	a.peerPosted = true
+	a.postedPub = pub
+	return nil
+}
+
+func (a *Agent) tunnelRevoked(ctx context.Context, sess *api.TunnelSession) error {
+	if err := a.tunnels.Teardown(ctx); err != nil {
+		return err
+	}
+	if !a.loggedRevoked {
+		a.log.Info("host peer revoked, torn down", "tunnel_id", sess.TunnelID)
+		a.loggedRevoked = true
+	}
+	a.applied = ""
+	return nil
+}
+
+func (a *Agent) tunnelGone(ctx context.Context) error {
+	if err := a.tunnels.Teardown(ctx); err != nil {
+		return err
+	}
+	if a.applied != "" {
+		a.log.Info("tunnel gone (204), torn down")
+	}
+	a.applied = ""
+	return nil
+}
+
+func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv string) error {
+	a.loggedRevoked = false
+	a.bindIP = sess.ClientAddress
+	a.refreshCompletions()
+	ts := tunnel.Session{
+		TunnelID:        sess.TunnelID,
+		LeaseID:         sess.LeaseID,
+		Status:          string(sess.Status),
+		Endpoint:        sess.Endpoint,
+		ServerPublicKey: sess.ServerPublicKey,
+		PeerPrivateKey:  priv,
+		AllowedIPs:      sess.AllowedIPs,
+		ClientAddress:   sess.ClientAddress,
+	}
+	// lease_id / tunnel_id are tickets on the same host peer.
+	// Apply is a no-op unless the peer fields change.
+	if err := a.tunnels.Apply(ctx, ts); err != nil {
+		return err
+	}
+	fp := tunnel.PeerFingerprint(ts)
+	if a.applied != fp {
+		// Rotation does not clear ack_applied on the plane, so a new config acks again.
+		if err := a.client.AckTunnel(ctx, a.state.DeviceID, api.TunnelAckRequest{Applied: true}); err != nil {
+			return err
+		}
+		a.applied = fp
+		a.log.Info("host peer applied", "tunnel_id", sess.TunnelID, "lease_id", sess.LeaseID)
+	}
+	return nil
+}
+
+// sessionNeedsPeer is true when the plane has no host public key yet, or a
+// different one. A match means this box already registered the local key.
+func sessionNeedsPeer(planePub, localPub string) bool {
+	return strings.TrimSpace(planePub) != strings.TrimSpace(localPub)
 }
 
 func (a *Agent) liveCompletionsURL() string {

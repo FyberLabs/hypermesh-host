@@ -97,9 +97,16 @@ func (c *Client) GetTunnel(ctx context.Context, deviceID string) (*TunnelSession
 }
 
 // ProposePeer posts the host WireGuard public key. The private key stays here.
-func (c *Client) ProposePeer(ctx context.Context, deviceID string, req TunnelPeerRequest) error {
-	q := url.Values{"device_id": {deviceID}}
-	return c.doJSON(ctx, http.MethodPost, PathTunnelPeer, q, req, http.StatusOK, nil, true)
+// There is no device_id on this route. Auth is Authorization: Bearer <hm_dev_>
+// and X-Tenant-ID. The plane strips whitespace and accepts 32 to 64 characters.
+// 200 is AgentTunnelResponse. 404 is ErrNoTunnel (wg_public_key was still saved).
+// 409 detail "Tunnel is revoked" is ErrTunnelRevoked.
+func (c *Client) ProposePeer(ctx context.Context, req TunnelPeerRequest) error {
+	req.PeerPublicKey = strings.TrimSpace(req.PeerPublicKey)
+	if n := len(req.PeerPublicKey); n < 32 || n > 64 {
+		return ErrPeerKeyLength
+	}
+	return c.doJSON(ctx, http.MethodPost, PathTunnelPeer, nil, req, http.StatusOK, nil, true)
 }
 
 // AckTunnel tells the control plane wg-quick (or equivalent) applied.
@@ -172,7 +179,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		return errNoContent
 	}
 	if resp.StatusCode != want {
-		return mapStatus(method, path, resp.StatusCode)
+		return mapStatus(method, path, resp.StatusCode, payload)
 	}
 	if dest == nil {
 		return nil

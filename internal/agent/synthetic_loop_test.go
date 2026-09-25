@@ -82,10 +82,12 @@ func TestSyntheticAgentLoop(t *testing.T) {
 			AcceptedAt: time.Now().UTC(),
 		})
 	})
-	acceptTunnelPeer(mux)
+	peerPub := acceptTunnelPeer(mux)
 	acceptTunnelAck(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, allocatedTunnel("lease-syn"))
+		sess := allocatedTunnel("lease-syn")
+		sess.PeerPublicKey = peerPub()
+		writeJSON(w, http.StatusOK, sess)
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testSecret {

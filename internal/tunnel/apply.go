@@ -27,8 +27,9 @@ var (
 	ErrNoSession = errors.New("hypermesh tunnel: no session")
 	// ErrNotAllocated means the session is not status=allocated.
 	ErrNotAllocated = errors.New("hypermesh tunnel: session is not allocated")
-	// ErrMissingPrivateKey means Apply was given no host private key.
-	ErrMissingPrivateKey = errors.New("hypermesh tunnel: allocated session missing peer_private_key")
+	// ErrMissingPrivateKey means Apply was given no local host private key.
+	// The control plane does not send one (Panopticon #128).
+	ErrMissingPrivateKey = errors.New("hypermesh tunnel: local WireGuard private key missing")
 )
 
 // Session is the allocated host peer. PeerPrivateKey is local, never from GET.
@@ -107,7 +108,7 @@ func PeerFingerprint(s Session) string {
 // Apply writes the wg-quick config and brings the interface up.
 //
 // One host peer: wg-quick up runs only when endpoint, server_public_key,
-// peer_private_key, client_address, or allowed_ips change, or the on-disk
+// the local private key, client_address, or allowed_ips change, or the on-disk
 // conf is missing PersistentKeepalive. A new tunnel_id or lease_id on the
 // same peer is a ticket and does not bounce the iface.
 // The applied marker stores that fingerprint so a restart does not re-up
@@ -128,6 +129,9 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	if err := os.MkdirAll(r.configDir(), 0o700); err != nil {
 		return err
 	}
+	if err := os.Chmod(r.configDir(), 0o700); err != nil {
+		return err
+	}
 	if _, err := os.Stat(r.confPath()); err == nil {
 		if err := r.quick(ctx, "down", r.confPath()); err != nil && !missingIface(err) {
 			return err
@@ -135,6 +139,9 @@ func (r *Runner) Apply(ctx context.Context, sess Session) error {
 	}
 	body := wgQuickConfig(sess)
 	if err := os.WriteFile(r.confPath(), []byte(body), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(r.confPath(), 0o600); err != nil {
 		return err
 	}
 	if err := r.quick(ctx, "up", r.confPath()); err != nil {

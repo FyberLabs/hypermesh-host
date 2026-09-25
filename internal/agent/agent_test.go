@@ -259,7 +259,7 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
-	acceptTunnelPeer(mux)
+	peerPub := acceptTunnelPeer(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testSecret {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -275,6 +275,7 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 				Status:          api.TunnelAllocated,
 				Endpoint:        "198.51.100.10:51820",
 				ServerPublicKey: "serverpub",
+				PeerPublicKey:   peerPub(),
 				AllowedIPs:      "10.8.0.0/24",
 				ClientAddress:   "10.8.0.2/32",
 			})
@@ -327,6 +328,661 @@ func TestTunnelApplyAckAndRevoke(t *testing.T) {
 	})
 }
 
+func TestSessionNeedsPeer(t *testing.T) {
+	if !sessionNeedsPeer("", "pub") {
+		t.Fatal("empty plane key needs a POST")
+	}
+	if !sessionNeedsPeer("other", "pub") {
+		t.Fatal("mismatch needs a POST")
+	}
+	if sessionNeedsPeer("pub", "pub") || sessionNeedsPeer("  pub  ", "pub") {
+		t.Fatal("matching plane key must not POST again")
+	}
+}
+
+func TestAllocatedTunnelPostsPublicKeyOnly(t *testing.T) {
+	var mu sync.Mutex
+	var peerBodies [][]byte
+	var hbBodies [][]byte
+	var registered string
+	acks, gets := 0, 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.EnrollResponse{DeviceID: testDevice, DeviceSecret: testSecret})
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		hbBodies = append(hbBodies, raw)
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		acks++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Errorf("peer json: %v", err)
+		}
+		mu.Lock()
+		peerBodies = append(peerBodies, raw)
+		registered = body.PeerPublicKey
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gets++
+		pub := registered
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, api.TunnelSession{
+			TunnelID:        "tun-1",
+			LeaseID:         "lease-1",
+			Status:          api.TunnelAllocated,
+			Endpoint:        "wg.test.hyperme.sh:51820",
+			ServerPublicKey: "serverpub",
+			PeerPublicKey:   pub,
+			AllowedIPs:      "10.77.0.0/24",
+			ClientAddress:   "10.77.0.2/32",
+		})
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	waitLoop(t, a, func() bool {
+		ft.mu.Lock()
+		n := len(ft.applied)
+		ft.mu.Unlock()
+		mu.Lock()
+		nAck := acks
+		nPeer := len(peerBodies)
+		nGet := gets
+		mu.Unlock()
+		// GET 3 starts only after the previous sync finished, so an extra POST
+		// would already be counted.
+		return n >= 1 && nAck >= 1 && nPeer >= 1 && nGet >= 3
+	})
+
+	keyRaw, err := os.ReadFile(filepath.Join(a.keyDir, "hypermesh.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv := strings.TrimSpace(string(keyRaw))
+	pub, err := tunnel.PublicFromPrivate(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ft.mu.Lock()
+	if len(ft.applied) < 1 || ft.applied[0].PeerPrivateKey != priv {
+		ft.mu.Unlock()
+		t.Fatal("apply must use the local private key")
+	}
+	ft.mu.Unlock()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(peerBodies) != 1 {
+		t.Fatalf("peer POSTs = %d, want 1 (idempotent once the plane has the key)", len(peerBodies))
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(peerBodies[0], &obj); err != nil {
+		t.Fatal(err)
+	}
+	if len(obj) != 1 || obj["peer_public_key"] != pub {
+		t.Fatalf("peer body %s", peerBodies[0])
+	}
+	if strings.Contains(string(peerBodies[0]), priv) {
+		t.Fatal("peer POST contained the private key")
+	}
+	for _, raw := range hbBodies {
+		if strings.Contains(string(raw), priv) || strings.Contains(string(raw), "peer_private_key") {
+			t.Fatalf("heartbeat contained key material: %s", raw)
+		}
+	}
+}
+
+func TestPeerNotRegisteredPostsThenRegets(t *testing.T) {
+	var mu sync.Mutex
+	gets, posts := 0, 0
+	var bodies [][]byte
+	var registered string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		posts++
+		bodies = append(bodies, raw)
+		registered = body.PeerPublicKey
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]string{"peer_public_key": body.PeerPublicKey})
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gets++
+		n := gets
+		pub := registered
+		mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"code":"peer_public_key_not_registered","detail":"No host WireGuard public key is registered for this allocated tunnel. POST the public key to /api/v1/hypermesh/agent/tunnel/peer first."}`))
+			return
+		}
+		sess := allocatedTunnel("lease-1")
+		sess.PeerPublicKey = pub
+		writeJSON(w, http.StatusOK, sess)
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	_ = os.WriteFile(filepath.Join(dir, "uptime"), []byte("1 1\n"), 0o644)
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	pub, _, err := preloadPostedKey(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gets != 2 {
+		t.Fatalf("gets %d, want GET, POST, re-GET", gets)
+	}
+	if posts != 1 {
+		t.Fatalf("posts %d, want one recovery POST", posts)
+	}
+	if strings.Contains(string(bodies[0]), "peer_private_key") {
+		t.Fatal("recovery POST included a private key field")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(bodies[0], &obj); err != nil {
+		t.Fatal(err)
+	}
+	if obj["peer_public_key"] != pub {
+		t.Fatalf("posted %#v", obj)
+	}
+	ft.mu.Lock()
+	if len(ft.applied) != 1 {
+		ft.mu.Unlock()
+		t.Fatalf("apply %d", len(ft.applied))
+	}
+	ft.mu.Unlock()
+}
+
+func TestPeerMismatchAndKeyChangeRepost(t *testing.T) {
+	var mu sync.Mutex
+	posts := 0
+	planePub := "OTHERPUBLICKEYNOTOURS++++++++++++++++++++="
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		posts++
+		planePub = body.PeerPublicKey
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pub := planePub
+		mu.Unlock()
+		sess := allocatedTunnel("lease-1")
+		sess.PeerPublicKey = pub
+		writeJSON(w, http.StatusOK, sess)
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	localPub, _, err := preloadPostedKey(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tunnels = &fakeTunnel{}
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if posts != 1 {
+		mu.Unlock()
+		t.Fatalf("mismatch posts %d", posts)
+	}
+	mu.Unlock()
+	if a.postedPub != localPub {
+		t.Fatal("posted pub must be the local public key")
+	}
+
+	a.postedPub = "stale-public-key"
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if posts != 2 {
+		mu.Unlock()
+		t.Fatalf("key-change posts %d, want 2", posts)
+	}
+	mu.Unlock()
+}
+
+func TestPeer404IsBenignAndNotRepeatedAsError(t *testing.T) {
+	var buf strings.Builder
+	posts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Tunnel not found"}`))
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	a.tunnels = &fakeTunnel{}
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 1 {
+		t.Fatalf("posts %d, want one POST; 404 saved the device key", posts)
+	}
+	logs := buf.String()
+	if strings.Count(logs, "no tunnel allocated yet") != 1 {
+		t.Fatalf("benign 404 should log once, logs:\n%s", logs)
+	}
+	if strings.Contains(logs, "tunnel sync failed") {
+		t.Fatalf("404 must not be a sync failure: %s", logs)
+	}
+}
+
+func TestNullPeerPostsThenRegetsBeforeApply(t *testing.T) {
+	var mu sync.Mutex
+	gets, posts, acks := 0, 0, 0
+	var posted string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			t.Errorf("peer query %q", r.URL.RawQuery)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		posts++
+		posted = body.PeerPublicKey
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gets++
+		n := gets
+		pub := posted
+		mu.Unlock()
+		sess := allocatedTunnel("lease-1")
+		if n == 1 {
+			sess.PeerPublicKey = ""
+		} else {
+			sess.PeerPublicKey = pub
+		}
+		writeJSON(w, http.StatusOK, sess)
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		acks++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if posts != 2 || gets != 2 || acks != 1 {
+		mu.Unlock()
+		t.Fatalf("posts %d gets %d acks %d", posts, gets, acks)
+	}
+	mu.Unlock()
+	ft.mu.Lock()
+	if len(ft.applied) != 1 {
+		ft.mu.Unlock()
+		t.Fatalf("apply count %d", len(ft.applied))
+	}
+	ft.mu.Unlock()
+}
+
+func TestRotationWaitsForGetThenAcksAgain(t *testing.T) {
+	var mu sync.Mutex
+	posts, gets, acks := 0, 0, 0
+	shown := ""
+	staged := ""
+	lag := false
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body api.TunnelPeerRequest
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		posts++
+		if lag {
+			staged = body.PeerPublicKey
+		} else {
+			shown = body.PeerPublicKey
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gets++
+		pub := shown
+		mu.Unlock()
+		sess := allocatedTunnel("lease-1")
+		sess.PeerPublicKey = pub
+		writeJSON(w, http.StatusOK, sess)
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		acks++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	privA, err := os.ReadFile(filepath.Join(a.keyDir, "hypermesh.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft.mu.Lock()
+	if len(ft.applied) != 1 || ft.applied[0].PeerPrivateKey != strings.TrimSpace(string(privA)) {
+		ft.mu.Unlock()
+		t.Fatalf("first apply %+v", ft.applied)
+	}
+	ft.mu.Unlock()
+
+	privB, pubB, err := tunnel.GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.keyDir, "hypermesh.key"), []byte(privB+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	lag = true
+	posts, gets, acks = 0, 0, 0
+	mu.Unlock()
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if posts < 1 || gets < 2 || acks != 0 {
+		mu.Unlock()
+		t.Fatalf("lagging rotation posts %d gets %d acks %d", posts, gets, acks)
+	}
+	if shown == pubB {
+		mu.Unlock()
+		t.Fatal("shown key changed before a GET revealed it")
+	}
+	mu.Unlock()
+	ft.mu.Lock()
+	if len(ft.applied) != 1 {
+		ft.mu.Unlock()
+		t.Fatal("old config must stay applied while GET still shows the old public key")
+	}
+	ft.mu.Unlock()
+
+	mu.Lock()
+	shown = staged
+	lag = false
+	posts, gets, acks = 0, 0, 0
+	mu.Unlock()
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	if len(ft.applied) != 2 || ft.applied[1].PeerPrivateKey != privB {
+		t.Fatalf("switch apply %+v", ft.applied)
+	}
+	mu.Lock()
+	if acks != 1 {
+		mu.Unlock()
+		t.Fatalf("rotation must ack the new config, acks %d", acks)
+	}
+	mu.Unlock()
+}
+
+func TestGetRevokedStatusDoesNotRepost(t *testing.T) {
+	var buf strings.Builder
+	var mu sync.Mutex
+	posts := 0
+	planePub := ""
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		posts++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pub := planePub
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, api.TunnelSession{
+			TunnelID:      "tun-revoked",
+			LeaseID:       "lease-revoked",
+			Status:        api.TunnelRevoked,
+			PeerPublicKey: pub,
+		})
+	})
+	mux.HandleFunc(api.PathTunnelAck, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("revoked GET must not ack")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	if _, _, err := preloadPostedKey(a); err != nil {
+		t.Fatal(err)
+	}
+	a.applied = "was-up"
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	for i := 0; i < 2; i++ {
+		if err := a.syncTunnel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	if posts != 0 {
+		mu.Unlock()
+		t.Fatalf("null peer_public_key posts %d, want 0", posts)
+	}
+	mu.Unlock()
+	ft.mu.Lock()
+	if len(ft.applied) != 0 || ft.teardowns != 2 {
+		ft.mu.Unlock()
+		t.Fatalf("null key apply %d teardown %d", len(ft.applied), ft.teardowns)
+	}
+	ft.mu.Unlock()
+	if a.applied != "" {
+		t.Fatal("revoked GET must clear the applied fingerprint")
+	}
+	if strings.Count(buf.String(), "host peer revoked, torn down") != 1 {
+		t.Fatalf("revoked log should appear once, logs:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "posting the public key") || strings.Contains(buf.String(), "tunnel sync failed") {
+		t.Fatalf("revoked GET must not re-register or fail the sync, logs:\n%s", buf.String())
+	}
+
+	mu.Lock()
+	planePub = "OTHERPUBLICKEYNOTOURS++++++++++++++++++++="
+	mu.Unlock()
+	for i := 0; i < 2; i++ {
+		if err := a.syncTunnel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	if posts != 0 {
+		mu.Unlock()
+		t.Fatalf("mismatched peer_public_key posts %d, want 0", posts)
+	}
+	mu.Unlock()
+	ft.mu.Lock()
+	if len(ft.applied) != 0 || ft.teardowns != 4 {
+		ft.mu.Unlock()
+		t.Fatalf("mismatch apply %d teardown %d", len(ft.applied), ft.teardowns)
+	}
+	ft.mu.Unlock()
+	if strings.Count(buf.String(), "host peer revoked, torn down") != 1 {
+		t.Fatalf("revoked streak must not log again, logs:\n%s", buf.String())
+	}
+}
+
+func TestRevokedPeerDoesNotBringInterfaceUp(t *testing.T) {
+	var buf strings.Builder
+	posts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"Tunnel is revoked"}`))
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.TunnelSession{
+			TunnelID: "tun-1",
+			LeaseID:  "lease-1",
+			Status:   api.TunnelRevoked,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "tok", "")
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	ft := &fakeTunnel{}
+	a.tunnels = ft
+
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 1 {
+		t.Fatalf("posts %d, want a single revoked POST", posts)
+	}
+	ft.mu.Lock()
+	nApply, nDown := len(ft.applied), ft.teardowns
+	ft.mu.Unlock()
+	if nApply != 0 || nDown < 1 {
+		t.Fatalf("apply %d teardown %d", nApply, nDown)
+	}
+	if !strings.Contains(buf.String(), "not bringing WireGuard up") {
+		t.Fatalf("log: %s", buf.String())
+	}
+}
+
+func preloadPostedKey(a *Agent) (pub, priv string, err error) {
+	priv, pub, err = tunnel.LoadOrCreatePrivateKey(a.keyDir)
+	if err != nil {
+		return "", "", err
+	}
+	a.peerPosted = true
+	a.postedPub = pub
+	return pub, priv, nil
+}
+
 func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
 	var mu sync.Mutex
 	acks, gets := 0, 0
@@ -365,7 +1021,7 @@ func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
-	acceptTunnelPeer(mux)
+	peerPub := acceptTunnelPeer(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testSecret {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -375,11 +1031,12 @@ func TestTwoAllocatedTicketsOneHostPeer(t *testing.T) {
 		gets++
 		n := gets
 		mu.Unlock()
+		sess := samePeer("tun-2", "lease-2")
 		if n == 1 {
-			writeJSON(w, http.StatusOK, samePeer("tun-1", "lease-1"))
-			return
+			sess = samePeer("tun-1", "lease-1")
 		}
-		writeJSON(w, http.StatusOK, samePeer("tun-2", "lease-2"))
+		sess.PeerPublicKey = peerPub()
+		writeJSON(w, http.StatusOK, sess)
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -548,10 +1205,12 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, api.HeartbeatResponse{DeviceID: testDevice, PathBState: api.PathBGreen, AcceptedAt: time.Now().UTC()})
 	})
-	acceptTunnelPeer(mux)
+	peerPub := acceptTunnelPeer(mux)
 	acceptTunnelAck(mux)
 	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, allocatedTunnel("lease-2"))
+		sess := allocatedTunnel("lease-2")
+		sess.PeerPublicKey = peerPub()
+		writeJSON(w, http.StatusOK, sess)
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -1875,10 +2534,22 @@ func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
 	return a
 }
 
-func acceptTunnelPeer(mux *http.ServeMux) {
+func acceptTunnelPeer(mux *http.ServeMux) func() string {
+	var mu sync.Mutex
+	var pub string
 	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		var body api.TunnelPeerRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		pub = body.PeerPublicKey
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return pub
+	}
 }
 
 func waitLoop(t *testing.T, a *Agent, ok func() bool) {

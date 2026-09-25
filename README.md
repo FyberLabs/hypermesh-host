@@ -48,7 +48,7 @@ After enroll, these routes send `Authorization: Bearer <device_secret>`, `X-Tena
 | Job pull | `GET /api/v1/hypermesh/agent/jobs?device_id=` |
 | Result | `POST /api/v1/hypermesh/agent/jobs/{job_id}/result?device_id=` |
 | Tunnel | `GET /api/v1/hypermesh/agent/tunnel?device_id=` |
-| Tunnel peer | `POST /api/v1/hypermesh/agent/tunnel/peer?device_id=` (host public key only) |
+| Tunnel peer | `POST /api/v1/hypermesh/agent/tunnel/peer` (host public key only; no `device_id`) |
 | Tunnel ack | `POST /api/v1/hypermesh/agent/tunnel/ack?device_id=` |
 
 401 is missing/wrong secret. 403 is secret does not match `device_id`.
@@ -129,7 +129,7 @@ Control plane allocates on paid→starting. GET 200 is the current session or 20
 
 One WireGuard peer per **host**, not per lease. `lease_id` / `tunnel_id` on the GET are tickets on that same peer.
 
-Allocated: this box generates the host WireGuard private key (`/etc/wireguard/hypermesh.key`, 0600) and POSTs only the public key to `/agent/tunnel/peer`. GET never carries `peer_private_key`. This box writes a 0600 wg-quick config from the local private key plus GET `endpoint`, `server_public_key`, `allowed_ips`, and `client_address`, `wg-quick up`, then POST ack `{"applied":true}`. Apply the fields it is given (Fyber router; `wg.test.hyperme.sh:51820`). `wg-quick up` runs only when those peer fields change. A restart that sees the same fingerprint does not bounce the iface. The private key is never logged and never sent to the plane. Do not invent a lab peer.
+Allocated: this box generates the host WireGuard private key (`/etc/wireguard/hypermesh.key`, mode 0600, directory 0700, root-owned when the unit runs as root) and reuses that file across restart and redeploy. It replaces the file only when it is absent or not a valid X25519 key. On boot, and whenever the local public key does not match an allocated session, it POSTs only `{"peer_public_key":"..."}` to `/agent/tunnel/peer` (no `device_id`; Bearer `hm_dev_` plus `X-Tenant-ID`) and then GETs. POST 404 `Tunnel not found` still saved the device key: success with no tunnel. POST 409 `Tunnel is revoked` is logged and WireGuard stays down. GET 204 is no tunnel. GET 200 `status=allocated` with `peer_public_key` null or different, or GET 409 whose body `code` is `peer_public_key_not_registered` (`detail` is not the match), means POST again and re-GET. GET 200 `status=revoked` tears WireGuard down and does not POST again, even when `peer_public_key` is null or different; that line is logged once until a later allocated session is applied. The live wg-quick config stays on the previous key until a GET shows the new public key; then this box switches and acks again (`ack_applied` is not cleared on rotation). GET never carries `peer_private_key`. This box writes a 0600 wg-quick config from the local private key plus GET `endpoint`, `server_public_key`, `allowed_ips`, and `client_address`, `wg-quick up`, then POST ack `{"applied":true}`. Apply the fields it is given (Fyber router; `wg.test.hyperme.sh:51820`). `wg-quick up` runs only when those peer fields change. A restart that sees the same fingerprint does not bounce the iface. The private key is never logged and never sent to the plane. Do not invent a lab peer.
 
 Revoked (host peer revoked) or 204 (no host session): `wg-quick down` and shred `/etc/wireguard/hypermesh.conf` so the peer key does not stay on disk. Do not teardown because `lease_id` changed. `lease_start` / `lease_stop` do not `wg-quick` down/up.
 
