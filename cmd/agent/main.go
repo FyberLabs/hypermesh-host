@@ -36,6 +36,8 @@ func main() {
 	flag.StringVar(&cfg.WGMode, "wg-userspace", cfg.WGMode, "WireGuard backend: auto, 1 (hypermesh-wg.service), or 0 (kernel wg-quick) (HYPERMESH_WG_USERSPACE)")
 	flag.StringVar(&cfg.MetricsAddr, "metrics-addr", cfg.MetricsAddr, "Prometheus /metrics bind address (HYPERMESH_METRICS_ADDR); loopback only unless HYPERMESH_METRICS_ALLOW_NON_LOOPBACK=1")
 	flag.BoolVar(&cfg.MetricsAllowNonLoopback, "metrics-allow-non-loopback", cfg.MetricsAllowNonLoopback, "allow /metrics on a non-loopback address (HYPERMESH_METRICS_ALLOW_NON_LOOPBACK)")
+	flag.StringVar(&cfg.HostType, "host-type", cfg.HostType, "model (default) or supervisor (enroll and heartbeat, refuse lease_start) (HYPERMESH_HOST_TYPE)")
+	flag.StringVar(&cfg.WGKeyDir, "wg-key-dir", cfg.WGKeyDir, "host WireGuard key directory (HYPERMESH_WG_KEY_DIR)")
 
 	if pre, ownerArgs, ok := splitOwnerArgs(os.Args[1:]); ok {
 		if err := flag.CommandLine.Parse(pre); err != nil {

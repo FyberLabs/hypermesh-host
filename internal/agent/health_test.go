@@ -129,12 +129,16 @@ func TestHeartbeatHealthShape(t *testing.T) {
 	wantHealth := []string{
 		"tunnel_state", "last_sync_at", "last_sync_error_class", "last_sync_http_status",
 		"handshake_age_s", "wg_pid", "wg_port", "lease_container_count", "build_commit",
+		"host_type",
 	}
 	if !sameKeys(health, wantHealth) {
 		t.Fatalf("health keys %s", top["health"])
 	}
 	if hb.Health.TunnelState != tunnel.StateUp {
 		t.Fatalf("tunnel_state %q", hb.Health.TunnelState)
+	}
+	if hb.Health.HostType != HostTypeModel {
+		t.Fatalf("host_type %q", hb.Health.HostType)
 	}
 	if hb.Health.LastSyncAt != "2026-09-25T12:00:00Z" {
 		t.Fatalf("last_sync_at %q", hb.Health.LastSyncAt)

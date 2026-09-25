@@ -1,0 +1,16 @@
+# hypermesh-supervisor: one image, three placements.
+# HYPERMESH_SUPERVISOR_PLACEMENT=outside | host | renter
+# outside — off the network; restarts the local runtime.
+# host — enrolls and heartbeats as a supervisor host; refuses lease_start.
+# renter — POST /v1/chat/completions on the chat gateway, not the control-plane stub.
+# The runtime image is Alpine. The binary is CGO_ENABLED=0.
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/hypermesh-supervisor ./cmd/hypermesh-supervisor
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/hypermesh-supervisor /usr/local/bin/hypermesh-supervisor
+ENV HYPERMESH_SUPERVISOR_PLACEMENT=outside
+ENTRYPOINT ["/usr/local/bin/hypermesh-supervisor"]

@@ -22,6 +22,9 @@ const (
 type EnrollRequest struct {
 	EnrollToken string `json:"enroll_token"`
 	ImageHash   string `json:"image_hash,omitempty"`
+	// HostType is model or supervisor. Empty is not sent. The agent
+	// always sends one of those two.
+	HostType string `json:"host_type,omitempty"`
 }
 
 // EnrollResponse is the 200 body from enroll.
@@ -81,6 +84,9 @@ type HostHealth struct {
 	WGPort              *int   `json:"wg_port,omitempty"`
 	LeaseContainerCount *int   `json:"lease_container_count,omitempty"`
 	BuildCommit         string `json:"build_commit,omitempty"`
+	// HostType is model or supervisor. The agent always sets it so a
+	// supervisor is not offered as a normal device.
+	HostType string `json:"host_type,omitempty"`
 }
 
 // PathBState is the control-plane view of Path B.

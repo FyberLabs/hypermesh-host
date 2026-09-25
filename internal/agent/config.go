@@ -65,6 +65,12 @@ type Config struct {
 	// MetricsAllowNonLoopback permits a non-loopback MetricsAddr.
 	// The process logs a warning when it binds one.
 	MetricsAllowNonLoopback bool
+	// HostType is "model" (default) or "supervisor". A supervisor host
+	// enrolls and heartbeats and refuses lease_start for a weight.
+	HostType string
+	// WGKeyDir is the host WireGuard private key directory.
+	// Empty uses /etc/wireguard. The agent still owns the key.
+	WGKeyDir string
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
@@ -88,6 +94,8 @@ func FromEnv() Config {
 		WGMode:                  wgModeFromEnv(),
 		MetricsAddr:             envOr("HYPERMESH_METRICS_ADDR", metrics.DefaultAddr),
 		MetricsAllowNonLoopback: envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
+		HostType:                strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
+		WGKeyDir:                strings.TrimSpace(os.Getenv("HYPERMESH_WG_KEY_DIR")),
 	}
 }
 
@@ -143,7 +151,27 @@ func (c Config) Validate() error {
 	if !tunnel.ValidWGMode(c.WGMode) {
 		return fmt.Errorf("hypermesh: HYPERMESH_WG_USERSPACE must be auto, 1, or 0")
 	}
+	switch strings.ToLower(strings.TrimSpace(c.HostType)) {
+	case "", HostTypeModel, HostTypeSupervisor:
+	default:
+		return fmt.Errorf("hypermesh: host type must be model or supervisor")
+	}
 	return nil
+}
+
+// SupervisorHost is a non-model host. It enrolls and heartbeats.
+// lease_start for a weight is refused.
+func (c Config) SupervisorHost() bool {
+	return strings.EqualFold(strings.TrimSpace(c.HostType), HostTypeSupervisor)
+}
+
+// ReportedHostType is the value sent on enroll and heartbeat.
+// Empty means model.
+func (c Config) ReportedHostType() string {
+	if c.SupervisorHost() {
+		return HostTypeSupervisor
+	}
+	return HostTypeModel
 }
 
 func validPort(s string) bool {
