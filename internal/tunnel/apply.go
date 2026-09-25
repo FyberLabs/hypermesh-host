@@ -70,6 +70,14 @@ type Runner struct {
 	Run func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// Now is the clock for handshake age. Nil uses time.Now.
 	Now func() time.Time
+	// LookupHost resolves a peer endpoint hostname. wg show dump prints the
+	// numeric address, not the name from the control plane. Nil uses net.LookupHost.
+	LookupHost func(ctx context.Context, host string) ([]string, error)
+	// InstallDefaultRoute installs 0.0.0.0/0 and ::/0 when they appear in
+	// AllowedIPs. Off by default: those routes would replace the LAN default
+	// route this host uses to reach the control plane and the WireGuard
+	// endpoint. Set it only when this deployment explicitly intends a full tunnel.
+	InstallDefaultRoute bool
 }
 
 // NewRunner uses /etc/wireguard and wg-quick on PATH.

@@ -102,7 +102,7 @@ func assertRevokeTearsDown(t *testing.T, h http.HandlerFunc) *cmdLog {
 	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
 	a.client.DeviceSecret = testSecret
 	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
-	link := &cmdLog{dump: handshakingDump(now)}
+	link := &cmdLog{dump: handshakingDump(now), routes: []string{"10.77.0.0/24"}}
 	a.tunnels = userspaceRunner(t, link, now)
 	if err := a.syncTunnel(context.Background()); err != nil {
 		t.Fatal(err)
@@ -110,7 +110,46 @@ func assertRevokeTearsDown(t *testing.T, h http.HandlerFunc) *cmdLog {
 	if !link.tornDown() || link.spawned {
 		t.Fatalf("revoke cmds %v", link.commands())
 	}
+	if !link.saw("ip route del 10.77.0.0/24 dev hypermesh") || len(link.routeList()) != 0 {
+		t.Fatalf("revoke left the route: %v", link.commands())
+	}
 	return link
+}
+
+// TestUserspace204RemovesRoutes is GET /agent/tunnel 204 (no host session).
+// Routes go away with the peers and the address.
+func TestUserspace204RemovesRoutes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case api.PathTunnelPeer:
+			w.WriteHeader(http.StatusOK)
+		case api.PathTunnel:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, filepath.Join(dir, "uptime"), "", "")
+	a.state = State{DeviceID: testDevice, DeviceSecret: testSecret}
+	a.client.DeviceSecret = testSecret
+	if _, _, err := preloadPostedKey(a); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	link := &cmdLog{dump: handshakingDump(now), routes: []string{"10.77.0.0/24"}}
+	a.tunnels = userspaceRunner(t, link, now)
+	if err := a.syncTunnel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !link.saw("ip route del 10.77.0.0/24 dev hypermesh") || len(link.routeList()) != 0 {
+		t.Fatalf("204 left the route: %v", link.commands())
+	}
+	if !link.tornDown() || link.spawned {
+		t.Fatalf("204 cmds %v", link.commands())
+	}
 }
 
 func userspaceRunner(t *testing.T, link *cmdLog, now time.Time) *tunnel.Runner {
@@ -138,6 +177,8 @@ type cmdLog struct {
 	cmds    []string
 	dump    string
 	addr    string
+	routes  []string
+	routes6 []string
 	spawned bool
 }
 
@@ -159,6 +200,9 @@ func (c *cmdLog) run(_ context.Context, name string, args ...string) ([]byte, er
 		}
 		return []byte("2: hypermesh    inet " + c.addr + " scope global hypermesh\n"), nil
 	}
+	if name == "ip" && strings.Contains(line, " route ") {
+		return c.route(line, args)
+	}
 	if name == "wg" && len(args) > 0 && args[0] == "syncconf" {
 		return nil, nil
 	}
@@ -166,6 +210,85 @@ func (c *cmdLog) run(_ context.Context, name string, args ...string) ([]byte, er
 		return nil, nil
 	}
 	return nil, fmt.Errorf("unexpected %s", line)
+}
+
+func (c *cmdLog) route(line string, args []string) ([]byte, error) {
+	v6 := strings.Contains(line, " -6 ")
+	switch {
+	case strings.Contains(line, " show"):
+		list := c.routes
+		if v6 {
+			list = c.routes6
+		}
+		var b strings.Builder
+		for _, cidr := range list {
+			fmt.Fprintf(&b, "%s dev hypermesh scope link\n", cidr)
+		}
+		return []byte(b.String()), nil
+	case strings.Contains(line, " replace"):
+		c.addRoute(v6, routeToken(args))
+		return nil, nil
+	case strings.Contains(line, " del"):
+		c.dropRoute(v6, routeToken(args))
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected route %s", line)
+	}
+}
+
+func (c *cmdLog) addRoute(v6 bool, cidr string) {
+	if cidr == "" {
+		return
+	}
+	list := c.routes
+	if v6 {
+		list = c.routes6
+	}
+	for _, have := range list {
+		if have == cidr {
+			return
+		}
+	}
+	if v6 {
+		c.routes6 = append(c.routes6, cidr)
+		return
+	}
+	c.routes = append(c.routes, cidr)
+}
+
+func (c *cmdLog) dropRoute(v6 bool, cidr string) {
+	src := c.routes
+	if v6 {
+		src = c.routes6
+	}
+	dst := make([]string, 0, len(src))
+	for _, have := range src {
+		if have != cidr {
+			dst = append(dst, have)
+		}
+	}
+	if v6 {
+		c.routes6 = dst
+		return
+	}
+	c.routes = dst
+}
+
+func routeToken(args []string) string {
+	for _, a := range args {
+		if a == "default" || strings.Contains(a, "/") {
+			return a
+		}
+	}
+	return ""
+}
+
+func (c *cmdLog) routeList() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.routes))
+	copy(out, c.routes)
+	return out
 }
 
 func (c *cmdLog) commands() []string {
