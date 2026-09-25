@@ -26,7 +26,7 @@ go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
 
 Release archives are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
 
-`hypermesh-muse` is one Linux image (`deploy/muse/Dockerfile`, Alpine runtime) and three placements (`HYPERMESH_MUSE_PLACEMENT`): `outside` (off the network), `host` (enrolls and heartbeats as host type `supervisor`, refuses `lease_start`), and `renter` (`POST /v1/chat/completions` on the chat gateway). The renter API key and the enroll token come from the environment or a systemd credential. They are not rewritten into `muse.json` on start.
+`hypermesh-muse` is one Linux image (`deploy/muse/Dockerfile`, Alpine runtime) and three placements (`HYPERMESH_MUSE_PLACEMENT`): `outside` (off the network), `host` (enrolls and heartbeats as host type `supervisor`, refuses `lease_start`), and `renter` (`POST /v1/chat/completions` on the chat gateway). Host placement does not certify the box. The renter API key and the enroll token come from the environment or a systemd credential. They are not rewritten into `muse.json` on start.
 
 Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
 
