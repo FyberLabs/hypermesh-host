@@ -78,6 +78,17 @@ type Agent struct {
 
 const certLeaseID = "cert-bench"
 
+const (
+	// HostTypeModel is the AGX (and any box that can load a weight).
+	HostTypeModel = "model"
+	// HostTypeSupervisor enrolls and heartbeats, owns no weight, and
+	// refuses lease_start. Muse uses this host type.
+	HostTypeSupervisor = "supervisor"
+)
+
+// SupervisorLeaseRefuse is the lease_start reason for a supervisor host.
+const SupervisorLeaseRefuse = "supervisor host refuses lease_start"
+
 // New builds an agent. log may be nil.
 func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	if err := cfg.Validate(); err != nil {
@@ -92,6 +103,10 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	if wg.Userspace {
 		log.Info("userspace wireguard", "unit", "hypermesh-wg.service")
 	}
+	keyDir := tunnel.DefaultKeyDir
+	if d := strings.TrimSpace(cfg.WGKeyDir); d != "" {
+		keyDir = d
+	}
 	return &Agent{
 		cfg:    cfg,
 		client: api.NewClient(cfg.ControlPlaneURL, cfg.TenantID),
@@ -105,7 +120,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		hip:     runtime.NewHIP(),
 		metal:   runtime.NewMetal(),
 		tunnels: wg,
-		keyDir:  "/etc/wireguard",
+		keyDir:  keyDir,
 		log:     log,
 	}, nil
 }
@@ -789,6 +804,10 @@ func (a *Agent) backendStub(job api.Job) (pathb.Result, bool) {
 }
 
 func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
+	if a.cfg.SupervisorHost() {
+		a.log.Info("lease_start refused", "reason", SupervisorLeaseRefuse, "host_type", HostTypeSupervisor)
+		return pathb.Result{Passed: false, Reason: SupervisorLeaseRefuse}
+	}
 	if res, stub := a.backendStub(job); stub {
 		return res
 	}
