@@ -65,7 +65,10 @@ func (a *Agent) recordHeartbeat(err error) {
 // logged and omitted. This never returns an error and must not panic
 // into the heartbeat.
 func (a *Agent) safeHealth(ctx context.Context) (h *api.HostHealth) {
-	h = &api.HostHealth{BuildCommit: buildinfo.Current()}
+	h = &api.HostHealth{
+		BuildCommit: buildinfo.Current(),
+		HostType:    a.cfg.ReportedHostType(),
+	}
 	defer func() {
 		if rec := recover(); rec != nil {
 			a.log.Warn("health collection failed", "err", fmt.Sprint(rec))

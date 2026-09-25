@@ -26,6 +26,8 @@ go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
 
 Release archives are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
 
+`hypermesh-muse` is one Linux image (`deploy/muse/Dockerfile`, Alpine runtime) and three placements (`HYPERMESH_MUSE_PLACEMENT`): `outside` (off the network), `host` (enrolls and heartbeats as host type `supervisor`, refuses `lease_start`), and `renter` (`POST /v1/chat/completions` on the chat gateway). The renter API key and the enroll token come from the environment or a systemd credential. They are not rewritten into `muse.json` on start.
+
 Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
 
 Tests use `net/http/httptest` fixtures of the locked shapes. They do not need a live Panopticon.
@@ -195,6 +197,7 @@ Leave `/etc/hypermesh/agent.env` and `/var/lib/hypermesh/device.json` alone.
 ```
 cmd/agent             host process (hypermesh-agent)
 cmd/hypermesh-deploy  AGX preflight, configure, connect
+cmd/hypermesh-muse  supervisor (outside, host, renter)
 internal/api        locked HTTP client (agent routes + optional enroll-token helper)
 internal/pathb      thin-v1 (telem + optional local completions; path_b fails on reboot)
 internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (gated)
@@ -203,7 +206,9 @@ internal/telem      image hash, nvpmodel, thermals, uptime
 internal/metrics    loopback Prometheus text /metrics
 internal/buildinfo  build commit (ldflags, else VCS revision)
 internal/agent      enroll / heartbeat / tunnel / job loop + owner unix socket
+internal/muse       supervisor placements (outside, host, renter)
 deploy/agx          systemd + first-boot + on-box workload + optional AIuditor witness unit
+deploy/muse         supervisor image (Alpine runtime; placements outside / host / renter)
 deploy/seeed-j4012  Super J4012 first-boot and overlay
 deploy/rocm         AMD ROCm host-image notes (scaffold)
 deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)

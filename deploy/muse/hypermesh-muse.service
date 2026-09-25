@@ -1,0 +1,22 @@
+[Unit]
+Description=Hypermesh Muse supervisor
+Documentation=https://github.com/FyberLabs/hypermesh-host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HYPERMESH_MUSE_PLACEMENT=outside
+EnvironmentFile=-/etc/hypermesh/muse.env
+# Renter API key and the one-time enroll token are not in this unit
+# and are not written to muse.json.
+# LoadCredential=hypermesh-api-key:/etc/hypermesh/api-key
+# LoadCredential=hypermesh-enroll-token:/etc/hypermesh/enroll-token
+# systemd exposes those at $CREDENTIALS_DIRECTORY/<name>.
+# HYPERMESH_API_KEY and HYPERMESH_ENROLL_TOKEN are the env alternatives.
+ExecStart=/usr/local/bin/hypermesh-muse
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
