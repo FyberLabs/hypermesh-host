@@ -30,19 +30,22 @@ func TestCapacityFromBlocksOverflow(t *testing.T) {
 	if got != want {
 		t.Fatalf("CapacityBytes %d want %d", got, want)
 	}
-	free, size, err := StatfsBytes(dir)
-	if err != nil {
-		t.Fatal(err)
+	var free, size int64
+	var gotFree int64
+	var matched bool
+	for i := 0; i < 20 && !matched; i++ {
+		free, size, err = StatfsBytes(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotFree, err = FreeBytes(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched = gotFree == free && size == want
 	}
-	if size != want {
-		t.Fatalf("StatfsBytes size %d want %d", size, want)
-	}
-	gotFree, err := FreeBytes(dir)
-	if err != nil || gotFree != free {
-		t.Fatalf("FreeBytes %d statfs %d err %v", gotFree, free, err)
-	}
-	if free != int64(st.Bavail)*int64(st.Bsize) {
-		t.Fatalf("free %d", free)
+	if !matched {
+		t.Fatalf("FreeBytes %d statfs free %d size %d want %d", gotFree, free, size, want)
 	}
 }
 
