@@ -464,3 +464,83 @@ func TestImmediateBeatAfterBackoffWindow(t *testing.T) {
 		t.Fatal("beat did not run once the backoff window had elapsed")
 	}
 }
+
+// TestQueuedWakeDoesNotSkipRetryAfter runs the real waitHeartbeat timer.
+// A job-loop success during the in-flight beat queues a wake before the
+// 503 Retry-After hold exists. That token must not start the next beat.
+func TestQueuedWakeDoesNotSkipRetryAfter(t *testing.T) {
+	var mu sync.Mutex
+	var calls int
+	var beatAt []time.Time
+	var agent *Agent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		beatAt = append(beatAt, time.Now())
+		a := agent
+		mu.Unlock()
+		if n <= 2 {
+			if n == 2 && a != nil {
+				// The previous hold has expired by the time this request
+				// is in flight, which is when a job pull can queue a wake.
+				time.Sleep(30 * time.Millisecond)
+				a.notePlaneReachable()
+			}
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{
+			DeviceID:   testDevice,
+			PathBState: api.PathBGreen,
+			AcceptedAt: time.Now().UTC(),
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("10.0 1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent = newTestAgent(t, srv.URL, dir, uptime, "", "")
+	agent.state.DeviceID = testDevice
+	agent.client.DeviceSecret = testSecret
+	agent.cfg.HeartbeatEvery = 30 * time.Second
+	agent.hbRand = func() float64 { return 0 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		agent.heartbeatLoop(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := calls
+		mu.Unlock()
+		if n >= 3 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("heartbeat loop did not stop")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(beatAt) < 3 {
+		t.Fatalf("calls %d", len(beatAt))
+	}
+	gap := beatAt[2].Sub(beatAt[1])
+	if gap < 900*time.Millisecond {
+		t.Fatalf("beat 3 followed the in-flight 503 by %s; Retry-After was skipped", gap)
+	}
+}
