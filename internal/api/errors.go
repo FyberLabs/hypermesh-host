@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // PeerPublicKeyNotRegistered is the GET /agent/tunnel 409 code when the
@@ -60,17 +62,21 @@ func (e *DecodeError) Unwrap() error { return e.Err }
 
 // StatusError is an unexpected HTTP status. Response bodies are not kept
 // (they may echo tokens or keys).
+// HasRetryAfter is set only for 503 when the Retry-After header parsed.
+// RetryAfter is the delay the header asked for, before the caller clamps it.
 type StatusError struct {
-	Method     string
-	Path       string
-	StatusCode int
+	Method        string
+	Path          string
+	StatusCode    int
+	HasRetryAfter bool
+	RetryAfter    time.Duration
 }
 
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("hypermesh api: %s %s: HTTP %d", e.Method, e.Path, e.StatusCode)
 }
 
-func mapStatus(method, path string, code int, payload []byte) error {
+func mapStatus(method, path string, code int, payload []byte, hdr http.Header) error {
 	if path == PathEnroll {
 		switch code {
 		case http.StatusUnauthorized:
@@ -99,8 +105,48 @@ func mapStatus(method, path string, code int, payload []byte) error {
 		}
 		return ErrUnknownDevice
 	default:
-		return &StatusError{Method: method, Path: path, StatusCode: code}
+		return statusErr(method, path, code, hdr)
 	}
+}
+
+func statusErr(method, path string, code int, hdr http.Header) *StatusError {
+	se := &StatusError{Method: method, Path: path, StatusCode: code}
+	if code != http.StatusServiceUnavailable || hdr == nil {
+		return se
+	}
+	d, ok := parseRetryAfter(hdr.Get("Retry-After"), time.Now())
+	if !ok {
+		return se
+	}
+	se.HasRetryAfter = true
+	se.RetryAfter = d
+	return se
+}
+
+// parseRetryAfter reads a delta-seconds or HTTP-date Retry-After value.
+// ok is false when the header is missing or not a delay. A present value
+// of zero or a date in the past returns 0, true so the caller can clamp
+// it instead of treating the header as absent.
+func parseRetryAfter(v string, now time.Time) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if secs < 0 {
+			return 0, true
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	t, err := http.ParseTime(v)
+	if err != nil {
+		return 0, false
+	}
+	d := t.Sub(now)
+	if d < 0 {
+		return 0, true
+	}
+	return d, true
 }
 
 func detailString(payload []byte) string {

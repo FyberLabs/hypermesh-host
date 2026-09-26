@@ -96,6 +96,7 @@ func (a *Agent) fillHealth(ctx context.Context, h *api.HostHealth) {
 			a.log.Warn("tunnel health snapshot failed", "err", err)
 		} else {
 			h.TunnelState = snap.State
+			a.observeTunnel(snap.State)
 			h.HandshakeAgeS = copyInt(snap.HandshakeAgeS)
 			h.WGPID = copyInt(snap.PID)
 			h.WGPort = copyInt(snap.ListenPort)

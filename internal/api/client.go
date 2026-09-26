@@ -179,7 +179,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		return errNoContent
 	}
 	if resp.StatusCode != want {
-		return mapStatus(method, path, resp.StatusCode, payload)
+		return mapStatus(method, path, resp.StatusCode, payload, resp.Header)
 	}
 	if dest == nil {
 		return nil
