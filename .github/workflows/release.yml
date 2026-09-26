@@ -6,6 +6,7 @@ on:
       - main
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
 
 # one sequence across channels; a host switching channel only moves to
 # a strictly newer build. Every test and prod publish uses this group.
@@ -24,12 +25,13 @@ permissions:
 
 jobs:
   release:
-    name: release-${{ github.ref_type == 'tag' && 'prod' || 'test' }}
+    name: release
     runs-on: [self-hosted, linux, x64]
-    # Environment release gates this job, including the prod path.
-    # Deployment branches (main plus v* tags) and the maintainer-only
-    # v* tag ruleset are declared in a separate infra pull request.
-    environment: release
+    # GitHub Free on this private repo has no deployment environments,
+    # so this job uses repository variables. Infra #143 moves the
+    # publisher to ref-based federated credentials:
+    #   test: repo:FyberLabs/hypermesh-host:ref:refs/heads/main
+    #   prod: repo:FyberLabs/hypermesh-host:ref:refs/tags/v*
     permissions:
       contents: write
       id-token: write
@@ -43,12 +45,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Prod only. A tag that is not reachable from origin/main fails.
-      - name: Require tag commit on main
-        if: github.ref_type == 'tag'
+      # test only for refs/heads/main. prod only for refs/tags/v* whose
+      # commit is an ancestor of origin/main. workflow_dispatch from
+      # any other ref fails here, before login.
+      - name: Require a publishable ref
         run: |
-          git fetch origin main
-          git merge-base --is-ancestor HEAD origin/main
+          set -euo pipefail
+          # shellcheck source=packaging/release/layout.sh
+          source packaging/release/layout.sh
+          channel=$(channel_for_ref "$GITHUB_REF") || exit 1
+          if [ "$channel" = prod ]; then
+            git fetch origin main
+            if ! git merge-base --is-ancestor HEAD origin/main; then
+              echo "hypermesh release: ${GITHUB_REF} is not an ancestor of origin/main" >&2
+              exit 1
+            fi
+          fi
+          printf 'channel=%s\n' "$channel" >> "$GITHUB_ENV"
 
       - name: Set up Go
         # actions/setup-go v7
@@ -61,22 +74,43 @@ jobs:
         # azure/login v2
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           allow-no-subscriptions: true
 
       - name: Publish signed agent
         env:
+          channel: ${{ env.channel }}
           GH_TOKEN: ${{ github.token }}
-          HYPERMESH_RELEASE_GPG_PRIVATE_KEY: ${{ secrets.HYPERMESH_RELEASE_GPG_PRIVATE_KEY }}
-          HYPERMESH_RELEASE_GPG_PASSPHRASE: ${{ secrets.HYPERMESH_RELEASE_GPG_PASSPHRASE }}
-          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT || secrets.AZURE_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_STORAGE_CONTAINER || secrets.AZURE_STORAGE_CONTAINER }}
-        run: packaging/release/publish-agent.sh ${{ github.ref_type == 'tag' && 'prod' || 'test' }}
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_STORAGE_CONTAINER }}
+          HYPERMESH_RELEASE_KV_NAME: ${{ vars.HYPERMESH_RELEASE_KV_NAME }}
+          HYPERMESH_RELEASE_GPG_KEY_SECRET: ${{ vars.HYPERMESH_RELEASE_GPG_KEY_SECRET }}
+          HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET: ${{ vars.HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET }}
+        run: |
+          set -euo pipefail
+          case "$channel" in
+            test|prod) ;;
+            *)
+              echo "hypermesh release: refusing to publish without a channel from the ref guard" >&2
+              exit 1
+              ;;
+          esac
+          packaging/release/publish-agent.sh "$channel"
 
-      - name: Azure logout
+      - name: Wipe signing material and log out
         if: always()
         run: |
+          set +x
+          set -euo pipefail
+          if [ -n "${GNUPGHOME:-}" ] && [ -d "${GNUPGHOME}" ]; then
+            gpgconf --kill all || true
+            if command -v shred >/dev/null 2>&1; then
+              find "$GNUPGHOME" -type f -exec shred -u {} + || true
+            fi
+            rm -rf "$GNUPGHOME"
+          fi
+          gpgconf --kill all || true
           az logout || true
           rm -rf "${AZURE_CONFIG_DIR:-}"

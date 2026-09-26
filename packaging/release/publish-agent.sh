@@ -55,10 +55,12 @@
 # A GitHub Release is also created so a person can download the same
 # bytes. Hosts do not read GitHub. They ask the control plane.
 #
-# Signing uses HYPERMESH_RELEASE_GPG_PRIVATE_KEY on the GitHub
-# Environment named "release". The script refuses to upload when that
-# key is empty. HYPERMESH_RELEASE_GPG_PASSPHRASE is required only when
-# the key has one.
+# Signing reads the private key and passphrase from Key Vault after
+# azure/login. Repository variables name the vault and the secrets
+# (HYPERMESH_RELEASE_KV_NAME, HYPERMESH_RELEASE_GPG_KEY_SECRET,
+# HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET). Those names are TBD from
+# infra #143. The script refuses to upload when the key secret is
+# empty. The passphrase may be empty when the key has none.
 set -euo pipefail
 shopt -s inherit_errexit
 
@@ -76,14 +78,14 @@ esac
 : "${GITHUB_SHA:?}"
 : "${GITHUB_REPOSITORY:?}"
 : "${GH_TOKEN:?}"
-if [ -z "${HYPERMESH_RELEASE_GPG_PRIVATE_KEY:-}" ]; then
-  echo "hypermesh release: HYPERMESH_RELEASE_GPG_PRIVATE_KEY is empty" >&2
-  echo "Provision it on the GitHub Environment named release (repo admin)." >&2
+if [ -z "${HYPERMESH_RELEASE_KV_NAME:-}" ] || [ -z "${HYPERMESH_RELEASE_GPG_KEY_SECRET:-}" ] || [ -z "${HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET:-}" ]; then
+  echo "hypermesh release: Key Vault name and secret names are required" >&2
+  echo "Set HYPERMESH_RELEASE_KV_NAME, HYPERMESH_RELEASE_GPG_KEY_SECRET, and HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET. Names are TBD from infra #143." >&2
   exit 1
 fi
 if [ -z "${AZURE_STORAGE_ACCOUNT:-}" ] || [ -z "${AZURE_STORAGE_CONTAINER:-}" ]; then
   echo "hypermesh release: AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_CONTAINER are required" >&2
-  echo "Set them on the GitHub Environment named release." >&2
+  echo "Set them as repository variables." >&2
   exit 1
 fi
 case "$AZURE_STORAGE_ACCOUNT" in
@@ -135,7 +137,12 @@ cleanup() {
     release_publish_lease "$lease_id"
     lease_id=""
   fi
-  rm -rf "$dist" ${gnupg:+"$gnupg"}
+  local home="${gnupg:-${GNUPGHOME:-}}"
+  if [ -n "$home" ]; then
+    wipe_gnupg_home "$home"
+    gnupg=""
+  fi
+  rm -rf "$dist"
 }
 trap cleanup EXIT
 
@@ -220,18 +227,13 @@ for arch in arm64 amd64; do
 done
 
 umask 077
-gnupg=$(mktemp -d)
-export GNUPGHOME="$gnupg"
-mkdir -p "$GNUPGHOME"
-chmod 700 "$GNUPGHOME"
-printf '%s\n' "$HYPERMESH_RELEASE_GPG_PRIVATE_KEY" > "${gnupg}/key.asc"
-gpg --batch --import "${gnupg}/key.asc"
-fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1=="fpr" {print $10; exit}')
-if [ -z "$fpr" ]; then
-  echo "hypermesh release: imported key has no fingerprint" >&2
-  exit 1
-fi
-printf '%s' "${HYPERMESH_RELEASE_GPG_PASSPHRASE:-}" > "${gnupg}/pass"
+signing_fpr=""
+load_signing_material \
+  "$HYPERMESH_RELEASE_KV_NAME" \
+  "$HYPERMESH_RELEASE_GPG_KEY_SECRET" \
+  "$HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET"
+gnupg=${GNUPGHOME:?}
+fpr=$signing_fpr
 
 if [ "$reuse" = 1 ]; then
   # The stored checksums stay signed by the original signature.
@@ -312,11 +314,8 @@ PY
     hypermesh-release.pub
   )
 fi
-shred_gnupg=$gnupg
+wipe_gnupg_home "$gnupg"
 gnupg=""
-rm -rf "$shred_gnupg"
-unset GNUPGHOME
-unset HYPERMESH_RELEASE_GPG_PRIVATE_KEY HYPERMESH_RELEASE_GPG_PASSPHRASE
 
 # Leave an existing object in place. verify_uploaded rejects it when
 # the bytes differ, and the channel manifest is not moved.

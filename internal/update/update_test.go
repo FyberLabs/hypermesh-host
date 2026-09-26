@@ -770,16 +770,21 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"contents: read",
 		"contents: write",
 		"id-token: write",
-		"environment: release",
+		"workflow_dispatch",
 		"azure/login",
-		"AZURE_CLIENT_ID",
-		"AZURE_TENANT_ID",
-		"AZURE_SUBSCRIPTION_ID",
-		"AZURE_STORAGE_ACCOUNT",
-		"AZURE_STORAGE_CONTAINER",
+		"vars.AZURE_CLIENT_ID",
+		"vars.AZURE_TENANT_ID",
+		"vars.AZURE_SUBSCRIPTION_ID",
+		"vars.AZURE_STORAGE_ACCOUNT",
+		"vars.AZURE_STORAGE_CONTAINER",
 		"allow-no-subscriptions: true",
-		"HYPERMESH_RELEASE_GPG_PRIVATE_KEY",
+		"HYPERMESH_RELEASE_KV_NAME",
+		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
+		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",
 		"packaging/release/publish-agent.sh",
+		"channel_for_ref",
+		"refs/heads/main",
+		"refs/tags/v*",
 		"- main",
 		`v[0-9]+.[0-9]+.[0-9]+`,
 		"cancel-in-progress: false",
@@ -788,10 +793,13 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"GITHUB_ENV",
 		"az logout",
 		"if: always()",
-		"if: github.ref_type == 'tag'",
+		"gpgconf --kill all",
+		"shred",
 		"git fetch origin main",
 		"git merge-base --is-ancestor HEAD origin/main",
 		"one sequence across channels",
+		"repo:FyberLabs/hypermesh-host:ref:refs/heads/main",
+		"repo:FyberLabs/hypermesh-host:ref:refs/tags/v*",
 		"actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
 		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
 		"azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6",
@@ -802,6 +810,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	if strings.Contains(text, "${{ runner.temp }}") || strings.Contains(text, "runner.temp") {
 		t.Fatal("release.yml uses runner.temp in an expression")
+	}
+	if strings.Contains(text, "environment:") || strings.Contains(text, "secrets.") {
+		t.Fatal("release.yml depends on an environment or a secret")
+	}
+	if strings.Contains(text, "set -x") {
+		t.Fatal("release.yml enables xtrace")
 	}
 	if strings.Contains(text, "queue:") {
 		t.Fatal("release.yml sets a concurrency key actionlint 1.7.12 rejects")
@@ -859,6 +873,11 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"superseded=true",
 		`tag="test"`,
 		"inherit_errexit",
+		"load_signing_material",
+		"wipe_gnupg_home",
+		"HYPERMESH_RELEASE_KV_NAME",
+		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
+		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("publish script missing %s", want)
@@ -866,6 +885,50 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	if strings.Contains(text, "connection-string") || strings.Contains(text, "--account-key") || strings.Contains(text, "HYPERMESH_UPDATE_GITHUB_TOKEN") {
 		t.Fatal("publish script has a storage key or a host github token")
+	}
+	if strings.Contains(text, "HYPERMESH_RELEASE_GPG_PRIVATE_KEY") || strings.Contains(text, "set -x") || strings.Contains(text, "GitHub Environment") {
+		t.Fatal("publish script still takes a GitHub signing secret or enables xtrace")
+	}
+	layoutBody, err := os.ReadFile(filepath.Join(root, "packaging", "release", "layout.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	layoutText := string(layoutBody)
+	for _, want := range []string{
+		"az keyvault secret show",
+		"--query value -o tsv",
+		"::add-mask::",
+		"chmod 700",
+		"--pinentry-mode loopback",
+		"--passphrase-file",
+		"gpgconf --kill all",
+		"shred",
+		"channel_for_ref",
+		"refs/heads/main",
+		"refs/tags/v*",
+	} {
+		if !strings.Contains(layoutText, want) {
+			t.Fatalf("layout.sh missing %s", want)
+		}
+	}
+	if strings.Contains(layoutText, "set -x") {
+		t.Fatal("layout.sh enables xtrace")
+	}
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"repo:FyberLabs/hypermesh-host:ref:refs/heads/main",
+		"repo:FyberLabs/hypermesh-host:ref:refs/tags/v*",
+		"HYPERMESH_RELEASE_KV_NAME",
+		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
+		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",
+		"infra #143",
+	} {
+		if !strings.Contains(string(readme), want) {
+			t.Fatalf("README missing %s", want)
+		}
 	}
 	if strings.Contains(text, "stfyberhmhost") || strings.Contains(text, "--container-name hypermesh-host") || strings.Contains(text, "current.json") || strings.Contains(text, "test/0.0.0") {
 		t.Fatal("publish script hardcodes storage names or overwrites test/0.0.0")
@@ -882,6 +945,147 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(rtext, want) {
 			t.Fatalf("rollback script missing %s", want)
 		}
+	}
+}
+
+func TestKeyVaultSigningMaterial(t *testing.T) {
+	if _, err := exec.LookPath("gpg"); err != nil {
+		t.Fatal("gpg is required")
+	}
+	layout := filepath.Join("..", "..", "packaging", "release", "layout.sh")
+	script := `
+set -euo pipefail
+source "$1"
+src=$(mktemp -d)
+chmod 700 "$src"
+trap 'if [ -n "${GNUPGHOME:-}" ]; then wipe_gnupg_home "$GNUPGHOME" || true; fi; rm -rf "$src"' EXIT
+printf '%s' 'fixture-passphrase' > "$src/pass"
+GNUPGHOME="$src" gpg --batch --pinentry-mode loopback --passphrase-file "$src/pass" \
+  --quick-generate-key 'hm-kv <kv@example.invalid>' ed25519 sign never
+GNUPGHOME="$src" gpg --batch --pinentry-mode loopback --passphrase-file "$src/pass" \
+  --armor --export-secret-keys > "$src/secret.asc"
+GNUPGHOME="$src" gpgconf --kill all || true
+unset GNUPGHOME
+az() {
+  local name="" prev="" arg
+  for arg in "$@"; do
+    if [ "$prev" = "--name" ]; then
+      name=$arg
+    fi
+    prev=$arg
+  done
+  case " $* " in
+    *" --query value "*) ;;
+    *) echo "az missing --query value" >&2; return 1 ;;
+  esac
+  case " $* " in
+    *" -o tsv "*) ;;
+    *) echo "az missing -o tsv" >&2; return 1 ;;
+  esac
+  case "$name" in
+    signing-key) cat "$src/secret.asc"; printf '\n' ;;
+    signing-pass) printf '%s\n' 'fixture-passphrase' ;;
+    *) echo "unknown secret name" >&2; return 1 ;;
+  esac
+}
+stdout=$(mktemp)
+stderr=$(mktemp)
+envfile=$(mktemp)
+export GITHUB_ENV="$envfile"
+if ! load_signing_material test-vault signing-key signing-pass >"$stdout" 2>"$stderr"; then
+  echo "load failed" >&2
+  exit 1
+fi
+if grep -q 'fixture-passphrase' "$stdout" || grep -q 'BEGIN PGP' "$stdout"; then
+  echo "stdout leaked signing material" >&2
+  exit 1
+fi
+if grep -q 'BEGIN PGP PRIVATE' "$stderr"; then
+  echo "stderr leaked the private key" >&2
+  exit 1
+fi
+if ! grep -q '^::add-mask::' "$stderr"; then
+  echo "passphrase was not masked" >&2
+  exit 1
+fi
+mode=$(stat -c '%a' "$GNUPGHOME")
+kmode=$(stat -c '%a' "$GNUPGHOME/key.asc")
+pmode=$(stat -c '%a' "$GNUPGHOME/pass")
+if [ "$mode" != 700 ] || [ "$kmode" != 600 ] || [ "$pmode" != 600 ]; then
+  echo "modes home=$mode key=$kmode pass=$pmode" >&2
+  exit 1
+fi
+want=$(mktemp)
+printf '%s' 'fixture-passphrase' > "$want"
+if ! cmp -s "$want" "$GNUPGHOME/pass"; then
+  echo "passphrase file is not the exact secret" >&2
+  exit 1
+fi
+if ! grep -q 'BEGIN PGP PRIVATE KEY BLOCK' "$GNUPGHOME/key.asc"; then
+  echo "key file is not an armored private key" >&2
+  exit 1
+fi
+if ! grep -q "^GNUPGHOME=${GNUPGHOME}$" "$envfile"; then
+  echo "GITHUB_ENV did not record GNUPGHOME" >&2
+  exit 1
+fi
+if [ -z "${signing_fpr:-}" ]; then
+  echo "fingerprint was empty" >&2
+  exit 1
+fi
+home=$GNUPGHOME
+marker=$(mktemp)
+bindir=$(mktemp -d)
+cat > "$bindir/shred" <<'EOF'
+#!/bin/sh
+echo shred-ran >> "$SHRED_LOG"
+exit 0
+EOF
+chmod 755 "$bindir/shred"
+SHRED_LOG=$marker PATH="$bindir:$PATH" wipe_gnupg_home "$home"
+if [ -d "$home" ] || [ -n "${GNUPGHOME:-}" ]; then
+  echo "signing home was not wiped" >&2
+  exit 1
+fi
+if ! grep -qx shred-ran "$marker"; then
+  echo "shred was not used" >&2
+  exit 1
+fi
+az() { printf '\n'; }
+if load_signing_material test-vault signing-key signing-pass; then
+  echo "empty key was accepted" >&2
+  exit 1
+fi
+if [ -n "${GNUPGHOME:-}" ]; then
+  wipe_gnupg_home "$GNUPGHOME"
+fi
+got=$(channel_for_ref refs/heads/main)
+if [ "$got" != test ]; then
+  echo "main was not test" >&2
+  exit 1
+fi
+got=$(channel_for_ref refs/tags/v1.2.3)
+if [ "$got" != prod ]; then
+  echo "tag was not prod" >&2
+  exit 1
+fi
+if channel_for_ref refs/heads/feature >/dev/null; then
+  echo "feature branch was accepted" >&2
+  exit 1
+fi
+if channel_for_ref refs/tags/1.2.3 >/dev/null; then
+  echo "tag without v was accepted" >&2
+  exit 1
+fi
+`
+	cmd := exec.Command("bash", "-c", script, "bash", layout)
+	out, err := cmd.CombinedOutput()
+	cleaned := bytes.ReplaceAll(out, []byte("fixture-passphrase"), []byte("[redacted]"))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, cleaned)
+	}
+	if bytes.Contains(cleaned, []byte("BEGIN PGP PRIVATE")) {
+		t.Fatal("test output contained a private key")
 	}
 }
 

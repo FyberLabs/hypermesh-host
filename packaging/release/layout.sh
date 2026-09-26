@@ -1,6 +1,28 @@
 # shellcheck shell=bash
-# Release-id helpers for publish-agent.sh.
-# Tests source this file. It does not upload and does not read secrets.
+# Release helpers for publish-agent.sh.
+# Tests source this file. It does not upload.
+# Key Vault reads run only when load_signing_material is called.
+
+# channel_for_ref REF
+# Prints test for refs/heads/main and prod for refs/tags/v*.
+# Any other ref fails, including a workflow_dispatch from another branch.
+# This does not check that a tag commit is on origin/main.
+channel_for_ref() {
+  local ref=$1
+  case "$ref" in
+    refs/heads/main)
+      printf '%s\n' test
+      ;;
+    refs/tags/v*)
+      printf '%s\n' prod
+      ;;
+    *)
+      echo "hypermesh release: refusing ${ref}" >&2
+      echo "test publishes only from refs/heads/main; prod publishes only from refs/tags/v* that are on origin/main" >&2
+      return 1
+      ;;
+  esac
+}
 
 # release_id_test BUILD SHA
 # BUILD is the shared positive build number. SHA is the full 40-hex
@@ -494,4 +516,101 @@ for name in names:
       return 1
     fi
   done <<< "$tagged"
+}
+
+# load_signing_material VAULT KEY_SECRET PASS_SECRET
+# After azure/login, reads the armored signing key and the passphrase
+# from Key Vault into a 0700 GNUPGHOME. Does not print either value.
+# The passphrase is masked in the Actions log. xtrace stays off.
+# Vault and secret names are repository variables, TBD from infra #143.
+# Sets GNUPGHOME and signing_fpr in the caller. Do not run this in $().
+load_signing_material() {
+  local vault=$1 key_secret=$2 pass_secret=$3
+  local home key_file pass_file raw fpr
+  set +x
+  umask 077
+  if [ -z "$vault" ] || [ -z "$key_secret" ] || [ -z "$pass_secret" ]; then
+    echo "hypermesh release: Key Vault name and secret names are required" >&2
+    echo "Set HYPERMESH_RELEASE_KV_NAME, HYPERMESH_RELEASE_GPG_KEY_SECRET, and HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET. Names are TBD from infra #143." >&2
+    return 1
+  fi
+  case "$vault" in
+    *[!A-Za-z0-9-]*) echo "hypermesh release: Key Vault name is not a vault name" >&2; return 1 ;;
+  esac
+  case "$key_secret" in
+    *[!A-Za-z0-9-]*) echo "hypermesh release: signing key secret name is not a secret name" >&2; return 1 ;;
+  esac
+  case "$pass_secret" in
+    *[!A-Za-z0-9-]*) echo "hypermesh release: passphrase secret name is not a secret name" >&2; return 1 ;;
+  esac
+  home=$(mktemp -d)
+  chmod 700 "$home"
+  export GNUPGHOME="$home"
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    printf 'GNUPGHOME=%s\n' "$home" >> "$GITHUB_ENV"
+  fi
+  key_file="${home}/key.asc"
+  pass_file="${home}/pass"
+  if ! az keyvault secret show --vault-name "$vault" --name "$key_secret" --query value -o tsv > "$key_file"; then
+    echo "hypermesh release: reading the signing key from Key Vault failed" >&2
+    return 1
+  fi
+  chmod 600 "$key_file"
+  if ! grep -q '[^[:space:]]' "$key_file"; then
+    echo "hypermesh release: signing key secret is empty" >&2
+    return 1
+  fi
+  if ! az keyvault secret show --vault-name "$vault" --name "$pass_secret" --query value -o tsv > "$pass_file"; then
+    echo "hypermesh release: reading the signing passphrase from Key Vault failed" >&2
+    return 1
+  fi
+  # tsv appends one newline. The passphrase file must not keep it.
+  raw=$(<"$pass_file")
+  printf '%s' "$raw" > "$pass_file"
+  chmod 600 "$pass_file"
+  if [ -n "$raw" ]; then
+    printf '%s\n' "::add-mask::${raw}" >&2
+  fi
+  unset raw
+  if ! gpg --batch --pinentry-mode loopback --passphrase-file "$pass_file" --import "$key_file"; then
+    echo "hypermesh release: importing the signing key failed" >&2
+    return 1
+  fi
+  fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1=="fpr" {print $10; exit}')
+  if [ -z "$fpr" ]; then
+    echo "hypermesh release: imported key has no fingerprint" >&2
+    return 1
+  fi
+  # publish-agent.sh reads this in the same shell. A command substitution
+  # would drop GNUPGHOME.
+  # shellcheck disable=SC2034
+  signing_fpr=$fpr
+}
+
+# wipe_gnupg_home [DIR]
+# Shreds files in DIR when shred exists, removes the directory, and
+# kills gpg-agent. An empty DIR is left alone. The agent is stopped
+# once before the shred, while its socket still exists, and again
+# after the directory is gone.
+wipe_gnupg_home() {
+  local home=${1:-${GNUPGHOME:-}}
+  set +x
+  if [ -z "$home" ]; then
+    return 0
+  fi
+  if command -v gpgconf >/dev/null 2>&1; then
+    GNUPGHOME="$home" gpgconf --kill all || true
+  fi
+  if [ -d "$home" ]; then
+    if command -v shred >/dev/null 2>&1; then
+      find "$home" -type f -exec shred -u {} + || true
+    fi
+    rm -rf "$home"
+  fi
+  if command -v gpgconf >/dev/null 2>&1; then
+    GNUPGHOME="$home" gpgconf --kill all || true
+  fi
+  if [ "${GNUPGHOME:-}" = "$home" ]; then
+    unset GNUPGHOME
+  fi
 }
