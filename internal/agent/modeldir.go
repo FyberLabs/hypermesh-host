@@ -38,6 +38,9 @@ func ensureModelDir(ggufPath string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Join(dir, cacheDirName), 0o755); err != nil {
+		return err
+	}
 	if filepath.Base(dir) != "models" {
 		return nil
 	}

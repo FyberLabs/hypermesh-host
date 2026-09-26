@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,9 +27,12 @@ type Options struct {
 	EnrollToken     string
 	StateDir        string
 	GGUFPath        string
-	Root            string
-	EnvFile         string
-	UnitDir         string
+	// ModelCacheMax is HYPERMESH_MODEL_CACHE_MAX_BYTES. Empty measures
+	// filesystem size minus the default disk floor at configure time.
+	ModelCacheMax string
+	Root          string
+	EnvFile       string
+	UnitDir       string
 	// Serial is the known host. Required. The device id is not an
 	// option. It comes from the device list.
 	Serial string
@@ -107,7 +111,7 @@ func configure(_ context.Context, opt Options) error {
 		return fmt.Errorf("known host serial is required")
 	}
 	enrolled := AlreadyEnrolled(opt.Root, opt.StateDir)
-	body, err := RenderAgentEnv(opt.ControlPlaneURL, opt.TenantID, opt.EnrollToken, opt.StateDir, opt.GGUFPath, enrolled)
+	body, err := RenderAgentEnv(opt.ControlPlaneURL, opt.TenantID, opt.EnrollToken, opt.StateDir, opt.GGUFPath, opt.ModelCacheMax, enrolled)
 	if err != nil {
 		return err
 	}
@@ -140,8 +144,18 @@ func ensureDefaultModelDir(root string) error {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		return err
 	}
+	cache := filepath.Join(dir, "cache")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(cache, 0o755); err != nil {
+		return err
+	}
 	if os.Geteuid() == 0 {
 		if err := os.Chown(dir, 0, 0); err != nil {
+			return err
+		}
+		if err := os.Chown(cache, 0, 0); err != nil {
 			return err
 		}
 	}

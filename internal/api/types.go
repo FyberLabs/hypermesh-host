@@ -87,7 +87,13 @@ type HostHealth struct {
 	WGPort              *int   `json:"wg_port,omitempty"`
 	LeaseContainerCount *int   `json:"lease_container_count,omitempty"`
 	DiskFreeBytes       *int64 `json:"disk_free_bytes,omitempty"`
-	BuildCommit         string `json:"build_commit,omitempty"`
+	// ModelCacheBytes is the sum of GGUF files in the model cache.
+	// ModelCacheEvictableBytes excludes the loaded model and any model
+	// backing an active lease. Both are omitted when the cache cannot
+	// be read. Zero is sent when the cache is empty.
+	ModelCacheBytes          *int64 `json:"model_cache_bytes,omitempty"`
+	ModelCacheEvictableBytes *int64 `json:"model_cache_evictable_bytes,omitempty"`
+	BuildCommit              string `json:"build_commit,omitempty"`
 	// HostType is model or supervisor. The agent always sets it so a
 	// supervisor is not offered as a normal device.
 	HostType string `json:"host_type,omitempty"`

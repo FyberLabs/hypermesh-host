@@ -67,6 +67,9 @@ type Config struct {
 	// DiskMargin is HYPERMESH_DISK_MARGIN_BYTES. Empty means 64 MiB on
 	// top of the object size. "0" adds no margin.
 	DiskMargin string
+	// ModelCacheMax is HYPERMESH_MODEL_CACHE_MAX_BYTES. Empty means
+	// the filesystem size minus DiskFloor. "0" is an empty budget.
+	ModelCacheMax string
 	// LlamaJinja, LlamaCtxSize, and LlamaTimeout are the lease container's
 	// llama-server settings (LLAMA_ARG_JINJA, LLAMA_ARG_CTX_SIZE,
 	// LLAMA_ARG_TIMEOUT). Empty uses the runtime defaults (1, 16384, 1800).
@@ -111,6 +114,7 @@ func FromEnv() Config {
 		GGUFPath:                envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
 		DiskFloor:               strings.TrimSpace(os.Getenv("HYPERMESH_DISK_FLOOR_BYTES")),
 		DiskMargin:              strings.TrimSpace(os.Getenv("HYPERMESH_DISK_MARGIN_BYTES")),
+		ModelCacheMax:           strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_MAX_BYTES")),
 		LlamaJinja:              envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
 		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
@@ -184,6 +188,11 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.DiskMarginBytes(); err != nil {
 		return err
+	}
+	if raw := strings.TrimSpace(c.ModelCacheMax); raw != "" {
+		if _, err := parseByteCount("HYPERMESH_MODEL_CACHE_MAX_BYTES", raw, 0); err != nil {
+			return err
+		}
 	}
 	return nil
 }

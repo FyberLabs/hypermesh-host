@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +77,7 @@ type Agent struct {
 
 	leaseMu    sync.RWMutex
 	sellMu     sync.Mutex
+	cacheMu    sync.Mutex
 	healthMu   sync.Mutex
 	lastSyncAt time.Time
 	haveSync   bool
@@ -149,6 +152,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if err := ensureModelDir(a.cfg.GGUFHostPath()); err != nil {
 		a.log.Warn("model directory not created", "path", a.cfg.GGUFHostPath(), "err", err)
+	}
+	if err := a.reconcileModelCache(); err != nil {
+		a.log.Warn("model cache reconcile failed", "err", err)
 	}
 
 	// Heartbeat and jobs are separate loops. A lab_pull of a multi-gigabyte
@@ -800,6 +806,13 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	}
 	dest := a.cfg.GGUFHostPath()
 	if source := strings.TrimSpace(job.SourceRef); source != "" {
+		var err error
+		dest, err = a.cacheDest(pin)
+		if err != nil {
+			reason := labPullFailReason(err)
+			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: reason}
+		}
 		if err := a.doFetchWeights(ctx, dest, source, pin, job.SizeBytes); err != nil {
 			reason := labPullFailReason(err)
 			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
@@ -816,7 +829,24 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lab_pull refused", "reason", "artifact hash mismatch", "catalog_id", job.CatalogID)
 		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
+	if strings.TrimSpace(job.SourceRef) != "" {
+		if err := a.admitModel(pin, dest); err != nil {
+			a.log.Warn("model cache admit failed", "err", err)
+		} else {
+			a.log.Info("model cache load", "id", strings.ToLower(pin))
+		}
+	} else {
+		a.touchModelUse(hash)
+	}
 	return pathb.Result{Passed: true, ImageHash: hash}
+}
+
+func (a *Agent) cacheDest(pin string) (string, error) {
+	dir, err := modelCacheDir(a.cfg.GGUFHostPath())
+	if err != nil {
+		return "", err
+	}
+	return cacheFilePath(dir, pin)
 }
 
 func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string, size int64) error {
@@ -828,10 +858,31 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 		return err
 	}
 	lim := a.pullLimits(size)
+	resolved, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
+	if err != nil || resolved <= 0 {
+		free, statErr := lim.Stat(dest)
+		if statErr != nil || free < 0 {
+			return &pull.DiskError{StatErr: true}
+		}
+		return &pull.DiskError{Unknown: true, Free: free}
+	}
+	lim.Expected = resolved
+	lim, err = a.planModelEviction(dest, pin, lim)
+	if err != nil {
+		return err
+	}
 	// A test stub must still refuse before it writes. Production ToFileWith
-	// HEADs when size_bytes is absent, then preflights, then downloads.
+	// preflights again, evicts, then caps the copy at the approved size.
 	if a.fetchWeights != nil {
-		if err := a.preflightPull(ctx, dest, rawURL, lim); err != nil {
+		if err := pull.Preflight(dest, lim.Expected, lim); err != nil {
+			return err
+		}
+		if lim.BeforeWrite != nil {
+			if err := lim.BeforeWrite(); err != nil {
+				return err
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
 		return a.fetchWeights(ctx, dest, sourceRef, pin)
@@ -935,7 +986,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		}
 		return a.leaseStartAlready(existing)
 	}
-	gguf := a.cfg.GGUFHostPath()
+	gguf := a.modelForLease()
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
 		reason := leaseStartFailReason(err)
@@ -962,6 +1013,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: reason}
 	}
 	h.FileHash = hash
+	a.touchModelUse(hash)
 	if strings.TrimSpace(h.FileHash) == "" {
 		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: "no image_hash"}
@@ -991,6 +1043,7 @@ func (a *Agent) leaseStartAlready(h *runtime.Handle) pathb.Result {
 			a.log.Warn("lease record not saved", "err", err)
 		}
 	}
+	a.touchModelUse(hash)
 	a.log.Info("lease_start already running", "lease_id", h.LeaseID)
 	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}
 }

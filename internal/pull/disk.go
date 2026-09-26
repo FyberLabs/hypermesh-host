@@ -28,10 +28,14 @@ const (
 // a Content-Length, and a job with no size_bytes, cannot guarantee the
 // margin, so nothing is written.
 type DiskError struct {
-	Need    uint64
-	Free    int64
-	Unknown bool
-	StatErr bool
+	Need      uint64
+	Free      int64
+	Evictable uint64
+	// WithEvictable includes evictable even when it is zero. The cache
+	// planner sets it. A plain preflight leaves it false.
+	WithEvictable bool
+	Unknown       bool
+	StatErr       bool
 }
 
 func (e *DiskError) Error() string {
@@ -44,6 +48,9 @@ func (e *DiskError) Error() string {
 	case e.Unknown:
 		return fmt.Sprintf("insufficient_disk: size unknown, free %d", e.Free)
 	default:
+		if e.WithEvictable {
+			return fmt.Sprintf("insufficient_disk: need %d, free %d, evictable %d", e.Need, e.Free, e.Evictable)
+		}
 		return fmt.Sprintf("insufficient_disk: need %d, free %d", e.Need, e.Free)
 	}
 }
@@ -63,6 +70,19 @@ type Limits struct {
 	// Head resolves Content-Length when Expected <= 0.
 	// Nil uses HTTP HEAD. A missing length fails closed.
 	Head func(ctx context.Context, rawURL string) (int64, error)
+	// Reclaim is bytes the caller will delete after this check passes
+	// and before any download byte is written. Preflight adds it to the
+	// statfs free value so a stubbed free number still sees the room
+	// those files will release. It is not added twice: the files are
+	// still on disk during the check.
+	Reclaim uint64
+	// Evictable is the total bytes of models the cache is allowed to
+	// delete. WithEvictable reports that number in the refusal, including 0.
+	Evictable     uint64
+	WithEvictable bool
+	// BeforeWrite runs after preflight succeeds and before the download.
+	// The model cache uses it to evict. A refusal must not call it.
+	BeforeWrite func() error
 }
 
 func (l Limits) floor() uint64 {
@@ -120,10 +140,27 @@ func Preflight(dest string, size int64, lim Limits) error {
 	if !ok {
 		return &DiskError{Unknown: true, Free: free}
 	}
-	if uint64(free) < need {
-		return &DiskError{Need: need, Free: free}
+	have, ok := freePlus(free, lim.Reclaim)
+	if !ok || have < need {
+		return &DiskError{
+			Need:          need,
+			Free:          free,
+			Evictable:     lim.Evictable,
+			WithEvictable: lim.WithEvictable,
+		}
 	}
 	return nil
+}
+
+func freePlus(free int64, reclaim uint64) (uint64, bool) {
+	if free < 0 {
+		return 0, false
+	}
+	base := uint64(free)
+	if base > ^uint64(0)-reclaim {
+		return 0, false
+	}
+	return base + reclaim, true
 }
 
 // ResolveSize returns expected when it is positive. Otherwise it uses
@@ -185,6 +222,31 @@ func FreeBytes(path string) (int64, error) {
 		return 0, err
 	}
 	return freeFromBlocks(st.Bavail, int64(st.Bsize))
+}
+
+// CapacityBytes is the filesystem size (statfs Blocks*Bsize) that will
+// hold path. The model-cache budget defaults to this minus the disk
+// floor. Overflow is an error, same as FreeBytes.
+func CapacityBytes(path string) (int64, error) {
+	dir, err := existingDir(path)
+	if err != nil {
+		return 0, err
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return capacityFromBlocks(st.Blocks, int64(st.Bsize))
+}
+
+func capacityFromBlocks(blocks uint64, bsize int64) (int64, error) {
+	if bsize <= 0 {
+		return 0, errors.New("hypermesh: statfs block size")
+	}
+	if blocks > uint64(math.MaxInt64)/uint64(bsize) {
+		return 0, errors.New("hypermesh: statfs capacity bytes overflow")
+	}
+	return int64(blocks) * bsize, nil
 }
 
 // freeFromBlocks is Bavail*Bsize with the same overflow guard the
