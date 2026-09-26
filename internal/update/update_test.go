@@ -772,7 +772,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"id-token: write",
 		"workflow_dispatch",
 		"azure/login",
-		"vars.AZURE_CLIENT_ID",
+		"vars.AZURE_CLIENT_ID_TEST",
+		"vars.AZURE_CLIENT_ID_PROD",
 		"vars.AZURE_TENANT_ID",
 		"vars.AZURE_SUBSCRIPTION_ID",
 		"vars.AZURE_STORAGE_ACCOUNT",
@@ -803,6 +804,11 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
 		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
 		"azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6",
+		"if: env.channel == 'test'",
+		"if: env.channel == 'prod'",
+		"kv-fyber-hmhost",
+		"hypermesh-host-release-gpg-private-key",
+		"hypermesh-host-release-gpg-passphrase",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release.yml missing %s", want)
@@ -813,6 +819,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	if strings.Contains(text, "environment:") || strings.Contains(text, "secrets.") {
 		t.Fatal("release.yml depends on an environment or a secret")
+	}
+	if strings.Contains(text, "vars.AZURE_CLIENT_ID }}") {
+		t.Fatal("release login still uses one client id for both channels")
 	}
 	if strings.Contains(text, "set -x") {
 		t.Fatal("release.yml enables xtrace")
@@ -906,6 +915,11 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"channel_for_ref",
 		"refs/heads/main",
 		"refs/tags/v*",
+		"kv-fyber-hmhost",
+		"hypermesh-host-release-gpg-private-key",
+		"hypermesh-host-release-gpg-passphrase",
+		"channel_write_allowed",
+		"--auth-mode login",
 	} {
 		if !strings.Contains(layoutText, want) {
 			t.Fatalf("layout.sh missing %s", want)
@@ -924,6 +938,11 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"HYPERMESH_RELEASE_KV_NAME",
 		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
 		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",
+		"AZURE_CLIENT_ID_TEST",
+		"AZURE_CLIENT_ID_PROD",
+		"kv-fyber-hmhost",
+		"hypermesh-host-release-gpg-private-key",
+		"hypermesh-host-release-gpg-passphrase",
 		"infra #143",
 	} {
 		if !strings.Contains(string(readme), want) {
@@ -945,6 +964,48 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(rtext, want) {
 			t.Fatalf("rollback script missing %s", want)
 		}
+	}
+}
+
+func TestChannelWriteScope(t *testing.T) {
+	layout := filepath.Join("..", "..", "packaging", "release", "layout.sh")
+	script := `
+set -euo pipefail
+source "$1"
+ok() {
+  if ! channel_write_allowed "$1" "$2"; then
+    echo "rejected $1 $2" >&2
+    exit 1
+  fi
+}
+no() {
+  if channel_write_allowed "$1" "$2"; then
+    echo "allowed $1 $2" >&2
+    exit 1
+  fi
+}
+ok test channels/test.json
+ok test test/58-0123456789ab/release.json
+ok prod channels/prod.json
+ok prod prod/1.2.3/checksums.txt
+no test channels/prod.json
+no test prod/1.2.3/release.json
+no test locks/publish
+no test test/58-0123456789ab
+no test 'test/../channels/prod.json'
+no prod channels/test.json
+no prod test/58-0123456789ab/release.json
+no prod locks/publish
+no prod 'prod/../channels/test.json'
+if channel_artifact_name test channels/test.json; then
+  echo "tag scope included the manifest" >&2
+  exit 1
+fi
+`
+	cmd := exec.Command("bash", "-c", script, "bash", layout)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
 

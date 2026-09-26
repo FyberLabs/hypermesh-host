@@ -43,7 +43,7 @@ Binaries are `CGO_ENABLED=0` builds of `./cmd/agent` for `linux/arm64` and `linu
 
 The storage account name and container name are repository variables. This repo does not write them into the workflow or the publish script. Upload uses `az storage blob upload --auth-mode login` after `azure/login` (`allow-no-subscriptions: true`, because the release app has no subscription role). There is no storage account key in the workflow.
 
-Test and prod publish through one concurrency group, `release-publish`, with `cancel-in-progress: false`. That still keeps only one pending run: GitHub drops an older pending run when a newer one arrives. The workflow syntax has a `queue` property that would keep the pending run, and current GitHub Actions docs describe it. actionlint 1.7.12 rejects that property, so this repo does not set it. The publish script also acquires a 60-second lease on the blob `locks/publish`, retries while another publisher holds it, and renews the lease until the job exits. `max+1` is computed only after that lease is held. `AZURE_CONFIG_DIR` is set from `$RUNNER_TEMP` in a step (`$GITHUB_ENV`), not in the job `env` block. An always-run step shreds `GNUPGHOME` when that directory is still present, removes it, runs `gpgconf --kill all`, logs `az` out, and removes the Azure config directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners. There is no deployment environment on this job. Test publishes only from `refs/heads/main`. Prod publishes only from `refs/tags/v*` after `git merge-base --is-ancestor HEAD origin/main` succeeds. Login uses repository variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`. The OIDC subjects infra #143 must allow are `repo:FyberLabs/hypermesh-host:ref:refs/heads/main` for test and `repo:FyberLabs/hypermesh-host:ref:refs/tags/v*` for prod.
+Test and prod publish through one concurrency group, `release-publish`, with `cancel-in-progress: false`. That still keeps only one pending run: GitHub drops an older pending run when a newer one arrives. The workflow syntax has a `queue` property that would keep the pending run, and current GitHub Actions docs describe it. actionlint 1.7.12 rejects that property, so this repo does not set it. The publish script also acquires a 60-second lease on the blob `locks/publish`, retries while another publisher holds it, and renews the lease until the job exits. `max+1` is computed only after that lease is held. `AZURE_CONFIG_DIR` is set from `$RUNNER_TEMP` in a step (`$GITHUB_ENV`), not in the job `env` block. An always-run step shreds `GNUPGHOME` when that directory is still present, removes it, runs `gpgconf --kill all`, logs `az` out, and removes the Azure config directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners. There is no deployment environment on this job. Test publishes only from `refs/heads/main` and logs in with repository variable `AZURE_CLIENT_ID_TEST`. Prod publishes only from `refs/tags/v*` after `git merge-base --is-ancestor HEAD origin/main` succeeds, and logs in with `AZURE_CLIENT_ID_PROD`. `AZURE_TENANT_ID` is shared. The OIDC subjects are `repo:FyberLabs/hypermesh-host:ref:refs/heads/main` for test and `repo:FyberLabs/hypermesh-host:ref:refs/tags/v*` for prod. The test identity writes only `test/` and `channels/test.json`. The prod identity writes only `prod/` and `channels/prod.json`. Both still lease `locks/publish`. That blob is outside those prefixes; the lease is unchanged until infra confirms the permission.
 
 ## What the host calls
 
@@ -151,7 +151,7 @@ Checks run at most once an hour (`HYPERMESH_UPDATE_EVERY`), including while a re
 
 ## Before the first release
 
-Chris generates the signing key offline. The private key and passphrase go in Key Vault once infra #143 names the vault and the secret names. This repo does not create the vault, the storage account, the container, the app registration, or the role, and it does not embed those names. This private repository is on GitHub Free, so there is no Environment `release` and no environment secrets to create.
+Chris generates the signing key offline and stores it in Key Vault `kv-fyber-hmhost` (`rg-fyber`) as `hypermesh-host-release-gpg-private-key` and `hypermesh-host-release-gpg-passphrase`. This repo does not create the vault, the storage account, the container, the app registration, or the role. This private repository is on GitHub Free, so there is no Environment `release` and no environment secrets to create.
 
 The publish script exits before uploading when the Key Vault name or secret names are empty, when the key secret is empty, or when the storage account and container variables are empty.
 
@@ -180,24 +180,25 @@ Keep `hypermesh-release.priv.asc` offline. `hypermesh-release.pub` is what hosts
 
 ### 2. Repository variables
 
-On `FyberLabs/hypermesh-host`, a repo admin sets repository variables. Do not create a GitHub Environment, and do not put the signing key in GitHub. The key goes in Key Vault once infra #143 names the vault and the secret names.
+On `FyberLabs/hypermesh-host`, a repo admin sets repository variables. Do not create a GitHub Environment, and do not put the signing key in GitHub. The key is already named in Key Vault `kv-fyber-hmhost`: secrets `hypermesh-host-release-gpg-private-key` and `hypermesh-host-release-gpg-passphrase`.
 
 | Name | Value |
 |---|---|
-| `AZURE_CLIENT_ID` | Application (client) id of the app registration or managed identity |
-| `AZURE_TENANT_ID` | Directory (tenant) id |
-| `AZURE_SUBSCRIPTION_ID` | Subscription id |
+| `AZURE_CLIENT_ID_TEST` | Client id of the main-branch app. Output `hypermesh_host_test_github_client_id`. Writes `test/` and `channels/test.json` only |
+| `AZURE_CLIENT_ID_PROD` | Client id of the tag app. Output `hypermesh_host_prod_github_client_id`. Writes `prod/` and `channels/prod.json` only |
+| `AZURE_TENANT_ID` | Directory (tenant) id. Output `hypermesh_host_github_tenant_id`. Shared by both jobs |
+| `AZURE_SUBSCRIPTION_ID` | Subscription id. Output `hypermesh_host_github_subscription_id` |
 | `AZURE_STORAGE_ACCOUNT` | Storage account name from the entra output. Lowercase, 3–24 letters and digits |
 | `AZURE_STORAGE_CONTAINER` | Private container name from that same output |
-| `HYPERMESH_RELEASE_KV_NAME` | Key Vault name. TBD from infra #143 |
-| `HYPERMESH_RELEASE_GPG_KEY_SECRET` | Secret name of the armored private key (`hypermesh-release.priv.asc`, including the armor header). TBD from infra #143 |
-| `HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET` | Secret name of the passphrase from step 1. The secret value may be empty when the key has none. TBD from infra #143 |
+| `HYPERMESH_RELEASE_KV_NAME` | Optional. Default `kv-fyber-hmhost` in `rg-fyber` |
+| `HYPERMESH_RELEASE_GPG_KEY_SECRET` | Optional. Default `hypermesh-host-release-gpg-private-key` |
+| `HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET` | Optional. Default `hypermesh-host-release-gpg-passphrase`. The secret value may be empty when the key has none |
 
 The release job's token scopes are `contents: write` (the human GitHub Release) and `id-token: write` (OIDC). `azure/login` reads the client, tenant, and subscription variables and sets `allow-no-subscriptions: true` because that app has no subscription role. The workflow default and CI stay `contents: read`.
 
 The workflow refuses every ref except `refs/heads/main` (test) and `refs/tags/v*` whose commit is an ancestor of `origin/main` (prod). That includes `workflow_dispatch` from any other ref. A tag ruleset so only maintainers can push `v*` lives in infra, not in this repo.
 
-The self-hosted runner needs `gpg`, `az`, `python3`, `curl`, `sha256sum`, and `shred` when it is available. Go comes from `setup-go`. After login the publisher runs `az keyvault secret show --query value -o tsv` into a `chmod 700` `GNUPGHOME`, masks the passphrase, and imports with `--batch --pinentry-mode loopback --passphrase-file`. It does not enable xtrace. The always-run step shreds that directory, runs `gpgconf --kill all`, and runs `az logout`.
+The self-hosted runner needs `gpg`, `az`, `python3`, `curl`, `sha256sum`, and `shred` when it is available. Go comes from `setup-go`. After login the publisher runs `az keyvault secret show --auth-mode login --vault-name kv-fyber-hmhost --name hypermesh-host-release-gpg-private-key --query value -o tsv`, and the same command for `hypermesh-host-release-gpg-passphrase`, into a `chmod 700` `GNUPGHOME`. It masks the passphrase and imports with `--batch --pinentry-mode loopback --passphrase-file`. It does not enable xtrace. The always-run step shreds that directory, runs `gpgconf --kill all`, and runs `az logout`.
 
 ### 3. Azure, in the infra repo
 
@@ -210,7 +211,7 @@ This repo does not create these resources. Infra draft PR 143 does, and its `hyp
   - Audience: `api://AzureADTokenExchange`
   - Test subject: `repo:FyberLabs/hypermesh-host:ref:refs/heads/main`
   - Prod subject: `repo:FyberLabs/hypermesh-host:ref:refs/tags/v*`
-- A Key Vault the publisher can read after that login. The vault name and the secret names are TBD from infra #143. The workflow passes them through `HYPERMESH_RELEASE_KV_NAME`, `HYPERMESH_RELEASE_GPG_KEY_SECRET`, and `HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET`. The secret values are the armored private key and the passphrase. They are not GitHub secrets.
+- Key Vault `kv-fyber-hmhost` in `rg-fyber`. Both publisher apps are Key Vault Secrets User on that vault. The secret names are `hypermesh-host-release-gpg-private-key` and `hypermesh-host-release-gpg-passphrase`. The values are the armored private key and the passphrase. They are not GitHub secrets. The workflow uses those names unless the repository variables override them.
 - Custom role **hypermesh-host publisher** on that container. It can read, write, add, and move blobs. Delete is denied when the path starts with `prod/`. `tags/write` is allowed only under `test/`. Built-in Contributor does not include that tag write.
 - No account key and no connection string in GitHub.
 

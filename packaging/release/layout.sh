@@ -24,6 +24,65 @@ channel_for_ref() {
   esac
 }
 
+# channel_artifact_name PREFIX NAME
+# NAME is <prefix>/<one segment>/<one segment>, with no ".." segment.
+channel_artifact_name() {
+  local prefix=$1 name=$2 rid file
+  case "$name" in
+    "${prefix}"/*/*) ;;
+    *) return 1 ;;
+  esac
+  case "$name" in
+    *..*|*\\*) return 1 ;;
+  esac
+  file=${name#"${prefix}/"}
+  rid=${file%%/*}
+  file=${file#*/}
+  if [ -z "$rid" ] || [ -z "$file" ] || [[ "$file" == */* ]]; then
+    return 1
+  fi
+  case "$rid" in
+    .*|*/*) return 1 ;;
+  esac
+  case "$file" in
+    .*|*/*) return 1 ;;
+  esac
+}
+
+# channel_write_allowed CHANNEL NAME
+# Infra #143 lets the test publisher mutate only test/ and
+# channels/test.json, and the prod publisher mutate only prod/ and
+# channels/prod.json. locks/publish is not in either scope.
+channel_write_allowed() {
+  local channel=$1 name=$2
+  case "$channel" in
+    test)
+      if [ "$name" = "channels/test.json" ]; then
+        return 0
+      fi
+      channel_artifact_name test "$name"
+      ;;
+    prod)
+      if [ "$name" = "channels/prod.json" ]; then
+        return 0
+      fi
+      channel_artifact_name prod "$name"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# require_channel_write CHANNEL NAME
+require_channel_write() {
+  local channel=$1 name=$2
+  if ! channel_write_allowed "$channel" "$name"; then
+    echo "hypermesh release: refusing to write ${name} on the ${channel} publisher" >&2
+    return 1
+  fi
+}
+
 # release_id_test BUILD SHA
 # BUILD is the shared positive build number. SHA is the full 40-hex
 # commit. The result is <build>-<first 12 hex chars>. That directory
@@ -225,6 +284,8 @@ require_builds_ahead() {
 # Creates locks/publish when it is absent, then acquires a 60s lease.
 # Another holder is a wait. Any other error fails immediately.
 # Prints the lease id on stdout.
+# locks/publish is outside the #143 per-channel write condition.
+# The lease stays here until infra confirms that permission.
 acquire_publish_lease() {
   local attempts=${HYPERMESH_LEASE_ATTEMPTS:-120}
   local pause=${HYPERMESH_LEASE_PAUSE:-15}
@@ -504,13 +565,10 @@ for name in names:
   fi
   while IFS= read -r name; do
     [ -z "$name" ] && continue
-    case "$name" in
-      test/*) ;;
-      *)
-        echo "hypermesh release: refusing to tag ${name}" >&2
-        return 1
-        ;;
-    esac
+    if ! channel_artifact_name test "$name"; then
+      echo "hypermesh release: refusing to tag ${name}" >&2
+      return 1
+    fi
     if ! az_blob tag set --name "$name" --tags "superseded=true"; then
       echo "hypermesh release: tagging ${name} failed" >&2
       return 1
@@ -522,7 +580,9 @@ for name in names:
 # After azure/login, reads the armored signing key and the passphrase
 # from Key Vault into a 0700 GNUPGHOME. Does not print either value.
 # The passphrase is masked in the Actions log. xtrace stays off.
-# Vault and secret names are repository variables, TBD from infra #143.
+# Defaults from infra #143, overridable by repository variables:
+# vault kv-fyber-hmhost, secret hypermesh-host-release-gpg-private-key,
+# secret hypermesh-host-release-gpg-passphrase.
 # Sets GNUPGHOME and signing_fpr in the caller. Do not run this in $().
 load_signing_material() {
   local vault=$1 key_secret=$2 pass_secret=$3
@@ -531,7 +591,6 @@ load_signing_material() {
   umask 077
   if [ -z "$vault" ] || [ -z "$key_secret" ] || [ -z "$pass_secret" ]; then
     echo "hypermesh release: Key Vault name and secret names are required" >&2
-    echo "Set HYPERMESH_RELEASE_KV_NAME, HYPERMESH_RELEASE_GPG_KEY_SECRET, and HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET. Names are TBD from infra #143." >&2
     return 1
   fi
   case "$vault" in
@@ -551,7 +610,7 @@ load_signing_material() {
   fi
   key_file="${home}/key.asc"
   pass_file="${home}/pass"
-  if ! az keyvault secret show --vault-name "$vault" --name "$key_secret" --query value -o tsv > "$key_file"; then
+  if ! az keyvault secret show --auth-mode login --vault-name "$vault" --name "$key_secret" --query value -o tsv > "$key_file"; then
     echo "hypermesh release: reading the signing key from Key Vault failed" >&2
     return 1
   fi
@@ -560,7 +619,7 @@ load_signing_material() {
     echo "hypermesh release: signing key secret is empty" >&2
     return 1
   fi
-  if ! az keyvault secret show --vault-name "$vault" --name "$pass_secret" --query value -o tsv > "$pass_file"; then
+  if ! az keyvault secret show --auth-mode login --vault-name "$vault" --name "$pass_secret" --query value -o tsv > "$pass_file"; then
     echo "hypermesh release: reading the signing passphrase from Key Vault failed" >&2
     return 1
   fi

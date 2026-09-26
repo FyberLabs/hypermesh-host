@@ -56,11 +56,17 @@
 # bytes. Hosts do not read GitHub. They ask the control plane.
 #
 # Signing reads the private key and passphrase from Key Vault after
-# azure/login. Repository variables name the vault and the secrets
-# (HYPERMESH_RELEASE_KV_NAME, HYPERMESH_RELEASE_GPG_KEY_SECRET,
-# HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET). Those names are TBD from
-# infra #143. The script refuses to upload when the key secret is
-# empty. The passphrase may be empty when the key has none.
+# azure/login. The vault is kv-fyber-hmhost in rg-fyber. The secrets
+# are hypermesh-host-release-gpg-private-key and
+# hypermesh-host-release-gpg-passphrase. Repository variables of the
+# same names override those defaults. The script refuses to upload
+# when the key secret is empty. The passphrase may be empty when the
+# key has none.
+#
+# The test publisher writes only test/<release-id>/ and
+# channels/test.json. The prod publisher writes only prod/<release-id>/
+# and channels/prod.json. Both still lease locks/publish. That lock is
+# outside those prefixes and is unchanged until infra confirms it.
 set -euo pipefail
 shopt -s inherit_errexit
 
@@ -78,11 +84,10 @@ esac
 : "${GITHUB_SHA:?}"
 : "${GITHUB_REPOSITORY:?}"
 : "${GH_TOKEN:?}"
-if [ -z "${HYPERMESH_RELEASE_KV_NAME:-}" ] || [ -z "${HYPERMESH_RELEASE_GPG_KEY_SECRET:-}" ] || [ -z "${HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET:-}" ]; then
-  echo "hypermesh release: Key Vault name and secret names are required" >&2
-  echo "Set HYPERMESH_RELEASE_KV_NAME, HYPERMESH_RELEASE_GPG_KEY_SECRET, and HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET. Names are TBD from infra #143." >&2
-  exit 1
-fi
+# Infra #143 names. A non-empty repository variable replaces a default.
+: "${HYPERMESH_RELEASE_KV_NAME:=kv-fyber-hmhost}"
+: "${HYPERMESH_RELEASE_GPG_KEY_SECRET:=hypermesh-host-release-gpg-private-key}"
+: "${HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET:=hypermesh-host-release-gpg-passphrase}"
 if [ -z "${AZURE_STORAGE_ACCOUNT:-}" ] || [ -z "${AZURE_STORAGE_CONTAINER:-}" ]; then
   echo "hypermesh release: AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_CONTAINER are required" >&2
   echo "Set them as repository variables." >&2
@@ -321,6 +326,7 @@ gnupg=""
 # the bytes differ, and the channel manifest is not moved.
 upload_new() {
   local name=$1 file=$2
+  require_channel_write "$channel" "$name"
   if blob_exists "$name"; then
     echo "hypermesh release: ${name} already stored; leaving those bytes in place" >&2
     return 0
@@ -378,6 +384,7 @@ PY
 # test/ tag rule cannot remove the pointer.
 upload_channel_manifest() {
   local name=$1 file=$2
+  require_channel_write "$channel" "$name"
   az_blob upload --name "$name" --file "$file" --overwrite true --content-type application/json --only-show-errors
 }
 
