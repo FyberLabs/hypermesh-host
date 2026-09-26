@@ -65,10 +65,14 @@ type Agent struct {
 	// A false ok omits lease_container_count. Tests stub this.
 	countLeases func(ctx context.Context) (n int, ok bool)
 	// statFree is statfs Bavail*Bsize on the GGUF filesystem. Nil uses
-	// pull.FreeBytes. The same value is disk_free_bytes and the pull
-	// preflight. An error omits the heartbeat field and fails the pull
-	// closed. Tests stub this.
+	// pull.StatfsBytes. The same value is disk_free_bytes and the pull
+	// preflight. An error omits the heartbeat field and the disk gauges,
+	// and fails the pull closed. Tests stub this.
 	statFree func(path string) (int64, error)
+	// statSize is statfs Blocks*Bsize for the disk_size gauge. Nil uses
+	// pull.CapacityBytes when statFree is stubbed, or the same StatfsBytes
+	// call as free when statFree is nil. An error omits both gauges.
+	statSize func(path string) (int64, error)
 	// headLength is HTTP HEAD Content-Length for a download URL.
 	// Nil uses pull.HTTPHeadLength. Tests stub this so they do not dial.
 	headLength func(ctx context.Context, rawURL string) (int64, error)
@@ -95,19 +99,23 @@ type Agent struct {
 	hbStreak int
 	// hbHoldUntil is the end of the current failure backoff or
 	// Retry-After. An immediate beat waits until this instant.
-	hbHoldUntil time.Time
-	tunnelSeen  string
-	bindSeen    string
-	lastSyncAt  time.Time
-	haveSync    bool
-	syncClass   string
-	syncHTTP    int
-	hbOK        uint64
-	hbFail      map[string]uint64
-	syncOK      uint64
-	syncFail    map[string]uint64
-	pullBytes   uint64
-	pullNanos   int64
+	hbHoldUntil    time.Time
+	tunnelSeen     string
+	bindSeen       string
+	lastSyncAt     time.Time
+	haveSync       bool
+	syncClass      string
+	syncHTTP       int
+	hbOK           uint64
+	hbFail         map[string]uint64
+	syncOK         uint64
+	syncFail       map[string]uint64
+	pullBytes      uint64
+	pullNanos      int64
+	started        time.Time
+	hbSuccessAt    time.Time
+	metricDiskFree *int64
+	metricDiskSize *int64
 }
 
 const certLeaseID = "cert-bench"
@@ -161,6 +169,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		log:         log,
 		hbWake:      make(chan struct{}, 1),
 		metricsWake: make(chan struct{}, 1),
+		started:     time.Now().UTC(),
 	}, nil
 }
 

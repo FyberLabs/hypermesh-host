@@ -180,15 +180,49 @@ func HTTPHeadLength(ctx context.Context, rawURL string) (int64, error) {
 // wrapped value is never reported as free space. Heartbeat disk_free_bytes
 // and the download preflight both call this.
 func FreeBytes(path string) (int64, error) {
+	free, _, err := StatfsBytes(path)
+	return free, err
+}
+
+// CapacityBytes is the filesystem size (statfs Blocks*Bsize) that will
+// hold path. The disk_size gauge uses this. Overflow is an error, same
+// as FreeBytes.
+func CapacityBytes(path string) (int64, error) {
+	_, size, err := StatfsBytes(path)
+	return size, err
+}
+
+// StatfsBytes is one statfs of the filesystem that holds path.
+// free is Bavail*Bsize. size is Blocks*Bsize. Either overflow, a missing
+// directory, or a statfs error fails both values together.
+func StatfsBytes(path string) (free, size int64, err error) {
 	dir, err := existingDir(path)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(dir, &st); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return freeFromBlocks(st.Bavail, int64(st.Bsize))
+	free, err = freeFromBlocks(st.Bavail, int64(st.Bsize))
+	if err != nil {
+		return 0, 0, err
+	}
+	size, err = capacityFromBlocks(st.Blocks, int64(st.Bsize))
+	if err != nil {
+		return 0, 0, err
+	}
+	return free, size, nil
+}
+
+func capacityFromBlocks(blocks uint64, bsize int64) (int64, error) {
+	if bsize <= 0 {
+		return 0, errors.New("hypermesh: statfs block size")
+	}
+	if blocks > uint64(math.MaxInt64)/uint64(bsize) {
+		return 0, errors.New("hypermesh: statfs capacity bytes overflow")
+	}
+	return int64(blocks) * bsize, nil
 }
 
 // freeFromBlocks is Bavail*Bsize with the same overflow guard the

@@ -111,22 +111,24 @@ func handler(gather func() []byte) http.Handler {
 // Sample is the host health series. Maps may be nil.
 // Empty ErrClass is the none bucket. TunnelState empty omits that gauge.
 type Sample struct {
-	HeartbeatSuccess uint64
-	HeartbeatFailure map[string]uint64
-	SyncSuccess      uint64
-	SyncFailure      map[string]uint64
-	TunnelState      string
-	HandshakeAgeS    *int
-	WGPID            *int
-	WGPort           *int
-	LeaseCount       *int
-	DiskFreeBytes    *int64
-	PullBytes        uint64
-	PullSeconds      float64
-	LastSyncUnix     *int64
-	LastHTTP         int
-	ErrClass         string
-	Commit           string
+	HeartbeatSuccess    uint64
+	HeartbeatFailure    map[string]uint64
+	SyncSuccess         uint64
+	SyncFailure         map[string]uint64
+	TunnelState         string
+	HandshakeAgeS       *int
+	WGPID               *int
+	WGPort              *int
+	LeaseCount          *int
+	DiskFreeBytes       *int64
+	DiskSizeBytes       *int64
+	HeartbeatAgeSeconds *float64
+	PullBytes           uint64
+	PullSeconds         float64
+	LastSyncUnix        *int64
+	LastHTTP            int
+	ErrClass            string
+	Commit              string
 }
 
 // Render writes Prometheus text for Sample. No keys, tokens, or names.
@@ -134,6 +136,9 @@ func Render(s Sample) []byte {
 	var b strings.Builder
 	counter(&b, "hypermesh_heartbeat_success_total", "Heartbeats the control plane accepted.", nil, s.HeartbeatSuccess)
 	counterClasses(&b, "hypermesh_heartbeat_failure_total", "Heartbeats that failed, by error class.", s.HeartbeatFailure)
+	if s.HeartbeatAgeSeconds != nil {
+		gauge(&b, "hypermesh_heartbeat_age_seconds", "Seconds since the last successful heartbeat, measured at scrape. Before the first success this is seconds since process start.", nil, strconv.FormatFloat(*s.HeartbeatAgeSeconds, 'f', -1, 64))
+	}
 	counter(&b, "hypermesh_tunnel_sync_success_total", "Tunnel syncs that completed.", nil, s.SyncSuccess)
 	counterClasses(&b, "hypermesh_tunnel_sync_failure_total", "Tunnel syncs that failed, by error class.", s.SyncFailure)
 	if s.TunnelState != "" {
@@ -158,8 +163,11 @@ func Render(s Sample) []byte {
 	if s.LeaseCount != nil {
 		gauge(&b, "hypermesh_lease_container_count", "Running containers named with the hypermesh- lease prefix. Names are not labels.", nil, strconv.Itoa(*s.LeaseCount))
 	}
-	if s.DiskFreeBytes != nil {
+	// disk_free and disk_size share one statfs. Neither has labels.
+	// A failure omits both, so a scrape cannot mix a free reading with a missing size.
+	if s.DiskFreeBytes != nil && s.DiskSizeBytes != nil {
 		gauge(&b, "hypermesh_disk_free_bytes", "Free bytes for non-root users on the filesystem holding the GGUF path (statfs Bavail*Bsize).", nil, strconv.FormatInt(*s.DiskFreeBytes, 10))
+		gauge(&b, "hypermesh_disk_size_bytes", "Total size in bytes of the filesystem holding the GGUF path (statfs Blocks*Bsize). Same labels as hypermesh_disk_free_bytes.", nil, strconv.FormatInt(*s.DiskSizeBytes, 10))
 	}
 	counter(&b, "hypermesh_pull_bytes_total", "Bytes copied for model pulls.", nil, s.PullBytes)
 	counterFloat(&b, "hypermesh_pull_duration_seconds_total", "Seconds spent copying model pulls.", s.PullSeconds)

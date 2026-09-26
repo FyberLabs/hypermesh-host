@@ -374,6 +374,14 @@ func TestHeartbeatDiskFreeBytes(t *testing.T) {
 			if !strings.Contains(text, line) {
 				t.Fatalf("metrics missing %s\n%s", line, text)
 			}
+			if !strings.Contains(text, "hypermesh_disk_size_bytes ") {
+				t.Fatalf("metrics missing disk_size\n%s", text)
+			}
+			freeLabels, freeOK := seriesLabels(text, "hypermesh_disk_free_bytes")
+			sizeLabels, sizeOK := seriesLabels(text, "hypermesh_disk_size_bytes")
+			if !freeOK || !sizeOK || freeLabels != sizeLabels {
+				t.Fatalf("label parity free %q (%v) size %q (%v)", freeLabels, freeOK, sizeLabels, sizeOK)
+			}
 		})
 	}
 }
@@ -421,8 +429,8 @@ func TestHeartbeatOmitsDiskFreeBytes(t *testing.T) {
 		if hb.Health.DiskFreeBytes != nil || strings.Contains(string(raw), "disk_free_bytes") {
 			t.Fatalf("unset path must omit disk_free_bytes: %s", raw)
 		}
-		if strings.Contains(text, "hypermesh_disk_free_bytes") {
-			t.Fatalf("metrics must omit the gauge: %s", text)
+		if strings.Contains(text, "hypermesh_disk_free_bytes") || strings.Contains(text, "hypermesh_disk_size_bytes") {
+			t.Fatalf("metrics must omit both gauges: %s", text)
 		}
 	})
 	t.Run("statfs error", func(t *testing.T) {
@@ -446,10 +454,31 @@ func TestHeartbeatOmitsDiskFreeBytes(t *testing.T) {
 		if hb.Health.DiskFreeBytes != nil || strings.Contains(string(raw), "disk_free_bytes") {
 			t.Fatalf("statfs error must omit disk_free_bytes: %s", raw)
 		}
-		if strings.Contains(text, "hypermesh_disk_free_bytes") {
-			t.Fatalf("metrics must omit the gauge: %s", text)
+		if strings.Contains(text, "hypermesh_disk_free_bytes") || strings.Contains(text, "hypermesh_disk_size_bytes") {
+			t.Fatalf("metrics must omit both gauges: %s", text)
 		}
 	})
+}
+
+func seriesLabels(text, name string) (string, bool) {
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, name) {
+			continue
+		}
+		rest := strings.TrimPrefix(line, name)
+		if rest == "" || (rest[0] != ' ' && rest[0] != '{') {
+			continue
+		}
+		if strings.HasPrefix(rest, "{") {
+			end := strings.IndexByte(rest, '}')
+			if end < 0 {
+				return "", false
+			}
+			return rest[:end+1], true
+		}
+		return "", true
+	}
+	return "", false
 }
 
 func heartbeatHealth(t *testing.T, setup func(*Agent)) ([]byte, api.HeartbeatRequest, string) {

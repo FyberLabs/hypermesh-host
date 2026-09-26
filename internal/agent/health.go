@@ -59,6 +59,7 @@ func (a *Agent) recordHeartbeat(err error) {
 	}
 	if err == nil {
 		a.hbOK++
+		a.hbSuccessAt = a.clock()
 		return
 	}
 	a.hbFail[class]++
@@ -108,9 +109,18 @@ func (a *Agent) fillHealth(ctx context.Context, h *api.HostHealth) {
 	if n, ok := a.leaseCount(probe); ok {
 		h.LeaseContainerCount = &n
 	}
-	if n, ok := a.diskFreeBytes(); ok {
-		h.DiskFreeBytes = &n
+	free, size, diskOK := a.diskUsage()
+	a.healthMu.Lock()
+	if diskOK {
+		f, s := free, size
+		a.metricDiskFree = &f
+		a.metricDiskSize = &s
+		h.DiskFreeBytes = &f
+	} else {
+		a.metricDiskFree = nil
+		a.metricDiskSize = nil
 	}
+	a.healthMu.Unlock()
 }
 
 func (a *Agent) syncFacts() (at time.Time, ok bool, class string, status int) {
@@ -336,7 +346,6 @@ func (a *Agent) metricsText() []byte {
 		sample.WGPID = h.WGPID
 		sample.WGPort = h.WGPort
 		sample.LeaseCount = h.LeaseContainerCount
-		sample.DiskFreeBytes = h.DiskFreeBytes
 		sample.LastHTTP = h.LastSyncHTTPStatus
 		sample.ErrClass = h.LastSyncErrorClass
 		if h.BuildCommit != "" {
@@ -349,5 +358,29 @@ func (a *Agent) metricsText() []byte {
 	}
 	sample.PullBytes = a.pullBytes
 	sample.PullSeconds = float64(a.pullNanos) / float64(time.Second)
+	sample.DiskFreeBytes = a.metricDiskFree
+	sample.DiskSizeBytes = a.metricDiskSize
+	if age, ok := a.heartbeatAgeSeconds(); ok {
+		sample.HeartbeatAgeSeconds = &age
+	}
 	return metrics.Render(sample)
+}
+
+// heartbeatAgeSeconds is the age of the last accepted heartbeat, measured
+// at scrape time. Before the first success it is the age of this process
+// (New), so a host that has never beaten still crosses the 180s alert.
+// ok is false only when process start was not recorded.
+func (a *Agent) heartbeatAgeSeconds() (float64, bool) {
+	base := a.hbSuccessAt
+	if base.IsZero() {
+		base = a.started
+	}
+	if base.IsZero() {
+		return 0, false
+	}
+	age := a.clock().Sub(base) / time.Second
+	if age < 0 {
+		age = 0
+	}
+	return float64(age), true
 }

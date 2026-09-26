@@ -62,18 +62,24 @@ func TestIfaceAddrIsPrivateOrEmpty(t *testing.T) {
 
 func TestPullAndHealthMetricNames(t *testing.T) {
 	free := int64(10)
+	size := int64(100)
+	age := 180.0
 	text := string(Render(Sample{
-		HeartbeatSuccess: 2,
-		HeartbeatFailure: map[string]uint64{api.ErrClassHTTP5xx: 1, api.ErrClassNetwork: 1},
-		DiskFreeBytes:    &free,
-		PullBytes:        4096,
-		PullSeconds:      1.5,
+		HeartbeatSuccess:    2,
+		HeartbeatFailure:    map[string]uint64{api.ErrClassHTTP5xx: 1, api.ErrClassNetwork: 1},
+		HeartbeatAgeSeconds: &age,
+		DiskFreeBytes:       &free,
+		DiskSizeBytes:       &size,
+		PullBytes:           4096,
+		PullSeconds:         1.5,
 	}))
 	for _, name := range []string{
 		"hypermesh_heartbeat_success_total 2",
 		"hypermesh_heartbeat_failure_total{class=\"http_5xx\"} 1",
 		"hypermesh_heartbeat_failure_total{class=\"network\"} 1",
+		"hypermesh_heartbeat_age_seconds 180",
 		"hypermesh_disk_free_bytes 10",
+		"hypermesh_disk_size_bytes 100",
 		"hypermesh_pull_bytes_total 4096",
 		"hypermesh_pull_duration_seconds_total 1.5",
 	} {
@@ -86,6 +92,39 @@ func TestPullAndHealthMetricNames(t *testing.T) {
 			t.Fatalf("metrics leaked %q", leak)
 		}
 	}
+	freeLabels, freeOK := metricLabels(text, "hypermesh_disk_free_bytes")
+	sizeLabels, sizeOK := metricLabels(text, "hypermesh_disk_size_bytes")
+	if !freeOK || !sizeOK || freeLabels != sizeLabels {
+		t.Fatalf("disk label parity free %q size %q", freeLabels, sizeLabels)
+	}
+	if strings.Contains(freeLabels, "{") || strings.Contains(sizeLabels, "{") {
+		t.Fatalf("disk gauges must have no labels, free %q size %q", freeLabels, sizeLabels)
+	}
+	onlyFree := string(Render(Sample{DiskFreeBytes: &free}))
+	if strings.Contains(onlyFree, "hypermesh_disk_free_bytes") || strings.Contains(onlyFree, "hypermesh_disk_size_bytes") {
+		t.Fatalf("one disk reading must omit both\n%s", onlyFree)
+	}
+}
+
+func metricLabels(text, name string) (string, bool) {
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, name) {
+			continue
+		}
+		rest := strings.TrimPrefix(line, name)
+		if rest == "" || (rest[0] != ' ' && rest[0] != '{') {
+			continue
+		}
+		if strings.HasPrefix(rest, "{") {
+			end := strings.IndexByte(rest, '}')
+			if end < 0 {
+				return "", false
+			}
+			return rest[:end+1], true
+		}
+		return "", true
+	}
+	return "", false
 }
 
 func assertNotPublic(t *testing.T, addr string) {

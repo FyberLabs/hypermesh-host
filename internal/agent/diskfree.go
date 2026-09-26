@@ -14,19 +14,41 @@ import (
 // The default stat is pull.FreeBytes, the same helper the download
 // preflight uses.
 func (a *Agent) diskFreeBytes() (int64, bool) {
-	path, ok := nearestExisting(a.cfg.GGUFHostPath())
-	if !ok {
-		return 0, false
+	free, _, ok := a.diskUsage()
+	return free, ok
+}
+
+// diskUsage is one reading of free and total bytes on the GGUF filesystem.
+// ok is false when the path cannot be resolved or statfs fails, and then
+// neither value is reported. A test stub that supplies free still reads
+// size from pull.CapacityBytes unless statSize is set, and a failure of
+// either side drops both.
+func (a *Agent) diskUsage() (free, size int64, ok bool) {
+	path, exists := nearestExisting(a.cfg.GGUFHostPath())
+	if !exists {
+		return 0, 0, false
 	}
-	fn := a.statFree
-	if fn == nil {
-		fn = pull.FreeBytes
+	if a.statFree != nil {
+		n, err := a.statFree(path)
+		if err != nil || n < 0 {
+			return 0, 0, false
+		}
+		var s int64
+		if a.statSize != nil {
+			s, err = a.statSize(path)
+		} else {
+			s, err = pull.CapacityBytes(path)
+		}
+		if err != nil || s < 0 {
+			return 0, 0, false
+		}
+		return n, s, true
 	}
-	n, err := fn(path)
-	if err != nil || n < 0 {
-		return 0, false
+	f, s, err := pull.StatfsBytes(path)
+	if err != nil || f < 0 || s < 0 {
+		return 0, 0, false
 	}
-	return n, true
+	return f, s, true
 }
 
 // nearestExisting returns path when it exists, otherwise the closest
