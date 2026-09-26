@@ -79,6 +79,15 @@ type Agent struct {
 	// hbRand is in [0, 1) and drives backoff jitter. Nil uses math/rand.
 	hbRand func() float64
 	hbWake chan struct{}
+	// metricsWG returns the hypermesh address. Nil reads the interface,
+	// then the tunnel session. Tests set this.
+	metricsWG func() string
+	// metricsEvery is how often the /metrics bind is reconciled.
+	// Zero uses two seconds.
+	metricsEvery time.Duration
+	// metricsServe binds /metrics. Nil uses metrics.Serve.
+	metricsServe func(ctx context.Context, addr, tunnelHost string) (string, error)
+	metricsWake  chan struct{}
 
 	leaseMu  sync.RWMutex
 	sellMu   sync.Mutex
@@ -97,6 +106,8 @@ type Agent struct {
 	hbFail      map[string]uint64
 	syncOK      uint64
 	syncFail    map[string]uint64
+	pullBytes   uint64
+	pullNanos   int64
 }
 
 const certLeaseID = "cert-bench"
@@ -142,13 +153,14 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 			Endpoint:  cfg.CompletionsEndpoint(),
 			Store:     pathb.FileStore{Dir: cfg.StateDir},
 		},
-		runtime: runtime.NewNVIDIA(),
-		hip:     runtime.NewHIP(),
-		metal:   runtime.NewMetal(),
-		tunnels: wg,
-		keyDir:  keyDirFor(cfg),
-		log:     log,
-		hbWake:  make(chan struct{}, 1),
+		runtime:     runtime.NewNVIDIA(),
+		hip:         runtime.NewHIP(),
+		metal:       runtime.NewMetal(),
+		tunnels:     wg,
+		keyDir:      keyDirFor(cfg),
+		log:         log,
+		hbWake:      make(chan struct{}, 1),
+		metricsWake: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -494,6 +506,7 @@ func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv 
 	a.loggedRevoked = false
 	a.bindIP = sess.ClientAddress
 	a.observeBind(sess.ClientAddress)
+	a.pokeMetrics()
 	a.refreshCompletions()
 	ts := tunnel.Session{
 		TunnelID:        sess.TunnelID,
@@ -886,6 +899,9 @@ func (a *Agent) pullLimits(size int64) pull.Limits {
 		MarginSet: true,
 		Stat:      stat,
 		Head:      a.headLength,
+		Copied: func(n int64, elapsed time.Duration) {
+			a.recordPull(n, elapsed)
+		},
 	}
 }
 

@@ -183,7 +183,11 @@ func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, li
 	if limit <= 0 {
 		limit = size
 	}
+	copyStart := time.Now()
 	n, copyErr := io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(body, limit))
+	if lim.Copied != nil {
+		lim.Copied(n, time.Since(copyStart))
+	}
 	closeErr := tmp.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmpName)

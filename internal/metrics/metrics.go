@@ -1,12 +1,12 @@
 // Package metrics serves Hypermesh host health as Prometheus text.
-// The listener is loopback-only unless an explicit opt-in is set.
-// There is no scrape path through the WireGuard tunnel.
+// The listener binds the host WireGuard address when that address is a
+// specific private IP, and otherwise binds 127.0.0.1. It never binds
+// 0.0.0.0, ::, or a public address.
 package metrics
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,68 +17,28 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 )
 
-// DefaultAddr is the listen address when HYPERMESH_METRICS_ADDR is unset.
-// It is 127.0.0.1, never 0.0.0.0 and never a tunnel address.
-const DefaultAddr = "127.0.0.1:9464"
+// DefaultAddr is the listen address when the tunnel has no private address.
+// It is 127.0.0.1, never 0.0.0.0.
+const DefaultAddr = "127.0.0.1:" + DefaultPort
 
 // Config is the /metrics server.
 type Config struct {
-	Addr             string
-	AllowNonLoopback bool
-	Log              *slog.Logger
-	Gather           func() []byte
-}
-
-// AuthorizeBind accepts a literal loopback IP. A non-loopback address,
-// including 0.0.0.0, ::, and hostnames, is refused unless allow is set.
-// The check runs before listen.
-func AuthorizeBind(addr string, allow bool) error {
-	loop, err := literalLoopback(addr)
-	if err != nil {
-		return fmt.Errorf("hypermesh metrics: %w", err)
-	}
-	if loop {
-		return nil
-	}
-	if !allow {
-		return fmt.Errorf("hypermesh metrics: refusing %s: not a loopback address (set HYPERMESH_METRICS_ALLOW_NON_LOOPBACK=1 to allow)", addr)
-	}
-	return nil
-}
-
-func literalLoopback(addr string) (bool, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false, fmt.Errorf("address %q: %w", addr, err)
-	}
-	if port == "" {
-		return false, fmt.Errorf("address %q: missing port", addr)
-	}
-	if host == "" {
-		return false, nil
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false, nil
-	}
-	return ip.IsLoopback(), nil
+	Addr string
+	// TunnelHost is the hypermesh interface address or the tunnel session
+	// client address. Only this host, when it is a specific private IP,
+	// may be bound besides loopback.
+	TunnelHost string
+	Log        *slog.Logger
+	Gather     func() []byte
 }
 
 // Listen binds addr when it is a literal loopback address.
 // Non-loopback addresses are refused and no socket is opened.
 func Listen(addr string) (net.Listener, error) {
-	return listen(addr, false)
-}
-
-func listen(addr string, allow bool) (net.Listener, error) {
-	if err := AuthorizeBind(addr, allow); err != nil {
+	if err := AuthorizeBind(addr, ""); err != nil {
 		return nil, err
 	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	return ln, nil
+	return net.Listen("tcp", addr)
 }
 
 // Serve listens and answers GET /metrics until ctx is cancelled.
@@ -93,19 +53,16 @@ func Serve(ctx context.Context, cfg Config) (string, error) {
 	if addr == "" {
 		addr = DefaultAddr
 	}
-	loop, err := literalLoopback(addr)
-	if err != nil {
-		return "", fmt.Errorf("hypermesh metrics: %w", err)
-	}
-	if err := AuthorizeBind(addr, cfg.AllowNonLoopback); err != nil {
+	if err := AuthorizeBind(addr, cfg.TunnelHost); err != nil {
 		return "", err
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return "", err
 	}
-	if !loop {
-		cfg.Log.Warn("metrics bound to a non-loopback address; /metrics is reachable beyond localhost", "addr", ln.Addr().String())
+	if err := AuthorizeBind(ln.Addr().String(), cfg.TunnelHost); err != nil {
+		_ = ln.Close()
+		return "", err
 	}
 	srv := &http.Server{
 		Handler:           handler(cfg.Gather),
@@ -164,6 +121,8 @@ type Sample struct {
 	WGPort           *int
 	LeaseCount       *int
 	DiskFreeBytes    *int64
+	PullBytes        uint64
+	PullSeconds      float64
 	LastSyncUnix     *int64
 	LastHTTP         int
 	ErrClass         string
@@ -202,6 +161,8 @@ func Render(s Sample) []byte {
 	if s.DiskFreeBytes != nil {
 		gauge(&b, "hypermesh_disk_free_bytes", "Free bytes for non-root users on the filesystem holding the GGUF path (statfs Bavail*Bsize).", nil, strconv.FormatInt(*s.DiskFreeBytes, 10))
 	}
+	counter(&b, "hypermesh_pull_bytes_total", "Bytes copied for model pulls.", nil, s.PullBytes)
+	counterFloat(&b, "hypermesh_pull_duration_seconds_total", "Seconds spent copying model pulls.", s.PullSeconds)
 	if s.LastSyncUnix != nil {
 		gauge(&b, "hypermesh_last_sync_timestamp_seconds", "Unix time of the last successful tunnel sync.", nil, strconv.FormatInt(*s.LastSyncUnix, 10))
 	}
@@ -230,6 +191,11 @@ func counterClasses(b *strings.Builder, name, help string, counts map[string]uin
 func counter(b *strings.Builder, name, help string, labels map[string]string, v uint64) {
 	writeHelp(b, name, help, "counter")
 	sample(b, name, labels, strconv.FormatUint(v, 10))
+}
+
+func counterFloat(b *strings.Builder, name, help string, v float64) {
+	writeHelp(b, name, help, "counter")
+	sample(b, name, nil, strconv.FormatFloat(v, 'f', -1, 64))
 }
 
 func gauge(b *strings.Builder, name, help string, labels map[string]string, value string) {

@@ -297,14 +297,24 @@ func TestMetricsAddrOverride(t *testing.T) {
 	if cfg.MetricsAddr != "127.0.0.1:19064" || !cfg.MetricsAllowNonLoopback {
 		t.Fatalf("addr %q allow %v", cfg.MetricsAddr, cfg.MetricsAllowNonLoopback)
 	}
-	if err := metrics.AuthorizeBind(cfg.MetricsAddr, false); err != nil {
+	if err := metrics.AuthorizeBind(cfg.MetricsAddr, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := metrics.AuthorizeBind("0.0.0.0:9464", cfg.MetricsAllowNonLoopback); err != nil {
+	if err := metrics.AuthorizeBind("0.0.0.0:9464", "10.77.0.2"); err == nil {
+		t.Fatal("unspecified address must be refused")
+	}
+	if err := metrics.AuthorizeBind("8.8.8.8:9464", "8.8.8.8"); err == nil {
+		t.Fatal("public address must be refused")
+	}
+	if err := metrics.AuthorizeBind("10.77.0.2:9464", ""); err == nil {
+		t.Fatal("tunnel address must be refused without a WireGuard host")
+	}
+	if err := metrics.AuthorizeBind("10.77.0.2:9464", "10.77.0.2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := metrics.AuthorizeBind("10.77.0.2:9464", false); err == nil {
-		t.Fatal("tunnel address must be refused without opt-in")
+	got, refused := metrics.ResolveAddr("0.0.0.0:9464", "10.77.0.2")
+	if got != "10.77.0.2:9464" || !refused {
+		t.Fatalf("fallback %s refused %v", got, refused)
 	}
 }
 

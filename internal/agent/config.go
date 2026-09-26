@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FyberLabs/hypermesh-host/internal/metrics"
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
@@ -79,12 +78,14 @@ type Config struct {
 	// "1" / "userspace" forces that unit. "0" / "kernel" forces wg-quick.
 	// Empty stays on wg-quick (tests). The agent never spawns wireguard-go.
 	WGMode string
-	// MetricsAddr is the Prometheus text /metrics listener.
-	// Default 127.0.0.1:9464. Non-loopback is refused unless
-	// MetricsAllowNonLoopback is set. Never the tunnel address by default.
+	// MetricsAddr is an explicit /metrics bind (HYPERMESH_METRICS_ADDR).
+	// Empty derives the hypermesh interface address, or 127.0.0.1:9464
+	// when the tunnel is down. Only loopback and that WireGuard address
+	// are accepted. Public and unspecified addresses are refused.
 	MetricsAddr string
-	// MetricsAllowNonLoopback permits a non-loopback MetricsAddr.
-	// The process logs a warning when it binds one.
+	// MetricsAllowNonLoopback is retained so an old environment file
+	// still parses. It does not permit a public, unspecified, or
+	// non-WireGuard bind.
 	MetricsAllowNonLoopback bool
 	// HostType is "model" (default) or "supervisor". A supervisor host
 	// enrolls and heartbeats and refuses lease_start for a weight.
@@ -115,7 +116,7 @@ func FromEnv() Config {
 		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
 		WGMode:                  wgModeFromEnv(),
-		MetricsAddr:             envOr("HYPERMESH_METRICS_ADDR", metrics.DefaultAddr),
+		MetricsAddr:             strings.TrimSpace(os.Getenv("HYPERMESH_METRICS_ADDR")),
 		MetricsAllowNonLoopback: envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
 		HostType:                strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
 		WGKeyDir:                strings.TrimSpace(os.Getenv("HYPERMESH_WG_KEY_DIR")),

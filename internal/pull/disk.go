@@ -63,6 +63,10 @@ type Limits struct {
 	// Head resolves Content-Length when Expected <= 0.
 	// Nil uses HTTP HEAD. A missing length fails closed.
 	Head func(ctx context.Context, rawURL string) (int64, error)
+	// Copied, if set, is called with the byte count and the time spent
+	// reading the body. The URL is not passed. It runs even when the
+	// copy later fails the pin or the size cap.
+	Copied func(n int64, elapsed time.Duration)
 }
 
 func (l Limits) floor() uint64 {

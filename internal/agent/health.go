@@ -12,6 +12,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"github.com/FyberLabs/hypermesh-host/internal/metrics"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
 
@@ -211,20 +212,103 @@ func httpClass(code int) string {
 	}
 }
 
-// StartMetrics serves /metrics until ctx is cancelled. A refused address
+// StartMetrics serves /metrics until ctx is cancelled. The bind follows
+// the hypermesh address and falls back to 127.0.0.1. A refused address
 // or a failed listen is logged. The agent keeps heartbeating either way.
 func (a *Agent) StartMetrics(ctx context.Context) {
-	addr := strings.TrimSpace(a.cfg.MetricsAddr)
-	if addr == "" {
-		addr = metrics.DefaultAddr
+	if a.metricsWake == nil {
+		a.metricsWake = make(chan struct{}, 1)
 	}
-	if _, err := metrics.Serve(ctx, metrics.Config{
-		Addr:             addr,
-		AllowNonLoopback: a.cfg.MetricsAllowNonLoopback,
-		Log:              a.log,
-		Gather:           a.metricsText,
-	}); err != nil {
-		a.log.Error("metrics endpoint not started", "addr", addr, "err", err)
+	go a.metricsLoop(ctx)
+}
+
+func (a *Agent) metricsLoop(ctx context.Context) {
+	var stop context.CancelFunc
+	var cur string
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
+	every := a.metricsEvery
+	if every <= 0 {
+		every = 2 * time.Second
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		host := a.tunnelMetricsHost()
+		want, refused := metrics.ResolveAddr(a.cfg.MetricsAddr, host)
+		if want != cur {
+			if stop != nil {
+				stop()
+				stop = nil
+			}
+			mctx, cancel := context.WithCancel(ctx)
+			stop = cancel
+			bound, err := a.serveMetrics(mctx, want, host)
+			if err != nil {
+				a.log.Error("metrics endpoint not started", "addr", want, "err", err)
+				stop()
+				stop = nil
+				cur = ""
+			} else {
+				cur = want
+				if refused {
+					a.log.Warn("metrics override refused; bound the WireGuard address or loopback", "addr", bound)
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-a.metricsWake:
+		}
+	}
+}
+
+func (a *Agent) serveMetrics(ctx context.Context, addr, tunnelHost string) (string, error) {
+	if a.metricsServe != nil {
+		return a.metricsServe(ctx, addr, tunnelHost)
+	}
+	return metrics.Serve(ctx, metrics.Config{
+		Addr:       addr,
+		TunnelHost: tunnelHost,
+		Log:        a.log,
+		Gather:     a.metricsText,
+	})
+}
+
+func (a *Agent) tunnelMetricsHost() string {
+	if a.metricsWG != nil {
+		return a.metricsWG()
+	}
+	if ip := metrics.IfaceAddr("hypermesh"); ip != "" {
+		return ip
+	}
+	return runtime.TunnelBindHost(a.bindIP)
+}
+
+func (a *Agent) pokeMetrics() {
+	if a.metricsWake == nil {
+		return
+	}
+	select {
+	case a.metricsWake <- struct{}{}:
+	default:
+	}
+}
+
+func (a *Agent) recordPull(n int64, d time.Duration) {
+	if n < 0 {
+		n = 0
+	}
+	a.healthMu.Lock()
+	defer a.healthMu.Unlock()
+	a.pullBytes += uint64(n)
+	if d > 0 {
+		a.pullNanos += d.Nanoseconds()
 	}
 }
 
@@ -263,5 +347,7 @@ func (a *Agent) metricsText() []byte {
 		sec := a.lastSyncAt.UTC().Unix()
 		sample.LastSyncUnix = &sec
 	}
+	sample.PullBytes = a.pullBytes
+	sample.PullSeconds = float64(a.pullNanos) / float64(time.Second)
 	return metrics.Render(sample)
 }

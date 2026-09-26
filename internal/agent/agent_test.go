@@ -2418,8 +2418,8 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	if err != nil || margin != 64<<20 {
 		t.Fatalf("disk margin %d err=%v", margin, err)
 	}
-	if cfg.MetricsAddr != "127.0.0.1:9464" || cfg.MetricsAllowNonLoopback {
-		t.Fatalf("metrics default %+v", cfg.MetricsAddr)
+	if cfg.MetricsAddr != "" || cfg.MetricsAllowNonLoopback {
+		t.Fatalf("metrics default %q allow %v", cfg.MetricsAddr, cfg.MetricsAllowNonLoopback)
 	}
 	if cfg.LlamaJinja != "1" || cfg.LlamaCtxSize != "16384" || cfg.LlamaTimeout != "1800" {
 		t.Fatalf("llama defaults %+v", cfg)
