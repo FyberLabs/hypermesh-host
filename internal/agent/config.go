@@ -11,6 +11,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
+	"github.com/FyberLabs/hypermesh-host/internal/update"
 )
 
 const (
@@ -100,36 +101,80 @@ type Config struct {
 	// WGKeyDir is the host WireGuard private key directory.
 	// Empty uses /etc/wireguard. The agent still owns the key.
 	WGKeyDir string
+	// UpdateChannel is HYPERMESH_UPDATE_CHANNEL: "test", "prod", or empty.
+	// Empty does not check for updates. test tracks builds of main.
+	// prod tracks tagged semver releases. The bytes come from the
+	// control plane, not from GitHub.
+	UpdateChannel string
+	// UpdateEvery is how often to check the channel. Zero uses one hour.
+	UpdateEvery time.Duration
+	// UpdateRollback is how long a new binary has to heartbeat before
+	// the previous binary is restored. Zero uses two minutes.
+	UpdateRollback time.Duration
+	// UpdatePubKey is the file of trusted armored public keys used to
+	// verify checksums. Several keys may be concatenated for rotation.
+	// Empty uses /etc/hypermesh/update-pubkey.asc.
+	UpdatePubKey string
+	// UpdateFingerprints is HYPERMESH_UPDATE_FINGERPRINTS. A signature
+	// is accepted only when its fingerprint is in this list. A key that
+	// is only present in UpdatePubKey is not enough.
+	UpdateFingerprints []string
+	// UpdateFingerprintsInvalid is set when the env value is not a list
+	// of 40 or 64 hex fingerprints.
+	UpdateFingerprintsInvalid bool
+	// UpdateBinary is the path replaced on install. Empty uses the
+	// running executable.
+	UpdateBinary string
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
 // after this returns.
 func FromEnv() Config {
+	fps, fpErr := update.ParseFingerprints(os.Getenv("HYPERMESH_UPDATE_FINGERPRINTS"))
 	return Config{
-		ControlPlaneURL:         envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
-		TenantID:                os.Getenv("HYPERMESH_TENANT_ID"),
-		EnrollToken:             os.Getenv("HYPERMESH_ENROLL_TOKEN"),
-		StateDir:                envOr("HYPERMESH_STATE_DIR", defaultStateDir),
-		HeartbeatEvery:          defaultHeartbeat,
-		JobEvery:                defaultJobInterval,
-		DeviceSecret:            os.Getenv("HYPERMESH_DEVICE_SECRET"),
-		ImageHash:               os.Getenv("HYPERMESH_IMAGE_HASH"),
-		ListenPort:              envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
-		CompletionsURL:          os.Getenv("HYPERMESH_COMPLETIONS_URL"),
-		GGUFPath:                envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
-		DiskFloor:               strings.TrimSpace(os.Getenv("HYPERMESH_DISK_FLOOR_BYTES")),
-		DiskMargin:              strings.TrimSpace(os.Getenv("HYPERMESH_DISK_MARGIN_BYTES")),
-		ModelCacheMax:           strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_MAX_BYTES")),
-		PendingTTL:              strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_PENDING_TTL")),
-		LlamaJinja:              envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
-		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
-		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
-		WGMode:                  wgModeFromEnv(),
-		MetricsAddr:             strings.TrimSpace(os.Getenv("HYPERMESH_METRICS_ADDR")),
-		MetricsAllowNonLoopback: envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
-		HostType:                strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
-		WGKeyDir:                strings.TrimSpace(os.Getenv("HYPERMESH_WG_KEY_DIR")),
+		ControlPlaneURL:           envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
+		TenantID:                  os.Getenv("HYPERMESH_TENANT_ID"),
+		EnrollToken:               os.Getenv("HYPERMESH_ENROLL_TOKEN"),
+		StateDir:                  envOr("HYPERMESH_STATE_DIR", defaultStateDir),
+		HeartbeatEvery:            defaultHeartbeat,
+		JobEvery:                  defaultJobInterval,
+		DeviceSecret:              os.Getenv("HYPERMESH_DEVICE_SECRET"),
+		ImageHash:                 os.Getenv("HYPERMESH_IMAGE_HASH"),
+		ListenPort:                envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
+		CompletionsURL:            os.Getenv("HYPERMESH_COMPLETIONS_URL"),
+		GGUFPath:                  envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
+		DiskFloor:                 strings.TrimSpace(os.Getenv("HYPERMESH_DISK_FLOOR_BYTES")),
+		DiskMargin:                strings.TrimSpace(os.Getenv("HYPERMESH_DISK_MARGIN_BYTES")),
+		ModelCacheMax:             strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_MAX_BYTES")),
+		PendingTTL:                strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_PENDING_TTL")),
+		LlamaJinja:                envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
+		LlamaCtxSize:              envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
+		LlamaTimeout:              envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
+		WGMode:                    wgModeFromEnv(),
+		MetricsAddr:               strings.TrimSpace(os.Getenv("HYPERMESH_METRICS_ADDR")),
+		MetricsAllowNonLoopback:   envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
+		HostType:                  strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
+		WGKeyDir:                  strings.TrimSpace(os.Getenv("HYPERMESH_WG_KEY_DIR")),
+		UpdateChannel:             strings.TrimSpace(os.Getenv("HYPERMESH_UPDATE_CHANNEL")),
+		UpdateEvery:               durationEnv("HYPERMESH_UPDATE_EVERY", time.Hour),
+		UpdateRollback:            durationEnv("HYPERMESH_UPDATE_ROLLBACK", 2*time.Minute),
+		UpdatePubKey:              envOr("HYPERMESH_UPDATE_PUBKEY", "/etc/hypermesh/update-pubkey.asc"),
+		UpdateFingerprints:        fps,
+		UpdateFingerprintsInvalid: fpErr != nil,
+		UpdateBinary:              strings.TrimSpace(os.Getenv("HYPERMESH_UPDATE_BINARY")),
 	}
+}
+
+func durationEnv(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return -1
+	}
+	return d
 }
 
 func envBool(key string) bool {
@@ -202,6 +247,15 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.PendingModelTTL(); err != nil {
 		return err
+	}
+	if _, err := update.ParseChannel(c.UpdateChannel); err != nil {
+		return err
+	}
+	if c.UpdateFingerprintsInvalid {
+		return fmt.Errorf("hypermesh: HYPERMESH_UPDATE_FINGERPRINTS must be 40 or 64 hex characters")
+	}
+	if c.UpdateEvery < 0 || c.UpdateRollback < 0 {
+		return fmt.Errorf("hypermesh: update interval must be a duration")
 	}
 	return nil
 }

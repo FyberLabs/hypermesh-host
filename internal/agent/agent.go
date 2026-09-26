@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
@@ -128,6 +129,17 @@ type Agent struct {
 	hbSuccessAt    time.Time
 	metricDiskFree *int64
 	metricDiskSize *int64
+
+	// pendingResult is set while a pulled job has not been acked.
+	// Busy reads it. The job loop is the only writer.
+	pendingResult atomic.Bool
+	// lastUpdateCheck throttles the update channel. The job loop owns it.
+	lastUpdateCheck time.Time
+	// selfUpdate overrides the update check. Nil uses the channel client.
+	// Tests set it. The job loop is the only caller.
+	selfUpdate func(ctx context.Context, busy bool) error
+	// updateWatch overrides the rollback watch. Nil starts the default.
+	updateWatch func(ctx context.Context)
 }
 
 const certLeaseID = "cert-bench"
@@ -220,6 +232,9 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) heartbeatLoop(ctx context.Context) {
+	// Baseline is the heartbeat count before this process has acked.
+	// A new binary must beat it inside the rollback window.
+	a.startUpdateWatch(ctx)
 	// A failed beat retries with backoff. A success waits HeartbeatEvery.
 	// Reconnect and a successful job-loop call can ask for a beat, but
 	// not before the backoff or Retry-After deadline.
@@ -258,6 +273,7 @@ func (a *Agent) jobLoop(ctx context.Context) {
 	if err := a.pullAndRun(ctx); err != nil {
 		a.log.Warn("job pull failed", "err", err)
 	}
+	a.maybeSelfUpdate(ctx)
 	ticker := time.NewTicker(a.cfg.JobEvery)
 	defer ticker.Stop()
 	for {
@@ -269,6 +285,7 @@ func (a *Agent) jobLoop(ctx context.Context) {
 			if err := a.pullAndRun(ctx); err != nil {
 				a.log.Warn("job pull failed", "err", err)
 			}
+			a.maybeSelfUpdate(ctx)
 		}
 	}
 }
@@ -611,6 +628,13 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 		return nil
 	}
 	a.log.Info("got job", "job_id", job.JobID, "kind", job.Kind, "suite_id", job.SuiteID, "lease_id", job.LeaseID, "backend", jobBackendLog(*job))
+	a.pendingResult.Store(true)
+	posted := false
+	defer func() {
+		if posted {
+			a.pendingResult.Store(false)
+		}
+	}()
 
 	if job.Kind == api.KindPathB || job.Kind == api.KindCompactCert {
 		stop := a.ensureCertSample(ctx)
@@ -625,14 +649,19 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	if job.Kind == api.KindCompactCert {
 		a.reportScorecard(ctx, *job, res.Result)
 		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
+			// The retry budget is spent. Staying busy would block a
+			// self-update until this process restarts.
+			a.pendingResult.Store(false)
 			return err
 		}
 	} else {
 		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
+			a.pendingResult.Store(false)
 			return err
 		}
 		a.reportScorecard(ctx, *job, res.Result)
 	}
+	posted = true
 	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))
 	return nil
 }

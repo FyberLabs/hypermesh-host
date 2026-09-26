@@ -15,10 +15,12 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        # actions/setup-go v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
           cache: true
@@ -28,3 +30,62 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+  actionlint:
+    name: actionlint
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - name: Checkout
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Check workflows
+        # rhysd/actionlint v1.7.12
+        # commit 914e7df21a07ef503a81201c76d2b11c789d3fca
+        # shellcheck v0.10.0 is installed when the runner does not have it.
+        # actionlint runs that binary because -shellcheck is set.
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          curl -fsSL -o "$tmp/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $tmp/actionlint.tar.gz" | sha256sum -c
+          tar -xzf "$tmp/actionlint.tar.gz" -C "$tmp" actionlint
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            curl -fsSL -o "$tmp/shellcheck.tar.xz" https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz
+            echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  $tmp/shellcheck.tar.xz" | sha256sum -c
+            tar -xJf "$tmp/shellcheck.tar.xz" -C "$tmp"
+            install -m 0755 "$tmp/shellcheck-v0.10.0/shellcheck" "$tmp/shellcheck"
+            export PATH="$tmp:$PATH"
+          fi
+          "$tmp/actionlint" -shellcheck="$(command -v shellcheck)" -color
+          shellcheck -x packaging/release/publish-agent.sh packaging/release/layout.sh
+          # azure-cli 2.90.0 is the CLI that rejects --auth-mode on
+          # keyvault secret show. The stubbed tests cannot see that.
+          # pip --target avoids python3-venv. A PATH wrapper is what
+          # check-az-flags.py executes; a shell function would not.
+          # AZURE_CONFIG_DIR is private to this job. Installing
+          # storage-blob-preview must not change the runner's ~/.azure,
+          # which later infra jobs use for az storage blob.
+          # Core is the prod CLI (no preview extension). Preview is the
+          # test CLI, which tags superseded=true.
+          export AZURE_CONFIG_DIR="$RUNNER_TEMP/az-flag-check"
+          mkdir -p "$AZURE_CONFIG_DIR"
+          lib="$RUNNER_TEMP/azure-cli-2.90.0"
+          python3 -m pip install --target "$lib" 'azure-cli==2.90.0'
+          bindir="$RUNNER_TEMP/az-bin"
+          mkdir -p "$bindir"
+          # The single quotes are the wrapper's text. They must not expand here.
+          # shellcheck disable=SC2016
+          {
+            printf '%s\n' '#!/bin/sh'
+            printf '%s\n' 'export PYTHONPATH="${AZ_CLI_LIB}${PYTHONPATH:+:$PYTHONPATH}"'
+            printf '%s\n' 'exec python3 -m azure.cli "$@"'
+          } > "$bindir/az"
+          chmod +x "$bindir/az"
+          export AZ_CLI_LIB="$lib"
+          export PATH="$bindir:$PATH"
+          export AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no
+          python3 packaging/release/check-az-flags.py --self-test
+          AZ_FLAG_CHECK=core python3 packaging/release/check-az-flags.py
+          az extension add --name storage-blob-preview --version 1.0.0b3 --yes
+          AZ_FLAG_CHECK=preview python3 packaging/release/check-az-flags.py

@@ -14,9 +14,34 @@ const (
 	PathTunnelAck         = Prefix + "/agent/tunnel/ack"
 	PathTunnelPeer        = Prefix + "/agent/tunnel/peer"
 	PathDeviceEnrollToken = Prefix + "/devices/%s/enroll-token"
-	HeaderTenantID        = "X-Tenant-ID"
-	HeaderAuthorization   = "Authorization"
+	// PathUpdates is GET /api/v1/hypermesh/agent/updates/{channel}.
+	// channel is "test" or "prod". This is the host proposal for the
+	// plane (Panopticon builds the route). One constant, one path.
+	PathUpdates         = Prefix + "/agent/updates/%s"
+	HeaderTenantID      = "X-Tenant-ID"
+	HeaderAuthorization = "Authorization"
 )
+
+// UpdateArtifact is one blob the plane will let this host read.
+// URL is a short-lived (~10 min) read-only SAS URL. It is a credential.
+// Do not log UpdateArtifact or UpdateManifest.
+type UpdateArtifact struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	URL    string `json:"url"`
+}
+
+// UpdateManifest is the 200 body of GET /agent/updates/{channel}.
+// 204 means that channel has no published build.
+type UpdateManifest struct {
+	Channel   string           `json:"channel"`
+	Version   string           `json:"version"`
+	Commit    string           `json:"commit"`
+	ReleaseID string           `json:"release_id,omitempty"`
+	Build     int              `json:"build"`
+	Artifacts []UpdateArtifact `json:"artifacts"`
+}
 
 // EnrollRequest is POST /agent/enroll.
 type EnrollRequest struct {

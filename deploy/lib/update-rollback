@@ -1,0 +1,72 @@
+#!/bin/sh
+# ExecStartPre for hypermesh-agent.
+#
+# If update-pending is missing, or its deadline is still in the future,
+# this exits 0 and the new process starts. The in-process watch confirms
+# the marker after a heartbeat, or restores the backup when the window
+# ends while the process is still up.
+#
+# If the deadline has passed, the previous binary is copied back into
+# place and the marker is removed. systemd then starts that binary.
+# This script only replaces the agent binary on disk.
+set -eu
+
+state="${HYPERMESH_STATE_DIR:-/var/lib/hypermesh}"
+marker="${state}/update-pending"
+[ -f "$marker" ] || exit 0
+
+binary=""
+backup=""
+deadline=""
+build=""
+release_id=""
+while IFS='=' read -r key value; do
+  case "$key" in
+    binary) binary=$value ;;
+    backup) backup=$value ;;
+    deadline) deadline=$value ;;
+    version) ;;
+    build) build=$value ;;
+    release_id) release_id=$value ;;
+    *) echo "hypermesh update: bad marker" >&2; exit 1 ;;
+  esac
+done < "$marker"
+
+case "$deadline" in
+  ""|*[!0-9]*) echo "hypermesh update: bad deadline" >&2; exit 1 ;;
+esac
+now=$(date +%s)
+if [ "$now" -lt "$deadline" ]; then
+  exit 0
+fi
+
+safe() {
+  case "$1" in
+    /[![:space:]]*) ;;
+    *) echo "hypermesh update: bad path" >&2; exit 1 ;;
+  esac
+  case "$1" in
+    *..*) echo "hypermesh update: bad path" >&2; exit 1 ;;
+  esac
+}
+safe "$binary"
+safe "$backup"
+[ -f "$backup" ] || { echo "hypermesh update: backup missing" >&2; exit 1; }
+
+tmp="${binary}.rollback"
+cp -f "$backup" "$tmp"
+chmod 0755 "$tmp"
+sync || true
+mv -f "$tmp" "$binary"
+
+# A positive build is remembered so a later check skips it until a
+# strictly newer build is published. Build 0 is not recorded.
+case "$build" in
+  [1-9]|[1-9][0-9]*)
+    bad="${state}/update-bad"
+    badnew="${bad}.new"
+    printf 'build=%s\nrelease_id=%s\n' "$build" "$release_id" > "$badnew"
+    mv -f "$badnew" "$bad"
+    ;;
+esac
+rm -f "$marker"
