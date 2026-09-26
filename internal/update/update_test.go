@@ -633,70 +633,58 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(string(ci), "contents: write") {
 		t.Fatal("ci workflow must stay contents: read")
 	}
-	for _, name := range []string{"release.yml", "release-test.yml"} {
-		body, err := os.ReadFile(filepath.Join(root, ".github", "workflows", name))
-		if err != nil {
-			t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(root, ".github", "workflows", "release-test.yml")); !os.IsNotExist(err) {
+		t.Fatal("a second release workflow would give test and prod different build numbers")
+	}
+	body, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	head, _, _ := strings.Cut(text, "jobs:")
+	if strings.Contains(head, "id-token") || strings.Contains(head, "contents: write") {
+		t.Fatal("release workflow default is not contents: read")
+	}
+	for _, want := range []string{
+		"contents: read",
+		"contents: write",
+		"id-token: write",
+		"environment: release",
+		"azure/login",
+		"AZURE_CLIENT_ID",
+		"AZURE_TENANT_ID",
+		"AZURE_SUBSCRIPTION_ID",
+		"AZURE_STORAGE_ACCOUNT",
+		"AZURE_STORAGE_CONTAINER",
+		"allow-no-subscriptions: true",
+		"HYPERMESH_RELEASE_GPG_PRIVATE_KEY",
+		"packaging/release/publish-agent.sh",
+		"- main",
+		`v[0-9]+.[0-9]+.[0-9]+`,
+		"cancel-in-progress: false",
+		"group: release-${{ github.ref_type == 'tag' && 'prod' || 'test' }}",
+		"AZURE_CONFIG_DIR: ${{ runner.temp }}/az",
+		"az logout",
+		"if: always()",
+		"if: github.ref_type == 'tag'",
+		"git fetch origin main",
+		"git merge-base --is-ancestor HEAD origin/main",
+		"one sequence across channels",
+		"actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+		"azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("release.yml missing %s", want)
 		}
-		text := string(body)
-		head, _, _ := strings.Cut(text, "jobs:")
-		if strings.Contains(head, "id-token") || strings.Contains(head, "contents: write") {
-			t.Fatalf("%s workflow default is not contents: read", name)
-		}
-		for _, want := range []string{
-			"contents: read",
-			"contents: write",
-			"id-token: write",
-			"environment: release",
-			"azure/login",
-			"AZURE_CLIENT_ID",
-			"AZURE_TENANT_ID",
-			"AZURE_SUBSCRIPTION_ID",
-			"AZURE_STORAGE_ACCOUNT",
-			"AZURE_STORAGE_CONTAINER",
-			"allow-no-subscriptions: true",
-			"HYPERMESH_RELEASE_GPG_PRIVATE_KEY",
-			"packaging/release/publish-agent.sh",
-		} {
-			if !strings.Contains(text, want) {
-				t.Fatalf("%s missing %s", name, want)
-			}
-		}
-		if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
-			t.Fatalf("%s has a storage key, a hardcoded account, or restarts wireguard", name)
-		}
-		for _, want := range []string{
-			"cancel-in-progress: false",
-			"AZURE_CONFIG_DIR: ${{ runner.temp }}/az",
-			"az logout",
-			"if: always()",
-			"actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-			"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
-			"azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6",
-		} {
-			if !strings.Contains(text, want) {
-				t.Fatalf("%s missing %s", name, want)
-			}
-		}
-		for _, line := range strings.Split(text, "\n") {
-			trim := strings.TrimSpace(line)
-			if strings.HasPrefix(trim, "uses:") && strings.Contains(trim, "@v") {
-				t.Fatalf("%s has an unpinned action: %s", name, trim)
-			}
-		}
-		if name == "release.yml" {
-			for _, want := range []string{
-				"group: release-prod",
-				"git fetch origin main",
-				"git merge-base --is-ancestor HEAD origin/main",
-			} {
-				if !strings.Contains(text, want) {
-					t.Fatalf("%s missing %s", name, want)
-				}
-			}
-		}
-		if name == "release-test.yml" && !strings.Contains(text, "group: release-test") {
-			t.Fatal("release-test.yml missing concurrency group")
+	}
+	if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
+		t.Fatal("release.yml has a storage key, a hardcoded account, or restarts wireguard")
+	}
+	for _, line := range strings.Split(text, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "uses:") && strings.Contains(trim, "@v") {
+			t.Fatalf("release.yml has an unpinned action: %s", trim)
 		}
 	}
 	ciText := string(ci)
@@ -707,7 +695,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(script)
+	text = string(script)
 	for _, want := range []string{
 		"CGO_ENABLED=0",
 		"linux",
@@ -718,6 +706,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"buildinfo.Version",
 		"buildinfo.Build",
 		"GITHUB_RUN_NUMBER",
+		"one sequence across channels",
 		"checksums.txt",
 		"checksums.txt.asc",
 		"--detach-sign",

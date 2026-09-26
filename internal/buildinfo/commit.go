@@ -25,9 +25,10 @@ var Commit string
 var Version string
 
 // Build is a rising integer injected with -X. The publisher sets it
-// from GITHUB_RUN_NUMBER, which increases by one for each run of that
-// workflow file. The test workflow and the prod workflow do not share
-// a counter. Empty or non-numeric means 0 (a development binary).
+// from GITHUB_RUN_NUMBER of the single release workflow, so test and
+// prod share one sequence. A host that switches channel only moves to
+// a strictly newer build. Empty or non-numeric means 0 (a development
+// binary).
 //
 //	-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Build=12
 var Build string

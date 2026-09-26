@@ -11,7 +11,7 @@ The agent checks for a new binary on a channel set in `/etc/hypermesh/agent.env`
 | `test` | Builds of `main`. The commit in `release.json` is the identity. The binary version stays `0.0.0`. | `test/<release-id>/`. release-id is `<run number>-<first 12 hex chars of the commit>` (`42-0123456789ab`). The directory is not overwritten. Order is the integer `build`, not the string order of the release-id. |
 | `prod` | Tagged semver `vX.Y.Z`. A newer version installs. An older one does not. | `prod/<X.Y.Z>/`. release-id is the semver with no leading `v`. The directory is not overwritten. The publisher also refuses to move the pointer to a semver or a build number that is not strictly newer. |
 
-Workflows: `.github/workflows/release.yml` (tag `vX.Y.Z`) and `.github/workflows/release-test.yml` (push to `main`). Both run `packaging/release/publish-agent.sh`. A GitHub Release is also created so a person can download the files. The agent does not read it.
+One workflow, `.github/workflows/release.yml`, publishes both channels: a push to `main` is `test`, and a tag `vX.Y.Z` is `prod`. It runs `packaging/release/publish-agent.sh`. A GitHub Release is also created so a person can download the files. The agent does not read it.
 
 The channel pointer is a different object, outside `test/` and `prod/`:
 
@@ -31,9 +31,9 @@ Objects in `<channel>/<release-id>/`:
 - `checksums.txt.sig` and `checksums.txt.asc` (detached GPG signatures over `checksums.txt`)
 - `hypermesh-release.pub` (for an operator to install once; the agent does not trust a pubkey from the container)
 
-`build` is `GITHUB_RUN_NUMBER` for that workflow. GitHub increases it by one for each run of the workflow file. The test workflow and the prod workflow each have their own counter. ldflags set `buildinfo.Commit`, `buildinfo.Version`, and `buildinfo.Build` to the same number. A development binary has build 0.
+`build` is `GITHUB_RUN_NUMBER` of that single workflow file. GitHub increases it by one for each run, whether the run publishes test or prod. One sequence across channels: a host switching channel only moves to a strictly newer build. Separate workflow files would give prod build 3 after test build 57, and the host would refuse every prod update. ldflags set `buildinfo.Commit`, `buildinfo.Version`, and `buildinfo.Build` to the same number. A development binary has build 0.
 
-The host refuses a candidate whose signed `build` is less than or equal to its own, including an equal number. Build 0 on a candidate is not newer than a running build of 0, so it is refused. A development binary can install the first positive build. Before replacing `channels/prod.json`, the publisher reads the current `build` and `version` and fails when the new build is not greater or the new semver is not strictly greater. A missing `channels/prod.json` is the first prod publish. A later re-run of an older tag gets a higher run number; the semver check still refuses that pointer move.
+The host refuses a candidate whose signed `build` is less than or equal to its own, including an equal number, on whichever channel it is checking. Build 0 on a candidate is not newer than a running build of 0, so it is refused. A development binary can install the first positive build. Before replacing `channels/prod.json`, the publisher reads the current `build` and `version` and fails when the new build is not greater or the new semver is not strictly greater. A missing `channels/prod.json` is the first prod publish. A later re-run of an older tag gets a higher run number; the semver check still refuses that pointer move.
 
 This version does not expire a frozen old head. There is no freshness check on the signed release. A host that never sees a higher build stays on the binary it has.
 
@@ -41,7 +41,7 @@ Binaries are `CGO_ENABLED=0` builds of `./cmd/agent` for `linux/arm64` and `linu
 
 The storage account name and container name are GitHub Environment variables. This repo does not write them into the workflow or the publish script. Upload uses `az storage blob upload --auth-mode login` after `azure/login` (`allow-no-subscriptions: true`, because the release app has no subscription role). There is no storage account key in the workflow.
 
-Each release workflow has its own concurrency group (`release-prod`, `release-test`) and does not cancel a run that is already in progress. `AZURE_CONFIG_DIR` is the job temp directory. An always-run step logs `az` out and removes that directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners.
+Concurrency groups are `release-test` and `release-prod` inside that one file (`release-${{ channel }}`). A run already uploading is not cancelled. `AZURE_CONFIG_DIR` is the job temp directory. An always-run step logs `az` out and removes that directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners. Environment `release` gates the job, including the prod path. The tag-on-main check runs only for a tag.
 
 ## What the host calls
 
@@ -199,7 +199,7 @@ Variables (these are identifiers, not the signing key). Secrets of the same name
 
 The release job's token scopes are `contents: write` (the human GitHub Release) and `id-token: write` (OIDC). `azure/login` sets `allow-no-subscriptions: true` because that app has no subscription role. The workflow default and CI stay `contents: read`.
 
-Deployment protection for Environment `release` is not in this repo. A separate infra pull request limits that environment to `main` and tags matching `v*`, and a tag ruleset so only maintainers can push `v*`. The prod workflow also fetches `origin/main` and fails unless `git merge-base --is-ancestor HEAD origin/main`. The test workflow already runs on pushes to `main`.
+Deployment protection for Environment `release` is not in this repo. A separate infra pull request limits that environment to `main` and tags matching `v*`, and a tag ruleset so only maintainers can push `v*`. The prod path in `.github/workflows/release.yml` fetches `origin/main` and fails unless `git merge-base --is-ancestor HEAD origin/main`. Pushes to `main` publish the test channel from that same file.
 
 The self-hosted runner needs `gpg`, `az`, `python3`, `curl`, and `sha256sum`. Go comes from `setup-go`.
 

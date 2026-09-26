@@ -28,14 +28,16 @@
 # Login is the Azure CLI session from azure/login (GitHub OIDC).
 # This script does not take a storage account key.
 #
-# Build number is GITHUB_RUN_NUMBER. GitHub increases it by one for
-# each run of that workflow file. The test workflow and the prod
-# workflow do not share a counter. The number is written into the
-# signed release.json, the channel manifest, and the binary
-# (buildinfo.Build). The host refuses a candidate whose build is not
-# greater than its own. Before channels/prod.json is replaced, this
-# script reads the current pointer and refuses a build or a semver
-# that is not strictly newer.
+# Build number is GITHUB_RUN_NUMBER of .github/workflows/release.yml.
+# That one file publishes both channels, so test and prod share one sequence across channels.
+# A host switching channel only moves to a strictly newer build.
+# Two workflow files would each have a counter,
+# and a prod build 3 would lose to a test build 57 forever.
+# The number is written into the signed release.json, the channel
+# manifest, and the binary (buildinfo.Build). The host refuses a
+# candidate whose build is not greater than its own. Before
+# channels/prod.json is replaced, this script reads the current
+# pointer and refuses a build or a semver that is not strictly newer.
 #
 # A GitHub Release is also created so a person can download the same
 # bytes. Hosts do not read GitHub. They ask the control plane.
@@ -76,7 +78,7 @@ case "$AZURE_STORAGE_CONTAINER" in
   *[!a-z0-9-]*) echo "hypermesh release: AZURE_STORAGE_CONTAINER is not a container name" >&2; exit 1 ;;
 esac
 
-# Monotonic per workflow file, not across test and prod.
+# One sequence across channels. release.yml is the only publisher.
 build=${GITHUB_RUN_NUMBER:-}
 if ! [[ "$build" =~ ^[1-9][0-9]*$ ]]; then
   echo "hypermesh release: GITHUB_RUN_NUMBER must be a positive integer" >&2

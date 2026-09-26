@@ -2,13 +2,17 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
-# One prod publish at a time. Do not cancel a publish that is already
-# uploading; the channel pointer moves only after that run verifies.
+# One workflow file so GITHUB_RUN_NUMBER is one sequence across channels.
+# A host that switches from test to prod only moves to a strictly newer
+# build. The group still isolates test from prod: a main push does not
+# cancel a tag publish, and neither cancels a run already uploading.
 concurrency:
-  group: release-prod
+  group: release-${{ github.ref_type == 'tag' && 'prod' || 'test' }}
   cancel-in-progress: false
 
 # CI stays contents: read. Only the release job publishes.
@@ -17,8 +21,11 @@ permissions:
 
 jobs:
   release:
-    name: release
+    name: release-${{ github.ref_type == 'tag' && 'prod' || 'test' }}
     runs-on: [self-hosted, linux, x64]
+    # Environment release gates this job, including the prod path.
+    # Deployment branches (main plus v* tags) and the maintainer-only
+    # v* tag ruleset are declared in a separate infra pull request.
     environment: release
     permissions:
       contents: write
@@ -32,10 +39,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Environment protection (main plus v* tags, and a maintainer-only
-      # v* tag ruleset) is declared in a separate infra pull request.
-      # This check fails a tag that is not reachable from origin/main.
+      # Prod only. A tag that is not reachable from origin/main fails.
       - name: Require tag commit on main
+        if: github.ref_type == 'tag'
         run: |
           git fetch origin main
           git merge-base --is-ancestor HEAD origin/main
@@ -63,7 +69,7 @@ jobs:
           HYPERMESH_RELEASE_GPG_PASSPHRASE: ${{ secrets.HYPERMESH_RELEASE_GPG_PASSPHRASE }}
           AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT || secrets.AZURE_STORAGE_ACCOUNT }}
           AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_STORAGE_CONTAINER || secrets.AZURE_STORAGE_CONTAINER }}
-        run: packaging/release/publish-agent.sh prod
+        run: packaging/release/publish-agent.sh ${{ github.ref_type == 'tag' && 'prod' || 'test' }}
 
       - name: Azure logout
         if: always()
