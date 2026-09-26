@@ -29,8 +29,17 @@ const cacheIndexName = "index.json"
 // Startup ignores temps and rebuilds entries from the gguf files that
 // are actually present.
 type cacheIndex struct {
-	Loaded string       `json:"loaded,omitempty"`
-	Models []cacheModel `json:"models"`
+	Loaded  string         `json:"loaded,omitempty"`
+	Models  []cacheModel   `json:"models"`
+	Pending []cachePending `json:"pending,omitempty"`
+}
+
+// cachePending is a model a later lease_start for this catalog must mount.
+// It stays pinned until that lease starts, so a newer lab_pull cannot evict it
+// and the lease cannot start a different file.
+type cachePending struct {
+	CatalogID string `json:"catalog_id"`
+	ID        string `json:"id"`
 }
 
 type cacheModel struct {
@@ -94,22 +103,36 @@ func hexOnly(s string) bool {
 }
 
 func (a *Agent) modelCacheBudget(path string) (uint64, error) {
-	raw := strings.TrimSpace(a.cfg.ModelCacheMax)
-	if raw != "" {
-		return parseByteCount("HYPERMESH_MODEL_CACHE_MAX_BYTES", raw, 0)
-	}
-	capBytes, err := pull.CapacityBytes(path)
-	if err != nil {
-		return 0, err
-	}
+	capBytes, capErr := pull.CapacityBytes(path)
 	floor, err := a.cfg.DiskFloorBytes()
 	if err != nil {
 		return 0, err
 	}
-	if capBytes < 0 || uint64(capBytes) < floor {
-		return 0, nil
+	var bound uint64
+	if capErr == nil && capBytes >= 0 && uint64(capBytes) >= floor {
+		bound = uint64(capBytes) - floor
 	}
-	return uint64(capBytes) - floor, nil
+	raw := strings.TrimSpace(a.cfg.ModelCacheMax)
+	if raw == "" {
+		if capErr != nil {
+			return 0, capErr
+		}
+		return bound, nil
+	}
+	explicit, err := parseByteCount("HYPERMESH_MODEL_CACHE_MAX_BYTES", raw, 0)
+	if err != nil {
+		return 0, err
+	}
+	if capErr != nil {
+		return 0, capErr
+	}
+	if explicit > bound {
+		if a.log != nil {
+			a.log.Info("model cache budget clamped", "requested", explicit, "budget", bound)
+		}
+		return bound, nil
+	}
+	return explicit, nil
 }
 
 func (a *Agent) reconcileModelCache() error {
@@ -123,8 +146,44 @@ func (a *Agent) reconcileModelCache() error {
 	}
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
+	if n, freed := removeCachePartials(dir); n > 0 && a.log != nil {
+		a.log.Info("model cache cleared partials", "files", n, "bytes", freed)
+	}
 	_, err = a.reconcileCacheDirLocked(dir)
 	return err
+}
+
+// removeCachePartials deletes crash leftovers in the cache directory.
+// It runs only from startup reconcile, before the job loop, so a live
+// download's lab-pull-*.gguf is not removed. Bytes freed are the file sizes.
+func removeCachePartials(dir string) (files int, freed int64) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0
+	}
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		name := ent.Name()
+		partial := strings.HasPrefix(name, "lab-pull-") && strings.HasSuffix(name, ".gguf")
+		temp := strings.HasPrefix(name, cacheIndexName+".tmp-")
+		if !partial && !temp {
+			continue
+		}
+		info, err := ent.Info()
+		if err != nil {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			continue
+		}
+		files++
+		if info.Size() > 0 {
+			freed += info.Size()
+		}
+	}
+	return files, freed
 }
 
 func (a *Agent) reconcileCacheDirLocked(dir string) (cacheIndex, error) {
@@ -249,8 +308,38 @@ func reconcileIndex(dir string, idx cacheIndex) (cacheIndex, bool, error) {
 	if idx.Loaded != loaded {
 		changed = true
 	}
+	pending, pendChanged := reconcilePending(idx.Pending)
+	if pendChanged {
+		changed = true
+	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].ID < kept[j].ID })
-	return cacheIndex{Loaded: loaded, Models: kept}, changed, nil
+	return cacheIndex{Loaded: loaded, Models: kept, Pending: pending}, changed, nil
+}
+
+func reconcilePending(in []cachePending) ([]cachePending, bool) {
+	changed := false
+	var out []cachePending
+	seen := map[string]struct{}{}
+	for _, p := range in {
+		cat := strings.TrimSpace(p.CatalogID)
+		id, err := normalizeModelID(p.ID)
+		if err != nil || cat == "" {
+			changed = true
+			continue
+		}
+		// A missing file stays recorded. lease_start must refuse that
+		// catalog instead of mounting a different model.
+		if _, dup := seen[cat]; dup {
+			changed = true
+			continue
+		}
+		seen[cat] = struct{}{}
+		if p.CatalogID != cat || p.ID != id {
+			changed = true
+		}
+		out = append(out, cachePending{CatalogID: cat, ID: id})
+	}
+	return out, changed
 }
 
 func normalizeOptionalID(pin string) (string, error) {
@@ -338,7 +427,7 @@ func (a *Agent) planModelEviction(dest, pin string, lim pull.Limits) (pull.Limit
 	if recErr != nil {
 		return lim, &pull.DiskError{StatErr: true}
 	}
-	plan := planEviction(idx.Models, idx.Loaded, leased, id, lim.Expected, budget, free, limFloor(lim), limMargin(lim))
+	plan := planEviction(idx.Models, idx.Loaded, leased, pendingIDs(idx), id, lim.Expected, budget, free, limFloor(lim), limMargin(lim))
 	lim.Evictable = plan.Evictable
 	lim.WithEvictable = true
 	lim.Reclaim = 0
@@ -376,7 +465,7 @@ func limMargin(lim pull.Limits) uint64 {
 	return pull.DefaultMarginBytes
 }
 
-func planEviction(models []cacheModel, loaded, leased, incoming string, incomingSize int64, budget uint64, free int64, floor, margin uint64) evictionPlan {
+func planEviction(models []cacheModel, loaded, leased string, extra []string, incoming string, incomingSize int64, budget uint64, free int64, floor, margin uint64) evictionPlan {
 	loaded, _ = normalizeOptionalID(loaded)
 	leased, _ = normalizeOptionalID(leased)
 	incoming, _ = normalizeOptionalID(incoming)
@@ -387,6 +476,11 @@ func planEviction(models []cacheModel, loaded, leased, incoming string, incoming
 	}
 	if leased != "" {
 		pinned[leased] = struct{}{}
+	}
+	for _, id := range extra {
+		if id != "" {
+			pinned[id] = struct{}{}
+		}
 	}
 	var evictable int64
 	for _, m := range models {
@@ -514,7 +608,7 @@ func (a *Agent) applyEvict(dir string, victims []string) error {
 		if err != nil {
 			continue
 		}
-		if norm == idx.Loaded || norm == leased {
+		if norm == idx.Loaded || norm == leased || pendingPinned(idx, norm) {
 			continue
 		}
 		drop[norm] = struct{}{}
@@ -581,6 +675,133 @@ func (a *Agent) admitModel(pin, path string) error {
 		return err
 	}
 	return writeCacheIndex(dir, idx)
+}
+
+func (a *Agent) notePendingModel(catalog, pin string) error {
+	catalog = strings.TrimSpace(catalog)
+	id, err := normalizeModelID(pin)
+	if err != nil || catalog == "" {
+		return err
+	}
+	dir, err := modelCacheDir(a.cfg.GGUFHostPath())
+	if err != nil {
+		return err
+	}
+	a.cacheMu.Lock()
+	defer a.cacheMu.Unlock()
+	idx, err := a.reconcileCacheDirLocked(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if _, statErr := os.Stat(dir); statErr != nil {
+			return statErr
+		}
+	}
+	var next []cachePending
+	replaced := false
+	for _, p := range idx.Pending {
+		if p.CatalogID == catalog {
+			next = append(next, cachePending{CatalogID: catalog, ID: id})
+			replaced = true
+			continue
+		}
+		next = append(next, p)
+	}
+	if !replaced {
+		next = append(next, cachePending{CatalogID: catalog, ID: id})
+	}
+	idx.Pending = next
+	return writeCacheIndex(dir, idx)
+}
+
+func (a *Agent) clearPendingModel(catalog string) {
+	catalog = strings.TrimSpace(catalog)
+	if catalog == "" {
+		return
+	}
+	dir, err := modelCacheDir(a.cfg.GGUFHostPath())
+	if err != nil {
+		return
+	}
+	a.cacheMu.Lock()
+	defer a.cacheMu.Unlock()
+	idx, err := a.reconcileCacheDirLocked(dir)
+	if err != nil {
+		return
+	}
+	var next []cachePending
+	for _, p := range idx.Pending {
+		if p.CatalogID == catalog {
+			continue
+		}
+		next = append(next, p)
+	}
+	if len(next) == len(idx.Pending) {
+		return
+	}
+	idx.Pending = next
+	if err := writeCacheIndex(dir, idx); err != nil && a.log != nil {
+		a.log.Warn("model cache pending not cleared", "err", err)
+	}
+}
+
+// pendingModelFile is the cache file a lease_start for catalog must mount.
+// found is false when this catalog has no pending lab_pull. When found is
+// true and err is set, the recorded file is missing and the caller must
+// refuse rather than mount a different model.
+func (a *Agent) pendingModelFile(catalog string) (path, pin string, found bool, err error) {
+	catalog = strings.TrimSpace(catalog)
+	if catalog == "" {
+		return "", "", false, nil
+	}
+	dir, dirErr := modelCacheDir(a.cfg.GGUFHostPath())
+	if dirErr != nil {
+		return "", "", false, dirErr
+	}
+	a.cacheMu.Lock()
+	defer a.cacheMu.Unlock()
+	idx, recErr := a.reconcileCacheDirLocked(dir)
+	if recErr != nil {
+		return "", "", false, recErr
+	}
+	for _, p := range idx.Pending {
+		if p.CatalogID != catalog {
+			continue
+		}
+		file, pathErr := cacheFilePath(dir, p.ID)
+		if pathErr != nil {
+			return "", p.ID, true, pathErr
+		}
+		info, statErr := os.Stat(file)
+		if statErr != nil || info.IsDir() {
+			if statErr == nil {
+				statErr = fmt.Errorf("hypermesh: pending model is not a file")
+			}
+			return "", p.ID, true, statErr
+		}
+		return file, p.ID, true, nil
+	}
+	return "", "", false, nil
+}
+
+func pendingIDs(idx cacheIndex) []string {
+	var ids []string
+	for _, p := range idx.Pending {
+		id, err := normalizeModelID(p.ID)
+		if err != nil || id == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func pendingPinned(idx cacheIndex, id string) bool {
+	for _, p := range idx.Pending {
+		pin, err := normalizeModelID(p.ID)
+		if err == nil && pin == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) touchModelUse(pin string) {
@@ -680,7 +901,7 @@ func (a *Agent) modelCacheUsage() (used, evictable int64, ok bool) {
 			return 0, 0, false
 		}
 		used += m.Bytes
-		if m.ID == loaded || m.ID == leased {
+		if m.ID == loaded || m.ID == leased || pendingPinned(idx, m.ID) {
 			continue
 		}
 		evictable += m.Bytes

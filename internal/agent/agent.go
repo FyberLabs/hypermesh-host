@@ -832,6 +832,8 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	if strings.TrimSpace(job.SourceRef) != "" {
 		if err := a.admitModel(pin, dest); err != nil {
 			a.log.Warn("model cache admit failed", "err", err)
+		} else if err := a.notePendingModel(job.CatalogID, pin); err != nil {
+			a.log.Warn("model cache pending not saved", "err", err)
 		} else {
 			a.log.Info("model cache load", "id", strings.ToLower(pin))
 		}
@@ -987,11 +989,24 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return a.leaseStartAlready(existing)
 	}
 	gguf := a.modelForLease()
+	expected := ""
+	if path, pin, found, pendErr := a.pendingModelFile(job.CatalogID); found {
+		if pendErr != nil {
+			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: "pending model missing"}
+		}
+		gguf = path
+		expected = pin
+	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
 		reason := leaseStartFailReason(err)
 		a.log.Info("lease_start refused", "reason", reason, "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: reason}
+	}
+	if expected != "" && !strings.EqualFold(hash, expected) {
+		a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
@@ -1013,6 +1028,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: reason}
 	}
 	h.FileHash = hash
+	a.clearPendingModel(job.CatalogID)
 	a.touchModelUse(hash)
 	if strings.TrimSpace(h.FileHash) == "" {
 		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)

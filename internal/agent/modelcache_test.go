@@ -6,8 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -260,8 +263,8 @@ func TestCacheIndexIgnoresTornTempAndRecovers(t *testing.T) {
 	if got == nil || !got.LastUsed.Equal(kept) {
 		t.Fatalf("torn temp changed index: %+v", idx)
 	}
-	if _, err := os.Stat(torn); err != nil {
-		t.Fatalf("temp removed or unreadable: %v", err)
+	if _, err := os.Stat(torn); !os.IsNotExist(err) {
+		t.Fatalf("startup left torn index temp: %v", err)
 	}
 
 	if err := os.WriteFile(filepath.Join(cache, cacheIndexName), []byte("{"), 0o600); err != nil {
@@ -353,6 +356,216 @@ func TestModelCacheUseRacesHeartbeat(t *testing.T) {
 	}
 }
 
+func TestModelCacheBudgetClampsExplicitToDiskMinusFloor(t *testing.T) {
+	a, _ := newCacheAgent(t)
+	a.cfg.DiskFloor = "100"
+	gguf := a.cfg.GGUFHostPath()
+	capBytes, err := pull.CapacityBytes(gguf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	a.cfg.ModelCacheMax = strconv.FormatUint(uint64(capBytes)+1000, 10)
+	got, err := a.modelCacheBudget(gguf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := uint64(capBytes) - 100
+	if got != want {
+		t.Fatalf("budget %d want %d", got, want)
+	}
+	if !strings.Contains(buf.String(), "model cache budget clamped") {
+		t.Fatalf("clamp not logged: %s", buf.String())
+	}
+	buf.Reset()
+	a.cfg.ModelCacheMax = "50"
+	got, err = a.modelCacheBudget(gguf)
+	if err != nil || got != 50 {
+		t.Fatalf("under ceiling %d %v", got, err)
+	}
+	if strings.Contains(buf.String(), "clamped") {
+		t.Fatalf("small budget must not log a clamp: %s", buf.String())
+	}
+}
+
+func TestPendingModelIsNotEvictedAndLeaseMountsIt(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.cfg.ModelCacheMax = "200"
+	a.bindIP = "10.77.0.2/32"
+	bodyA := bytes.Repeat([]byte{'a'}, 100)
+	bodyB := bytes.Repeat([]byte{'b'}, 100)
+	bodyC := bytes.Repeat([]byte{'c'}, 100)
+	pinA, pinB, pinC := shaPin(bodyA), shaPin(bodyB), shaPin(bodyC)
+	bodies := map[string][]byte{pinA: bodyA, pinB: bodyB, pinC: bodyC}
+	a.fetchWeights = func(_ context.Context, dest, _, pin string) error {
+		return os.WriteFile(dest, bodies[pin], 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-a", pinA, 100); !res.Passed {
+		t.Fatalf("pull A: %+v", res.Result)
+	}
+	if res := pullCatalog(t, a, "cat-b", pinB, 100); !res.Passed {
+		t.Fatalf("pull B: %+v", res.Result)
+	}
+	if _, err := os.Stat(filepath.Join(cache, fileName(pinA))); err != nil {
+		t.Fatalf("A missing after B: %v", err)
+	}
+	if res := pullCatalog(t, a, "cat-c", pinC, 100); res.Passed {
+		t.Fatal("C fit by evicting the pending model")
+	}
+	if _, err := os.Stat(filepath.Join(cache, fileName(pinA))); err != nil {
+		t.Fatalf("pending A evicted: %v", err)
+	}
+	used, evictable, ok := a.modelCacheUsage()
+	if !ok || used != 200 || evictable != 0 {
+		t.Fatalf("usage used=%d evictable=%d ok=%v", used, evictable, ok)
+	}
+	var mounted string
+	var runs int
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+			for i, arg := range args {
+				if arg == "-v" && i+1 < len(args) && strings.Contains(args[i+1], "/models/model.gguf:ro") {
+					mounted = args[i+1]
+				}
+			}
+		}
+		return []byte("cid\n"), nil
+	}}
+	res := a.leaseStart(context.Background(), api.Job{
+		JobID:       "lease-a",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-a",
+		CatalogID:   "cat-a",
+		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('a', 64),
+		Runtime:     "nvidia",
+	})
+	if !res.Passed || res.ImageHash != pinA {
+		t.Fatalf("lease_start A: %+v", res)
+	}
+	if runs != 1 {
+		t.Fatalf("docker run calls %d", runs)
+	}
+	wantMount := filepath.Join(cache, fileName(pinA)) + ":/models/model.gguf:ro"
+	if mounted != wantMount {
+		t.Fatalf("mounted %q want %q", mounted, wantMount)
+	}
+	idx := readIndex(t, cache)
+	for _, p := range idx.Pending {
+		if p.CatalogID == "cat-a" {
+			t.Fatalf("pending not cleared: %+v", idx.Pending)
+		}
+	}
+}
+
+func TestLeaseStartRefusesMismatchedPendingModel(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.bindIP = "10.77.0.2/32"
+	body := bytes.Repeat([]byte{'a'}, 80)
+	pin := shaPin(body)
+	a.fetchWeights = func(_ context.Context, dest, _, _ string) error {
+		return os.WriteFile(dest, body, 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-a", pin, int64(len(body))); !res.Passed {
+		t.Fatalf("pull: %+v", res.Result)
+	}
+	if err := os.WriteFile(filepath.Join(cache, fileName(pin)), []byte("not-the-model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var starts int
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		starts++
+		return []byte("cid\n"), nil
+	}}
+	res := a.leaseStart(context.Background(), api.Job{
+		JobID:       "lease-a",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-a",
+		CatalogID:   "cat-a",
+		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('b', 64),
+		Runtime:     "nvidia",
+	})
+	if res.Passed || res.Reason != "artifact hash mismatch" {
+		t.Fatalf("lease_start: %+v", res)
+	}
+	if starts != 0 {
+		t.Fatalf("container started on mismatch")
+	}
+}
+
+func TestLeaseStartRefusesMissingPendingModel(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.bindIP = "10.77.0.2/32"
+	body := bytes.Repeat([]byte{'a'}, 80)
+	pin := shaPin(body)
+	a.fetchWeights = func(_ context.Context, dest, _, _ string) error {
+		return os.WriteFile(dest, body, 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-a", pin, int64(len(body))); !res.Passed {
+		t.Fatalf("pull: %+v", res.Result)
+	}
+	if err := os.Remove(filepath.Join(cache, fileName(pin))); err != nil {
+		t.Fatal(err)
+	}
+	var starts int
+	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
+		starts++
+		return []byte("cid\n"), nil
+	}}
+	res := a.leaseStart(context.Background(), api.Job{
+		JobID:       "lease-a",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-a",
+		CatalogID:   "cat-a",
+		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('c', 64),
+		Runtime:     "nvidia",
+	})
+	if res.Passed || res.Reason != "pending model missing" {
+		t.Fatalf("lease_start: %+v", res)
+	}
+	if starts != 0 {
+		t.Fatal("container started without the pending model")
+	}
+}
+
+func TestStartupRemovesCachePartials(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	partial := bytes.Repeat([]byte{'p'}, 40)
+	if err := os.WriteFile(filepath.Join(cache, "lab-pull-deadbeef.gguf"), partial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "index.json.tmp-123"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keep := bytes.Repeat([]byte{'k'}, 10)
+	id := seedCachedModel(t, cache, keep, time.Now().UTC())
+	var buf bytes.Buffer
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	if err := a.reconcileModelCache(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "lab-pull-deadbeef.gguf")); !os.IsNotExist(err) {
+		t.Fatalf("partial remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "index.json.tmp-123")); !os.IsNotExist(err) {
+		t.Fatalf("index temp remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, fileName(id))); err != nil {
+		t.Fatalf("real model removed: %v", err)
+	}
+	log := buf.String()
+	if !strings.Contains(log, "model cache cleared partials") || !strings.Contains(log, "bytes=41") {
+		t.Fatalf("log %s", log)
+	}
+}
+
 func TestModelCacheBudgetDefaultsToCapacityMinusFloor(t *testing.T) {
 	a, _ := newCacheAgent(t)
 	a.cfg.ModelCacheMax = ""
@@ -427,11 +640,16 @@ func newCacheAgent(t *testing.T) (*Agent, string) {
 
 func pullModel(t *testing.T, a *Agent, pin string, size int64) jobOutcome {
 	t.Helper()
+	return pullCatalog(t, a, "cache-model", pin, size)
+}
+
+func pullCatalog(t *testing.T, a *Agent, catalog, pin string, size int64) jobOutcome {
+	t.Helper()
 	return a.runJob(context.Background(), api.Job{
-		JobID:       "lab-pull-cache",
+		JobID:       "lab-pull-" + catalog,
 		Kind:        api.KindLabPull,
 		DeviceID:    testDevice,
-		CatalogID:   "cache-model",
+		CatalogID:   catalog,
 		ImageDigest: pin,
 		SourceRef:   "bartowski/Llama-3.1-8B-Instruct-GGUF@main/model.gguf",
 		SizeBytes:   size,
