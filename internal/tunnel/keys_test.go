@@ -228,6 +228,14 @@ func TestSameWGPrivateKeyClamp(t *testing.T) {
 	if sameWGPrivateKey("not-a-key", "also-not-a-key") {
 		t.Fatal("different malformed keys matched")
 	}
+	// The same junk on both sides is still not a key, so the agent applies.
+	if sameWGPrivateKey("not-a-key", "not-a-key") || sameWGKey("not-a-key", "not-a-key") {
+		t.Fatal("identical malformed keys must not match")
+	}
+	short := base64.StdEncoding.EncodeToString(make([]byte, 31))
+	if sameWGPrivateKey(short, short) || sameWGKey(short, short) {
+		t.Fatal("identical short keys must not match")
+	}
 }
 
 // forcedUnclampedScalar is 32 random bytes with the bits the X25519 clamp

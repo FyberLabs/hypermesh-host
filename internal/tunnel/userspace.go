@@ -309,18 +309,18 @@ func sameWGPrivateKey(a, b string) bool {
 	return compareWGKey(a, b, true)
 }
 
+// compareWGKey decodes both sides, requires 32 bytes, and compares in constant
+// time. The same non-key on both sides does not match, so the agent applies.
+// clamp is only for private keys; a public key is a point.
 func compareWGKey(a, b string, clamp bool) bool {
 	a = strings.TrimSpace(a)
 	b = strings.TrimSpace(b)
 	if a == "" || b == "" || a == "(none)" || b == "(none)" {
 		return false
 	}
-	if a == b {
-		return true
-	}
 	ab, aok := decodeWGKey(a)
 	bb, bok := decodeWGKey(b)
-	if !aok || !bok {
+	if !aok || !bok || len(ab) != 32 || len(bb) != 32 {
 		return false
 	}
 	if clamp {

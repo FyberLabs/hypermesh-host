@@ -164,7 +164,7 @@ func TestUserspaceConfigChangeApplies(t *testing.T) {
 
 func TestUserspaceMatchingHandshakeDoesNotReset(t *testing.T) {
 	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
-	sess := allocated()
+	sess := withRealKeys(t, allocated())
 	link := newScriptedLink(sess, now)
 	r := newUserspaceRunner(t, link, now)
 	if err := r.Apply(context.Background(), sess); err != nil {
@@ -375,7 +375,7 @@ func TestUserspaceAllowedIPsChangeUpdatesRoutes(t *testing.T) {
 // and the current AllowedIPs prefix is installed.
 func TestUserspaceReconcileKeepsKernelAndLinkLocal(t *testing.T) {
 	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
-	sess := allocated()
+	sess := withRealKeys(t, allocated())
 	sess.AllowedIPs = "10.88.0.0/24"
 	sess.ClientAddress = "10.77.0.3/24"
 	link := newScriptedLink(sess, now)
@@ -514,6 +514,23 @@ func hasCIDR(list []string, cidr string) bool {
 		}
 	}
 	return false
+}
+
+// withRealKeys replaces the placeholder key strings. A non-key does not
+// compare equal, even to itself, so a skip test has to use real scalars.
+func withRealKeys(t *testing.T, sess Session) Session {
+	t.Helper()
+	priv, _, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pub, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.PeerPrivateKey = priv
+	sess.ServerPublicKey = pub
+	return sess
 }
 
 func stripPad(t *testing.T, std string) string {

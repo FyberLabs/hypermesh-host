@@ -223,12 +223,16 @@ func peerLogAgent(t *testing.T, now time.Time, unchanged bool) (*Agent, *bytes.B
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, serverPub, err := tunnel.GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sess := api.TunnelSession{
 		TunnelID:        "tun-1",
 		LeaseID:         "lease-1",
 		Status:          api.TunnelAllocated,
 		Endpoint:        "198.51.100.10:51820",
-		ServerPublicKey: "serverpub",
+		ServerPublicKey: serverPub,
 		PeerPublicKey:   pub,
 		AllowedIPs:      "10.77.0.0/24",
 		ClientAddress:   "10.77.0.3/32",
