@@ -24,7 +24,9 @@ func (a *Agent) syncAndRecord(ctx context.Context) {
 	a.recordSync(err)
 	if err != nil {
 		a.log.Warn("tunnel sync failed", "err", err)
+		return
 	}
+	a.notePlaneReachable()
 }
 
 func (a *Agent) recordSync(err error) {
@@ -96,6 +98,7 @@ func (a *Agent) fillHealth(ctx context.Context, h *api.HostHealth) {
 			a.log.Warn("tunnel health snapshot failed", "err", err)
 		} else {
 			h.TunnelState = snap.State
+			a.observeTunnel(snap.State)
 			h.HandshakeAgeS = copyInt(snap.HandshakeAgeS)
 			h.WGPID = copyInt(snap.PID)
 			h.WGPort = copyInt(snap.ListenPort)

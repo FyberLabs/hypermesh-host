@@ -72,18 +72,31 @@ type Agent struct {
 	// headLength is HTTP HEAD Content-Length for a download URL.
 	// Nil uses pull.HTTPHeadLength. Tests stub this so they do not dial.
 	headLength func(ctx context.Context, rawURL string) (int64, error)
+	// hbWait replaces the sleep between heartbeats. Nil uses a timer.
+	// interrupt is true while the previous beat failed, so a reconnect
+	// can return early. Tests record the delay and return without sleeping.
+	hbWait func(ctx context.Context, d time.Duration, interrupt bool) bool
+	// hbRand is in [0, 1) and drives backoff jitter. Nil uses math/rand.
+	hbRand func() float64
+	hbWake chan struct{}
 
-	leaseMu    sync.RWMutex
-	sellMu     sync.Mutex
-	healthMu   sync.Mutex
-	lastSyncAt time.Time
-	haveSync   bool
-	syncClass  string
-	syncHTTP   int
-	hbOK       uint64
-	hbFail     map[string]uint64
-	syncOK     uint64
-	syncFail   map[string]uint64
+	leaseMu  sync.RWMutex
+	sellMu   sync.Mutex
+	healthMu sync.Mutex
+	hbStreak int
+	// hbHoldUntil is the end of the current failure backoff or
+	// Retry-After. An immediate beat waits until this instant.
+	hbHoldUntil time.Time
+	tunnelSeen  string
+	bindSeen    string
+	lastSyncAt  time.Time
+	haveSync    bool
+	syncClass   string
+	syncHTTP    int
+	hbOK        uint64
+	hbFail      map[string]uint64
+	syncOK      uint64
+	syncFail    map[string]uint64
 }
 
 const certLeaseID = "cert-bench"
@@ -135,6 +148,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		tunnels: wg,
 		keyDir:  keyDirFor(cfg),
 		log:     log,
+		hbWake:  make(chan struct{}, 1),
 	}, nil
 }
 
@@ -170,19 +184,35 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) heartbeatLoop(ctx context.Context) {
-	if err := a.heartbeat(ctx); err != nil {
-		a.log.Warn("heartbeat failed", "err", err)
-	}
-	ticker := time.NewTicker(a.cfg.HeartbeatEvery)
-	defer ticker.Stop()
+	// A failed beat retries with backoff. A success waits HeartbeatEvery.
+	// Reconnect and a successful job-loop call can ask for a beat, but
+	// not before the backoff or Retry-After deadline.
+	fails := 0
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		case <-ticker.C:
-			if err := a.heartbeat(ctx); err != nil {
-				a.log.Warn("heartbeat failed", "err", err)
+		}
+		err := a.heartbeat(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			fails++
+			a.setHBStreak(fails)
+			a.log.Warn("heartbeat failed", "err", err)
+			delay := a.heartbeatBackoff(fails, err)
+			a.armHeartbeatHold(delay)
+			if !a.waitHeartbeat(ctx, delay, true) {
+				return
 			}
+			continue
+		}
+		fails = 0
+		a.setHBStreak(0)
+		a.clearHeartbeatHold()
+		a.drainHeartbeatWake()
+		if !a.waitHeartbeat(ctx, a.cfg.HeartbeatEvery, false) {
+			return
 		}
 	}
 }
@@ -463,6 +493,7 @@ func (a *Agent) tunnelGone(ctx context.Context) error {
 func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv string) error {
 	a.loggedRevoked = false
 	a.bindIP = sess.ClientAddress
+	a.observeBind(sess.ClientAddress)
 	a.refreshCompletions()
 	ts := tunnel.Session{
 		TunnelID:        sess.TunnelID,
@@ -538,6 +569,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.notePlaneReachable()
 	if job == nil {
 		return nil
 	}
