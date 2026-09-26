@@ -17,6 +17,7 @@ Go 1.22+.
 ```bash
 go test ./...
 go build -ldflags "-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=$(git rev-parse HEAD)" -o hypermesh-agent ./cmd/agent
+go build -o hypermesh-mhs-mcp ./cmd/hypermesh-mhs-mcp
 go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
 ```
 
@@ -198,9 +199,11 @@ Leave `/etc/hypermesh/agent.env` and `/var/lib/hypermesh/device.json` alone.
 cmd/agent             host process (hypermesh-agent)
 cmd/hypermesh-deploy  AGX preflight, configure, connect
 cmd/hypermesh-supervisor  supervisor (outside, host, renter)
+cmd/hypermesh-mhs-mcp     stdio MCP stub for host / MHS device tools (scaffold)
 internal/api        locked HTTP client (agent routes + optional enroll-token helper)
 internal/pathb      thin-v1 (telem + optional local completions; path_b fails on reboot)
 internal/runtime    NVIDIA Container Runtime start/stop; HIP / Metal scaffolds (gated)
+internal/mhs        host MCP scaffold (list_devices / device_status stubs; no CP)
 internal/tunnel     WireGuard apply / teardown
 internal/telem      image hash, nvpmodel, thermals, uptime
 internal/metrics    loopback Prometheus text /metrics
@@ -213,6 +216,8 @@ deploy/seeed-j4012  Super J4012 first-boot and overlay
 deploy/rocm         AMD ROCm host-image notes (scaffold)
 deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 ```
+
+`hypermesh-mhs-mcp` is a line-delimited stdio MCP stub (`tools/list` returns `list_devices` and `device_status`; calls return not-implemented). It does not enroll, lease, or call the control plane. Wire real host device I/O later; this is not the renter-laptop tool MCP path.
 
 ## Out of scope here
 
