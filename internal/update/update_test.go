@@ -37,33 +37,46 @@ func TestParseChannel(t *testing.T) {
 }
 
 func TestDecide(t *testing.T) {
+	newer := func(ch, ver, commit string) Manifest {
+		return Manifest{Channel: ch, Version: ver, Commit: commit, Build: 2}
+	}
 	cases := []struct {
-		name    string
-		channel string
-		ver     string
-		commit  string
-		man     Manifest
-		busy    bool
-		want    Action
+		name     string
+		channel  string
+		ver      string
+		commit   string
+		curBuild int
+		badBuild int
+		man      Manifest
+		busy     bool
+		want     Action
 	}{
-		{"test same commit", ChannelTest, "", "abc", Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "ABC"}, false, ActionSkip},
-		{"test new commit", ChannelTest, "0.0.0", "old", Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new"}, false, ActionInstall},
-		{"test busy", ChannelTest, "0.0.0", "old", Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new"}, true, ActionDefer},
-		{"test missing commit", ChannelTest, "", "", Manifest{Channel: ChannelTest, Version: "0.0.0"}, false, ActionReject},
-		{"prod upgrade", ChannelProd, "1.2.2", "c", Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "d"}, false, ActionInstall},
-		{"prod same", ChannelProd, "1.2.3", "c", Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "d"}, false, ActionSkip},
-		{"prod no downgrade", ChannelProd, "1.3.0", "c", Manifest{Channel: ChannelProd, Version: "1.2.9", Commit: "d"}, false, ActionSkip},
-		{"prod first", ChannelProd, "", "dev", Manifest{Channel: ChannelProd, Version: "1.0.0", Commit: "d"}, false, ActionInstall},
-		{"prod busy", ChannelProd, "1.0.0", "c", Manifest{Channel: ChannelProd, Version: "1.1.0", Commit: "d"}, true, ActionDefer},
-		{"prod bad version", ChannelProd, "1.0.0", "c", Manifest{Channel: ChannelProd, Version: "1.0", Commit: "d"}, false, ActionReject},
-		{"channel mismatch", ChannelProd, "1.0.0", "c", Manifest{Channel: ChannelTest, Version: "1.2.0", Commit: "d"}, false, ActionReject},
+		{"test same commit", ChannelTest, "", "abc", 1, 0, newer(ChannelTest, "0.0.0", "ABC"), false, ActionSkip},
+		{"test new commit", ChannelTest, "0.0.0", "old", 1, 0, newer(ChannelTest, "0.0.0", "new"), false, ActionInstall},
+		{"test busy", ChannelTest, "0.0.0", "old", 1, 0, newer(ChannelTest, "0.0.0", "new"), true, ActionDefer},
+		{"test missing commit", ChannelTest, "", "", 1, 0, newer(ChannelTest, "0.0.0", ""), false, ActionReject},
+		{"prod upgrade", ChannelProd, "1.2.2", "c", 1, 0, newer(ChannelProd, "1.2.3", "d"), false, ActionInstall},
+		{"prod same", ChannelProd, "1.2.3", "c", 1, 0, newer(ChannelProd, "1.2.3", "d"), false, ActionSkip},
+		{"prod no downgrade", ChannelProd, "1.3.0", "c", 1, 0, newer(ChannelProd, "1.2.9", "d"), false, ActionSkip},
+		{"prod first", ChannelProd, "", "dev", 0, 0, Manifest{Channel: ChannelProd, Version: "1.0.0", Commit: "d", Build: 1}, false, ActionInstall},
+		{"prod busy", ChannelProd, "1.0.0", "c", 1, 0, newer(ChannelProd, "1.1.0", "d"), true, ActionDefer},
+		{"prod bad version", ChannelProd, "1.0.0", "c", 1, 0, newer(ChannelProd, "1.0", "d"), false, ActionReject},
+		{"channel mismatch", ChannelProd, "1.0.0", "c", 1, 0, Manifest{Channel: ChannelTest, Version: "1.2.0", Commit: "d", Build: 9}, false, ActionReject},
+		{"older build", ChannelTest, "0.0.0", "old", 5, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 4}, false, ActionReject},
+		{"equal build", ChannelTest, "0.0.0", "old", 5, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 5}, false, ActionReject},
+		{"zero build", ChannelTest, "0.0.0", "old", 0, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new"}, false, ActionReject},
+		{"rolled back build", ChannelTest, "0.0.0", "old", 3, 5, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "bad", Build: 5}, false, ActionSkip},
+		{"after rolled back build", ChannelTest, "0.0.0", "old", 3, 5, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 6}, false, ActionInstall},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := Decide(tc.channel, tc.ver, tc.commit, tc.man, tc.busy)
+			got := Decide(tc.channel, tc.ver, tc.commit, tc.curBuild, tc.badBuild, tc.man, tc.busy)
 			if got.Action != tc.want {
 				t.Fatalf("action %s want %s (%s)", got.Action, tc.want, got.Reason)
+			}
+			if tc.want != ActionInstall && got.Action == ActionInstall {
+				t.Fatal("refused build was installed")
 			}
 		})
 	}
@@ -185,7 +198,7 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := []byte("#!/new-agent")
-	man := Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	man := Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Build: 2}
 	manRaw, err := json.Marshal(man)
 	if err != nil {
 		t.Fatal(err)
@@ -402,6 +415,90 @@ func TestWatchRollbackAndConfirm(t *testing.T) {
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("marker still present")
 	}
+	if _, err := os.Stat(filepath.Join(dir, BadName)); !os.IsNotExist(err) {
+		t.Fatal("build 0 was recorded as a rolled-back build")
+	}
+}
+
+func TestRollbackSkipPersists(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, MarkerName)
+	dest := filepath.Join(dir, "hypermesh-agent")
+	if err := os.WriteFile(dest, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backup := dest + ".pre-1.0.0"
+	if err := os.WriteFile(backup, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Unix(1_700_000_000, 0)
+	if err := WriteMarker(marker, Marker{
+		Binary: dest, Backup: backup, Version: "1.0.1", Deadline: deadline,
+		Build: 9, ReleaseID: "1.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	Watch(context.Background(), WatchConfig{
+		MarkerPath:  marker,
+		Interval:    time.Millisecond,
+		HeartbeatOK: func() uint64 { return 0 },
+		Baseline:    0,
+		Now:         func() time.Time { return deadline },
+		Rollback:    func() error { return RollbackFile(dest, backup) },
+		Exit:        func(int) {},
+	})
+	got, err := ReadBadBuild(filepath.Join(dir, BadName))
+	if err != nil || got != 9 {
+		t.Fatalf("bad build %d %v", got, err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, BadName))
+	if err != nil || !strings.Contains(string(body), "release_id=1.0.1") {
+		t.Fatalf("bad file %q %v", body, err)
+	}
+	plan := Decide(ChannelTest, "0.0.0", "old", 3, got, Manifest{
+		Channel: ChannelTest, Version: "0.0.0", Commit: "rolled", Build: 9,
+	}, false)
+	if plan.Action != ActionSkip {
+		t.Fatalf("rolled-back build action %s", plan.Action)
+	}
+	plan = Decide(ChannelTest, "0.0.0", "old", 3, got, Manifest{
+		Channel: ChannelTest, Version: "0.0.0", Commit: "newer", Build: 10,
+	}, false)
+	if plan.Action != ActionInstall {
+		t.Fatalf("newer than rolled-back build action %s", plan.Action)
+	}
+
+	// The ExecStartPre path records the same file.
+	dir2 := t.TempDir()
+	bin := filepath.Join(dir2, "hypermesh-agent")
+	prev := bin + ".pre-1.0.0"
+	if err := os.WriteFile(bin, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prev, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pending := fmt.Sprintf("binary=%s\nbackup=%s\nversion=1.0.1\ndeadline=1\nbuild=9\nrelease_id=1.0.1\n", bin, prev)
+	if err := os.WriteFile(filepath.Join(dir2, MarkerName), []byte(pending), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join("..", "..", "deploy", "lib", "update-rollback")
+	cmd := exec.Command("/bin/sh", script)
+	cmd.Env = append(os.Environ(), "HYPERMESH_STATE_DIR="+dir2)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rollback script: %v %s", err, out)
+	}
+	restored, err := os.ReadFile(bin)
+	if err != nil || string(restored) != "old" {
+		t.Fatalf("script restored %q %v", restored, err)
+	}
+	scriptBad, err := os.ReadFile(filepath.Join(dir2, BadName))
+	if err != nil || !strings.Contains(string(scriptBad), "build=9") {
+		t.Fatalf("script bad file %q %v", scriptBad, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir2, MarkerName)); !os.IsNotExist(err) {
+		t.Fatal("script left the marker")
+	}
 }
 
 func TestFetchRedactsSASAndCapsSize(t *testing.T) {
@@ -459,6 +556,37 @@ func TestGPGVerifyKeyList(t *testing.T) {
 	}
 	if err := GPGVerify(payload, sig2, pub2); err != nil {
 		t.Fatalf("new key alone: %v", err)
+	}
+}
+
+func TestValidSigFingerprint(t *testing.T) {
+	const trustedFP = "0123456789ABCDEF0123456789ABCDEF01234567"
+	const otherFP = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	trusted := map[string]struct{}{trustedFP: {}}
+	valid := "[GNUPG:] GOODSIG " + trustedFP + " Hypermesh\n" +
+		"[GNUPG:] VALIDSIG " + trustedFP + " 2026-09-26 1 0 1 0 1 10 0 " + trustedFP + "\n"
+	if !signatureTrusted(valid, trusted) {
+		t.Fatal("VALIDSIG from a trusted fingerprint was rejected")
+	}
+	goodOnly := "[GNUPG:] GOODSIG " + trustedFP + " Hypermesh\n"
+	if signatureTrusted(goodOnly, trusted) {
+		t.Fatal("GOODSIG without VALIDSIG was accepted")
+	}
+	untrusted := "[GNUPG:] VALIDSIG " + otherFP + " 2026-09-26 1 0 1 0 1 10 0 " + otherFP + "\n"
+	if signatureTrusted(untrusted, trusted) {
+		t.Fatal("VALIDSIG from an untrusted fingerprint was accepted")
+	}
+	primary := "[GNUPG:] VALIDSIG " + otherFP + " 2026-09-26 1 0 1 0 1 10 0 " + trustedFP + "\n"
+	if !signatureTrusted(primary, trusted) {
+		t.Fatal("VALIDSIG whose primary key is trusted was rejected")
+	}
+	if signatureTrusted(valid, nil) {
+		t.Fatal("empty trust set accepted a signature")
+	}
+	colons := "pub:u:255:1:1:1:::u:::sc\nfpr:::::::::0123456789abcdef0123456789abcdef01234567:\n"
+	got := parseColonFingerprints(colons)
+	if _, ok := got[trustedFP]; !ok {
+		t.Fatalf("fingerprints %v", got)
 	}
 }
 
@@ -537,6 +665,39 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
 			t.Fatalf("%s has a storage key, a hardcoded account, or restarts wireguard", name)
 		}
+		for _, want := range []string{
+			"cancel-in-progress: false",
+			"AZURE_CONFIG_DIR: ${{ runner.temp }}/az",
+			"az logout",
+			"if: always()",
+			"actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+			"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+			"azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing %s", name, want)
+			}
+		}
+		for _, line := range strings.Split(text, "\n") {
+			trim := strings.TrimSpace(line)
+			if strings.HasPrefix(trim, "uses:") && strings.Contains(trim, "@v") {
+				t.Fatalf("%s has an unpinned action: %s", name, trim)
+			}
+		}
+		if name == "release.yml" {
+			for _, want := range []string{
+				"group: release-prod",
+				"git fetch origin main",
+				"git merge-base --is-ancestor HEAD origin/main",
+			} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s missing %s", name, want)
+				}
+			}
+		}
+		if name == "release-test.yml" && !strings.Contains(text, "group: release-test") {
+			t.Fatal("release-test.yml missing concurrency group")
+		}
 	}
 	ciText := string(ci)
 	if strings.Contains(ciText, "id-token") {
@@ -555,6 +716,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"./cmd/agent",
 		"buildinfo.Commit",
 		"buildinfo.Version",
+		"buildinfo.Build",
+		"GITHUB_RUN_NUMBER",
 		"checksums.txt",
 		"checksums.txt.asc",
 		"--detach-sign",
@@ -682,17 +845,52 @@ func TestReleaseIDAndManifestOrder(t *testing.T) {
 	if _, err := exec.Command("bash", "-c", `source "$1"; release_id_prod "$2"`, "bash", layout, "v1.2.3").CombinedOutput(); err == nil {
 		t.Fatal("prod release id accepted a leading v")
 	}
+	pointer := func(args ...string) error {
+		t.Helper()
+		cmdArgs := []string{"-c", `source "$1"; prod_pointer_ok "$2" "$3" "$4" "$5"`, "bash", layout}
+		cmdArgs = append(cmdArgs, args...)
+		for len(cmdArgs) < 9 {
+			cmdArgs = append(cmdArgs, "")
+		}
+		out, err := exec.Command("bash", cmdArgs...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err := pointer("1.0.0", "1", "", ""); err != nil {
+		t.Fatalf("first prod publish: %v", err)
+	}
+	if err := pointer("1.2.4", "10", "1.2.3", "9"); err != nil {
+		t.Fatalf("newer prod publish: %v", err)
+	}
+	if err := pointer("1.2.3", "9", "1.2.3", "9"); err == nil {
+		t.Fatal("equal prod build was accepted")
+	}
+	if err := pointer("1.2.4", "8", "1.2.3", "9"); err == nil {
+		t.Fatal("older prod build was accepted")
+	}
+	if err := pointer("1.2.3", "20", "1.2.3", "9"); err == nil {
+		t.Fatal("same semver with a higher build was accepted")
+	}
+	if err := pointer("1.2.2", "20", "1.2.3", "9"); err == nil {
+		t.Fatal("older semver with a higher build was accepted")
+	}
 
 	script, err := os.ReadFile(filepath.Join("..", "..", "packaging", "release", "publish-agent.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(script)
+	pointerAt := strings.Index(text, "# publish-order: prod-pointer")
 	artifacts := strings.Index(text, "# publish-order: artifacts")
 	verify := strings.Index(text, "# publish-order: verify")
 	manifest := strings.Index(text, "# publish-order: channel-manifest")
-	if artifacts < 0 || verify < artifacts || manifest < verify {
-		t.Fatalf("publish order artifacts=%d verify=%d manifest=%d", artifacts, verify, manifest)
+	if pointerAt < 0 || artifacts < pointerAt || verify < artifacts || manifest < verify {
+		t.Fatalf("publish order pointer=%d artifacts=%d verify=%d manifest=%d", pointerAt, artifacts, verify, manifest)
+	}
+	if !strings.Contains(text, "prod_pointer_ok") || !strings.Contains(text, "channels/prod.json") {
+		t.Fatal("prod pointer check is missing")
 	}
 	if !strings.Contains(text, "channels/${channel}.json") || !strings.Contains(text, "--overwrite false") {
 		t.Fatal("channel manifest path or immutable upload is missing")
@@ -706,7 +904,7 @@ func TestStaleBlobDoesNotInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := []byte("#!/new-agent")
-	man := Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	man := Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Build: 2}
 	manRaw, err := json.Marshal(man)
 	if err != nil {
 		t.Fatal(err)

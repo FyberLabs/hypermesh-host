@@ -89,9 +89,11 @@ func SelectBinary(checksums, arch string) (string, error) {
 
 // GPGVerify checks a detached signature over checksums. pubkey is one
 // or more ASCII-armored public keys concatenated in one file (the
-// rotation overlap). gpg accepts the signature when any imported key
-// made it. A missing gpg, a bad key, or a bad signature is a rejection.
-// The agent does not fetch this file from the release.
+// rotation overlap). A signature counts only when gpg prints VALIDSIG
+// and that fingerprint is one of the keys just imported. The process
+// exit code alone is not enough. A missing gpg, a bad key, or a bad
+// signature is a rejection. The agent does not fetch this file from
+// the release.
 func GPGVerify(checksums, sig, pubkey []byte) error {
 	if len(checksums) == 0 || len(sig) == 0 || len(pubkey) == 0 {
 		return fmt.Errorf("%w: checksums, signature, and pubkey are required", ErrRejected)
@@ -127,19 +129,95 @@ func GPGVerify(checksums, sig, pubkey []byte) error {
 	if err := gpg(gnupg, "--no-default-keyring", "--keyring", ring, "--import", pubPath); err != nil {
 		return fmt.Errorf("%w: pubkey was not imported", ErrRejected)
 	}
-	if err := gpg(gnupg, "--no-default-keyring", "--keyring", ring, "--verify", sigPath, sumPath); err != nil {
+	trusted, err := importedFingerprints(gnupg, ring)
+	if err != nil || len(trusted) == 0 {
+		return fmt.Errorf("%w: pubkey was not imported", ErrRejected)
+	}
+	status, _ := gpgStatus(gnupg, "--no-default-keyring", "--keyring", ring, "--status-fd", "1", "--verify", sigPath, sumPath)
+	if !signatureTrusted(status, trusted) {
 		return fmt.Errorf("%w: checksum signature", ErrRejected)
 	}
 	return nil
 }
 
 func gpg(home string, args ...string) error {
+	_, err := gpgStatus(home, args...)
+	return err
+}
+
+func gpgStatus(home string, args ...string) (string, error) {
 	cmd := exec.Command("gpg", append([]string{"--batch", "--homedir", home}, args...)...)
 	cmd.Env = append(os.Environ(), "GNUPGHOME="+home)
-	// gpg writes key ids to stderr. Do not return that text: it is not
-	// secret, but it is not useful in the agent log either.
-	if err := cmd.Run(); err != nil {
-		return err
+	// Status is on stdout (--status-fd 1). Key ids on stderr stay out
+	// of the error returned to the agent log.
+	out, err := cmd.Output()
+	return string(out), err
+}
+
+func importedFingerprints(home, ring string) (map[string]struct{}, error) {
+	out, err := gpgStatus(home, "--no-default-keyring", "--keyring", ring, "--with-colons", "--fingerprint")
+	set := parseColonFingerprints(out)
+	if len(set) == 0 {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("no fingerprints")
 	}
-	return nil
+	return set, nil
+}
+
+// parseColonFingerprints reads field 10 of GnuPG fpr records.
+func parseColonFingerprints(colons string) map[string]struct{} {
+	set := map[string]struct{}{}
+	for _, line := range strings.Split(colons, "\n") {
+		parts := strings.Split(line, ":")
+		if len(parts) < 10 || parts[0] != "fpr" {
+			continue
+		}
+		fp := normalizeFingerprint(parts[9])
+		if fp != "" {
+			set[fp] = struct{}{}
+		}
+	}
+	return set
+}
+
+// signatureTrusted is true when status contains a VALIDSIG line whose
+// signing fingerprint or primary-key fingerprint is in trusted.
+// GOODSIG without VALIDSIG is not enough.
+func signatureTrusted(status string, trusted map[string]struct{}) bool {
+	if len(trusted) == 0 {
+		return false
+	}
+	ok := false
+	for _, line := range strings.Split(status, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || fields[0] != "[GNUPG:]" || fields[1] != "VALIDSIG" {
+			continue
+		}
+		if fingerprintTrusted(fields[2], trusted) {
+			ok = true
+			continue
+		}
+		primary := fields[len(fields)-1]
+		if primary != fields[2] && fingerprintTrusted(primary, trusted) {
+			ok = true
+			continue
+		}
+		return false
+	}
+	return ok
+}
+
+func fingerprintTrusted(fp string, trusted map[string]struct{}) bool {
+	fp = normalizeFingerprint(fp)
+	if len(fp) != 40 && len(fp) != 64 {
+		return false
+	}
+	_, ok := trusted[fp]
+	return ok
+}
+
+func normalizeFingerprint(fp string) string {
+	return strings.ToUpper(strings.TrimSpace(fp))
 }

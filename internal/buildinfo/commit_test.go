@@ -20,6 +20,23 @@ func TestCurrentVersionStripsV(t *testing.T) {
 	}
 }
 
+func TestCurrentBuild(t *testing.T) {
+	prev := Build
+	t.Cleanup(func() { Build = prev })
+	Build = "12"
+	if got := CurrentBuild(); got != 12 {
+		t.Fatalf("build %d", got)
+	}
+	Build = ""
+	if got := CurrentBuild(); got != 0 {
+		t.Fatalf("empty build %d", got)
+	}
+	Build = "nope"
+	if got := CurrentBuild(); got != 0 {
+		t.Fatalf("invalid build %d", got)
+	}
+}
+
 func TestCurrentFallbackIsNonEmpty(t *testing.T) {
 	prev := Commit
 	t.Cleanup(func() { Commit = prev })

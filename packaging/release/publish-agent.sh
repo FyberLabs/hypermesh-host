@@ -25,6 +25,15 @@
 # Login is the Azure CLI session from azure/login (GitHub OIDC).
 # This script does not take a storage account key.
 #
+# Build number is GITHUB_RUN_NUMBER. GitHub increases it by one for
+# each run of that workflow file. The test workflow and the prod
+# workflow do not share a counter. The number is written into the
+# signed release.json, the channel manifest, and the binary
+# (buildinfo.Build). The host refuses a candidate whose build is not
+# greater than its own. Before channels/prod.json is replaced, this
+# script reads the current pointer and refuses a build or a semver
+# that is not strictly newer.
+#
 # A GitHub Release is also created so a person can download the same
 # bytes. Hosts do not read GitHub. They ask the control plane.
 #
@@ -64,6 +73,13 @@ case "$AZURE_STORAGE_CONTAINER" in
   *[!a-z0-9-]*) echo "hypermesh release: AZURE_STORAGE_CONTAINER is not a container name" >&2; exit 1 ;;
 esac
 
+# Monotonic per workflow file, not across test and prod.
+build=${GITHUB_RUN_NUMBER:-}
+if ! [[ "$build" =~ ^[1-9][0-9]*$ ]]; then
+  echo "hypermesh release: GITHUB_RUN_NUMBER must be a positive integer" >&2
+  exit 1
+fi
+
 command -v go >/dev/null
 command -v gpg >/dev/null
 command -v az >/dev/null
@@ -97,7 +113,7 @@ gnupg=""
 cleanup() { rm -rf "$dist" ${gnupg:+"$gnupg"}; }
 trap cleanup EXIT
 
-ldflags="-s -w -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=${GITHUB_SHA} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Version=${version}"
+ldflags="-s -w -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=${GITHUB_SHA} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Version=${version} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Build=${build}"
 for arch in arm64 amd64; do
   (
     cd "$root"
@@ -108,8 +124,20 @@ for arch in arm64 amd64; do
   )
 done
 
-printf '{"channel":"%s","version":"%s","commit":"%s"}\n' \
-  "$channel" "$version" "$GITHUB_SHA" > "${dist}/release.json"
+python3 - "$channel" "$version" "$GITHUB_SHA" "$build" "$release_id" "${dist}/release.json" <<'PY'
+import json, sys
+channel, version, commit, build, release_id, out = sys.argv[1:]
+doc = {
+    "channel": channel,
+    "version": version,
+    "commit": commit,
+    "build": int(build),
+    "release_id": release_id,
+}
+with open(out, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh, separators=(",", ":"))
+    fh.write("\n")
+PY
 
 (
   cd "$dist"
@@ -191,22 +219,24 @@ verify_uploaded() {
 }
 
 write_channel_manifest() {
-  python3 - "$channel" "$release_id" "$version" "$GITHUB_SHA" "$dist" "${dist}/channel.json" "${artifact_names[@]}" <<'PY'
+  python3 - "$channel" "$release_id" "$version" "$GITHUB_SHA" "$build" "$dist" "${dist}/channel.json" "${artifact_names[@]}" <<'PY'
 import hashlib, json, os, sys
-channel, release_id, version, commit, dist, out = sys.argv[1:7]
+channel, release_id, version, commit, build, dist, out = sys.argv[1:8]
 arts = []
-for name in sys.argv[7:]:
+for name in sys.argv[8:]:
     data = open(os.path.join(dist, name), "rb").read()
     arts.append({
         "name": name,
         "sha256": hashlib.sha256(data).hexdigest(),
         "size": len(data),
+        "path": "%s/%s/%s" % (channel, release_id, name),
     })
 doc = {
     "channel": channel,
     "release_id": release_id,
     "version": version,
     "commit": commit,
+    "build": int(build),
     "artifacts": arts,
 }
 with open(out, "w", encoding="utf-8") as fh:
@@ -223,6 +253,23 @@ upload_channel_manifest() {
   local name=$1 file=$2
   az_blob upload --name "$name" --file "$file" --overwrite true --content-type application/json --only-show-errors
 }
+
+# Read channels/prod.json before any pointer write. A missing blob is
+# the first prod publish. build and semver both have to move forward,
+# so a re-run of an older tag cannot win on a higher run number.
+if [ "$channel" = prod ]; then
+  # publish-order: prod-pointer
+  cur_ver=""
+  cur_build=""
+  exists=$(az_blob exists --name "channels/prod.json" --query exists --output tsv)
+  if [ "$exists" = "true" ]; then
+    cur_file=$(mktemp)
+    az_blob download --name "channels/prod.json" --file "$cur_file" --overwrite true --only-show-errors
+    read -r cur_ver cur_build < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("version") or "", d.get("build") if d.get("build") is not None else "")' "$cur_file")
+    rm -f "$cur_file"
+  fi
+  prod_pointer_ok "$version" "$build" "$cur_ver" "$cur_build"
+fi
 
 # publish-order: artifacts
 for name in "${artifact_names[@]}"; do

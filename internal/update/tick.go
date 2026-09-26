@@ -21,6 +21,8 @@ type Config struct {
 	Channel        string
 	CurrentVersion string
 	CurrentCommit  string
+	CurrentBuild   int
+	BadBuild       int
 	Arch           string
 	BinaryPath     string
 	PubKeyPath     string
@@ -137,7 +139,7 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	if man.Channel != cand.Channel || man.Version != cand.Version || !strings.EqualFold(strings.TrimSpace(man.Commit), strings.TrimSpace(cand.Commit)) {
 		return Plan{Action: ActionReject, Reason: "signed release.json does not match the plane"}, nil
 	}
-	plan := Decide(cfg.Channel, cfg.CurrentVersion, cfg.CurrentCommit, man, cfg.Busy)
+	plan := Decide(cfg.Channel, cfg.CurrentVersion, cfg.CurrentCommit, cfg.CurrentBuild, cfg.BadBuild, man, cfg.Busy)
 	if plan.Action != ActionInstall {
 		return plan, nil
 	}
@@ -172,10 +174,12 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 		return Plan{}, err
 	}
 	if err := WriteMarker(cfg.MarkerPath, Marker{
-		Binary:   cfg.BinaryPath,
-		Backup:   backup,
-		Version:  plan.Version,
-		Deadline: now.Add(window),
+		Binary:    cfg.BinaryPath,
+		Backup:    backup,
+		Version:   plan.Version,
+		Deadline:  now.Add(window),
+		Build:     man.Build,
+		ReleaseID: man.ReleaseID,
 	}); err != nil {
 		return Plan{}, err
 	}

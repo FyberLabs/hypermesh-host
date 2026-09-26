@@ -36,6 +36,9 @@ const (
 
 	DefaultPubKey = "/etc/hypermesh/update-pubkey.asc"
 	MarkerName    = "update-pending"
+	// BadName records a build the host rolled back. Later checks skip
+	// that build until a strictly newer one is published.
+	BadName = "update-bad"
 )
 
 // IdleGate is the only agent surface this package needs.

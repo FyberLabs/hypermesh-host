@@ -105,10 +105,16 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 	if err != nil {
 		return err
 	}
+	badBuild, err := update.ReadBadBuild(filepath.Join(filepath.Dir(marker), update.BadName))
+	if err != nil {
+		return err
+	}
 	plan, err := update.Tick(ctx, update.Config{
 		Channel:        a.cfg.UpdateChannel,
 		CurrentVersion: buildinfo.CurrentVersion(),
 		CurrentCommit:  buildinfo.Current(),
+		CurrentBuild:   buildinfo.CurrentBuild(),
+		BadBuild:       badBuild,
 		Arch:           runtime.GOARCH,
 		BinaryPath:     binary,
 		PubKeyPath:     a.cfg.UpdatePubKey,

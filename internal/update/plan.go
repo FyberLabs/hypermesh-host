@@ -25,20 +25,37 @@ type Plan struct {
 }
 
 // Manifest is release.json. It is covered by the signed checksum file.
+// Build is the publisher's rising integer. ReleaseID is the blob
+// directory name. The plane response does not have to repeat either.
 type Manifest struct {
-	Channel string `json:"channel"`
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
+	Channel   string `json:"channel"`
+	Version   string `json:"version"`
+	Commit    string `json:"commit"`
+	Build     int    `json:"build"`
+	ReleaseID string `json:"release_id,omitempty"`
 }
 
 // Decide chooses skip, defer, reject, or install after the manifest
-// has been authenticated. Busy defers an install; it does not skip a
-// real change.
-func Decide(channel, currentVersion, currentCommit string, m Manifest, busy bool) Plan {
+// has been authenticated. A candidate whose build is less than or
+// equal to currentBuild is refused before the commit or semver check.
+// badBuild is a build this host already rolled back; it stays skipped
+// until a strictly newer build appears. Busy defers an install; it
+// does not skip a real change.
+func Decide(channel, currentVersion, currentCommit string, currentBuild, badBuild int, m Manifest, busy bool) Plan {
 	p := Plan{Version: strings.TrimSpace(m.Version), Commit: strings.TrimSpace(m.Commit)}
 	if m.Channel != channel {
 		p.Action = ActionReject
 		p.Reason = "release channel does not match this box"
+		return p
+	}
+	if m.Build <= currentBuild {
+		p.Action = ActionReject
+		p.Reason = "build is not newer"
+		return p
+	}
+	if badBuild > 0 && m.Build <= badBuild {
+		p.Action = ActionSkip
+		p.Reason = "rolled-back build"
 		return p
 	}
 	switch channel {

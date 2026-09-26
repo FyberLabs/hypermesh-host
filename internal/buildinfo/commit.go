@@ -11,6 +11,7 @@ package buildinfo
 
 import (
 	"runtime/debug"
+	"strconv"
 	"strings"
 )
 
@@ -23,9 +24,26 @@ var Commit string
 //	-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Version=1.2.3
 var Version string
 
+// Build is a rising integer injected with -X. The publisher sets it
+// from GITHUB_RUN_NUMBER, which increases by one for each run of that
+// workflow file. The test workflow and the prod workflow do not share
+// a counter. Empty or non-numeric means 0 (a development binary).
+//
+//	-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Build=12
+var Build string
+
 // CurrentVersion is the link-time semver, or empty.
 func CurrentVersion() string {
 	return strings.TrimPrefix(strings.TrimSpace(Version), "v")
+}
+
+// CurrentBuild is the link-time build number, or 0.
+func CurrentBuild() int {
+	n, err := strconv.Atoi(strings.TrimSpace(Build))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // Current is the build commit to report. It is never a secret.

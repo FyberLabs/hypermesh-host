@@ -9,7 +9,7 @@ The agent checks for a new binary on a channel set in `/etc/hypermesh/agent.env`
 | `HYPERMESH_UPDATE_CHANNEL` | What it tracks | Blob prefix |
 |---|---|---|
 | `test` | Builds of `main`. The commit in `release.json` is the identity. The binary version stays `0.0.0`. | `test/<release-id>/`. release-id is UTC `yyyymmddHHMMSS` plus the first 12 hex chars of the commit (`20260926182316-0123456789ab`). A later build sorts after an earlier one. The directory is not overwritten. |
-| `prod` | Tagged semver `vX.Y.Z`. A newer version installs. An older one does not. | `prod/<X.Y.Z>/`. release-id is the semver with no leading `v`. The directory is not overwritten. |
+| `prod` | Tagged semver `vX.Y.Z`. A newer version installs. An older one does not. | `prod/<X.Y.Z>/`. release-id is the semver with no leading `v`. The directory is not overwritten. The publisher also refuses to move the pointer to a semver or a build number that is not strictly newer. |
 
 Workflows: `.github/workflows/release.yml` (tag `vX.Y.Z`) and `.github/workflows/release-test.yml` (push to `main`). Both run `packaging/release/publish-agent.sh`. A GitHub Release is also created so a person can download the files. The agent does not read it.
 
@@ -18,7 +18,7 @@ The channel pointer is a different object, outside `test/` and `prod/`:
 - `channels/test.json`
 - `channels/prod.json`
 
-Each one names the current `release_id`, `version`, `commit`, and the artifact `name`, `sha256`, and `size`. It has no SAS URL. The publisher writes it only after every object under `<channel>/<release-id>/` has been uploaded and downloaded back for a SHA-256 match. The upload is one Put Blob of a few hundred bytes, so a reader sees the previous document or the whole new one. A crash before that write leaves the channel on the last complete build. An existing object in a release-id directory is left in place; if its bytes differ, the check fails and the channel manifest is not moved.
+Each one names the current `release_id`, `version`, `commit`, `build`, and the artifact `name`, `sha256`, `size`, and `path` (`<channel>/<release-id>/<name>`). It has no SAS URL. The publisher writes it only after every object under `<channel>/<release-id>/` has been uploaded and downloaded back for a SHA-256 match. The upload is one Put Blob of a few hundred bytes, so a reader sees the previous document or the whole new one. A crash before that write leaves the channel on the last complete build. An existing object in a release-id directory is left in place; if its bytes differ, the check fails and the channel manifest is not moved. `channels/*.json` stays outside `test/`, so the 20-day lifecycle rule cannot delete the pointer.
 
 Infra deletes blobs under `test/` 20 days after they were last modified. `channels/test.json`, `channels/prod.json`, and `prod/` are outside that rule. If the test manifest still names a directory that rule has removed, the host's download fails, nothing is installed, and the next check tries again.
 
@@ -26,14 +26,22 @@ Objects in `<channel>/<release-id>/`:
 
 - `hypermesh-agent_<version>_linux_arm64`
 - `hypermesh-agent_<version>_linux_amd64`
-- `release.json` (`channel`, `version`, `commit`)
+- `release.json` (`channel`, `version`, `commit`, `build`, `release_id`). `build` is a JSON number. This file is signed via `checksums.txt`.
 - `checksums.txt` (SHA-256 of the two binaries and `release.json`)
 - `checksums.txt.sig` and `checksums.txt.asc` (detached GPG signatures over `checksums.txt`)
 - `hypermesh-release.pub` (for an operator to install once; the agent does not trust a pubkey from the container)
 
-Binaries are `CGO_ENABLED=0` builds of `./cmd/agent` for `linux/arm64` and `linux/amd64`. ldflags set `buildinfo.Commit` and `buildinfo.Version`.
+`build` is `GITHUB_RUN_NUMBER` for that workflow. GitHub increases it by one for each run of the workflow file. The test workflow and the prod workflow each have their own counter. ldflags set `buildinfo.Commit`, `buildinfo.Version`, and `buildinfo.Build` to the same number. A development binary has build 0.
+
+The host refuses a candidate whose signed `build` is less than or equal to its own, including an equal number. Build 0 on a candidate is not newer than a running build of 0, so it is refused. A development binary can install the first positive build. Before replacing `channels/prod.json`, the publisher reads the current `build` and `version` and fails when the new build is not greater or the new semver is not strictly greater. A missing `channels/prod.json` is the first prod publish. A later re-run of an older tag gets a higher run number; the semver check still refuses that pointer move.
+
+This version does not expire a frozen old head. There is no freshness check on the signed release. A host that never sees a higher build stays on the binary it has.
+
+Binaries are `CGO_ENABLED=0` builds of `./cmd/agent` for `linux/arm64` and `linux/amd64`.
 
 The storage account name and container name are GitHub Environment variables. This repo does not write them into the workflow or the publish script. Upload uses `az storage blob upload --auth-mode login` after `azure/login` (`allow-no-subscriptions: true`, because the release app has no subscription role). There is no storage account key in the workflow.
+
+Each release workflow has its own concurrency group (`release-prod`, `release-test`) and does not cancel a run that is already in progress. `AZURE_CONFIG_DIR` is the job temp directory. An always-run step logs `az` out and removes that directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners.
 
 ## What the host calls
 
@@ -101,10 +109,10 @@ The signature and the SHA-256 in `checksums.txt` are the trust anchor. The plane
 
 1. `GET` the path above with the device credential.
 2. Download `checksums.txt` and `checksums.txt.sig` (or `.asc`) from the SAS URLs. The download sends no `Authorization` header. The read stops at `size`.
-3. `gpg --verify` with the keys in `/etc/hypermesh/update-pubkey.asc`. Failure rejects.
-4. Download `release.json`. Its SHA-256 must be in the signed checksum file, and it must match the plane's channel, version, and commit.
+3. `gpg --status-fd 1 --verify` with the keys in `/etc/hypermesh/update-pubkey.asc`. The status must contain a `VALIDSIG` line whose fingerprint is one of those imported keys. A zero exit code without that line rejects.
+4. Download `release.json`. Its SHA-256 must be in the signed checksum file, and it must match the plane's channel, version, and commit. `build` is read from this signed file. The plane body does not have to send it.
 5. Download the `linux/<arch>` binary. Its SHA-256 must be in the signed checksum file. Failure rejects.
-6. Same test commit, or a prod version that is not newer, skips. A lease or an unacked job result defers. Otherwise install.
+6. A signed `build` that is less than or equal to the running build is refused. A build this host already rolled back is skipped until a strictly newer build appears. Same test commit, or a prod version that is not newer, skips. A lease or an unacked job result defers. Otherwise install.
 
 Query strings are removed from errors. A missing pubkey, a bad signature, a size mismatch, or a checksum mismatch leaves the current binary in place.
 
@@ -127,11 +135,13 @@ Copy the unit that contains `ExecStartPre=/usr/local/lib/hypermesh/update-rollba
 
 Install writes `hypermesh-agent.new` in the same directory, fsyncs the file and the directory, renames the current binary to `hypermesh-agent.pre-<version>`, renames the new file onto the destination, and fsyncs the directory again. `<version>` is the version (or commit) being replaced.
 
-The marker `$HYPERMESH_STATE_DIR/update-pending` records `binary`, `backup`, `version`, and `deadline`. The default window is 2 minutes (`HYPERMESH_UPDATE_ROLLBACK`). Then the agent runs `systemctl restart hypermesh-agent` only.
+The marker `$HYPERMESH_STATE_DIR/update-pending` records `binary`, `backup`, `version`, `deadline`, `build`, and `release_id`. The default window is 2 minutes (`HYPERMESH_UPDATE_ROLLBACK`). Then the agent runs `systemctl restart hypermesh-agent` only.
 
-The new process starts a watch before its first heartbeat. A successful heartbeat deletes the marker. If the window ends with no successful heartbeat, the watch copies the `.pre-<version>` backup back and exits. systemd `Restart=on-failure` starts that restored binary.
+The new process starts a watch before its first heartbeat. A successful heartbeat deletes the marker. If the window ends with no successful heartbeat, the watch copies the `.pre-<version>` backup back, writes `$HYPERMESH_STATE_DIR/update-bad` (atomic replace in the state dir), and exits. systemd `Restart=on-failure` starts that restored binary. Later checks skip that build until a strictly newer build is published. Build 0 is not written into `update-bad`.
 
-If the new process crash-loops and never reaches the watch, `ExecStartPre` (`deploy/lib/update-rollback`) does the same restore once `deadline` is in the past. Before the deadline it is a no-op, so a restart inside the window still gets a chance to heartbeat.
+If the new process crash-loops and never reaches the watch, `ExecStartPre` (`deploy/lib/update-rollback`) does the same restore once `deadline` is in the past, and writes the same `update-bad` file when `build` is a positive integer. Before the deadline it is a no-op, so a restart inside the window still gets a chance to heartbeat.
+
+The control plane can be down during that two-minute window. The watch then rolls back a binary that would have been fine, and `update-bad` keeps the host from installing that same build again. A strictly newer build still installs.
 
 Checks run at most once an hour (`HYPERMESH_UPDATE_EVERY`), including while a restart is deferred.
 
@@ -186,6 +196,8 @@ Variables (these are identifiers, not the signing key). Secrets of the same name
 | `AZURE_STORAGE_CONTAINER` | Private container name from that same output |
 
 The release job's token scopes are `contents: write` (the human GitHub Release) and `id-token: write` (OIDC). `azure/login` sets `allow-no-subscriptions: true` because that app has no subscription role. The workflow default and CI stay `contents: read`.
+
+Deployment protection for Environment `release` is not in this repo. A separate infra pull request limits that environment to `main` and tags matching `v*`, and a tag ruleset so only maintainers can push `v*`. The prod workflow also fetches `origin/main` and fails unless `git merge-base --is-ancestor HEAD origin/main`. The test workflow already runs on pushes to `main`.
 
 The self-hosted runner needs `gpg`, `az`, `python3`, `curl`, and `sha256sum`. Go comes from `setup-go`.
 
