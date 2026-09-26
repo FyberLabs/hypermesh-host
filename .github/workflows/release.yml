@@ -8,10 +8,12 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
 # one sequence across channels; a host switching channel only moves to
-# a strictly newer build. Every test and prod publish queues on this
-# group. cancel-in-progress is false, so a run already uploading is
-# not cancelled. The publish script computes max+1 only while this
-# group is held. Do not compute that number in an earlier job.
+# a strictly newer build. Every test and prod publish uses this group.
+# cancel-in-progress is false, so a run already uploading is not
+# cancelled. actionlint 1.7.12 rejects the concurrency property that
+# would keep more than one pending run, so this file does not set
+# that property. publish-agent.sh also leases locks/publish and waits
+# until it holds that lease. max+1 is computed only inside the job.
 concurrency:
   group: release-publish
   cancel-in-progress: false
@@ -31,9 +33,10 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    env:
-      AZURE_CONFIG_DIR: ${{ runner.temp }}/az
     steps:
+      - name: Azure config dir
+        run: echo "AZURE_CONFIG_DIR=$RUNNER_TEMP/az" >> "$GITHUB_ENV"
+
       - name: Checkout
         # actions/checkout v4
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
