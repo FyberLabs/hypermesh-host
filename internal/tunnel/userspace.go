@@ -131,7 +131,7 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 		return err
 	}
 	syncPath := filepath.Join(r.configDir(), r.iface()+".sync")
-	if err := os.WriteFile(syncPath, []byte(wgSetConfig(sess, live.ListenPort)), 0o600); err != nil {
+	if err := os.WriteFile(syncPath, []byte(wgSetConfig(sess, listenPortFor(sess, live.ListenPort))), 0o600); err != nil {
 		return err
 	}
 	defer func() { _ = shredFile(syncPath) }()
@@ -232,11 +232,14 @@ func (p livePeer) recent(now time.Time) bool {
 
 // liveMatches is true when the live interface already has the desired host peer.
 // tunnel_id and lease_id are not compared. A recent handshake is not required;
-// an identical config must not be rewritten.
+// an identical config must not be rewritten. The in-memory applied marker is
+// empty after a process restart and is not consulted here.
 //
 // wg show dump does not echo the config text. Keys are re-encoded, the endpoint
 // is the resolved numeric address, and AllowedIPs are comma-joined with no
-// spaces in trie order. Those differences are the same peer.
+// spaces, in trie order, with host bits cleared. A point-to-point address can
+// show up as a bare IP. The device's listen port is not a difference unless
+// the session names a different one. Those are the same peer.
 func (r *Runner) liveMatches(ctx context.Context, l liveIface, s Session) bool {
 	if !l.Exists || len(l.Peers) != 1 {
 		return false
@@ -263,7 +266,20 @@ func (r *Runner) liveMatches(ctx context.Context, l liveIface, s Session) bool {
 	if p.Keepalive != persistentKeepaliveSec {
 		return false
 	}
+	if s.ListenPort > 0 && s.ListenPort != l.ListenPort {
+		return false
+	}
 	return true
+}
+
+// listenPortFor is the port written into wg syncconf. A session port replaces
+// the bound one. Zero keeps the port the interface already has, so an omitted
+// ListenPort is not sent as listen_port=0.
+func listenPortFor(s Session, live int) int {
+	if s.ListenPort > 0 && s.ListenPort <= 65535 {
+		return s.ListenPort
+	}
+	return live
 }
 
 func sameWGKey(a, b string) bool {
@@ -299,17 +315,37 @@ func decodeWGKey(s string) ([]byte, bool) {
 }
 
 func sameAddr(live, want string) bool {
-	live = strings.TrimSpace(live)
-	want = strings.TrimSpace(want)
-	if live == want {
+	want = canonAddr(want)
+	if want == "" {
 		return true
 	}
-	lp, e1 := netip.ParsePrefix(live)
-	wp, e2 := netip.ParsePrefix(want)
-	if e1 != nil || e2 != nil {
-		return false
+	for _, part := range strings.Split(live, ",") {
+		if canonAddr(part) == want {
+			return true
+		}
 	}
-	return lp.String() == wp.String()
+	return false
+}
+
+// canonAddr parses an interface address. A bare IP is a /32 or /128, which
+// is how `ip addr` prints the local half of "inet 10.77.0.3 peer 10.77.0.1/32".
+func canonAddr(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "/") {
+		ip, err := netip.ParseAddr(s)
+		if err != nil {
+			return s
+		}
+		return netip.PrefixFrom(ip, ip.BitLen()).String()
+	}
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return s
+	}
+	return p.String()
 }
 
 func sameAllowed(live, want string) bool {
@@ -339,11 +375,27 @@ func canonPrefixes(s string) []string {
 			continue
 		}
 		if p, err := netip.ParsePrefix(part); err == nil {
-			part = p.String()
+			// WireGuard clears host bits. 10.77.0.5/24 is stored as 10.77.0.0/24.
+			part = p.Masked().String()
 		}
 		out = append(out, part)
 	}
 	sort.Strings(out)
+	out = dedupeSorted(out)
+	return out
+}
+
+func dedupeSorted(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if len(out) > 0 && s == out[len(out)-1] {
+			continue
+		}
+		out = append(out, s)
+	}
 	return out
 }
 
@@ -372,12 +424,28 @@ func (r *Runner) endpointsMatch(ctx context.Context, desired, live string) bool 
 	if dip != nil || lip == nil {
 		return false
 	}
-	ips, err := r.lookupHost(ctx, dh)
-	if err != nil {
+	if ips, err := r.lookupHost(ctx, dh); err == nil && ipListHas(ips, lip) {
+		return true
+	}
+	// The Go resolver is not the resolver wg uses. A CGO_ENABLED=0 build
+	// (no gcc on the box, or a cross-compile) misses systemd-resolved and
+	// returns an error or a different answer. wg syncconf already stored
+	// the glibc result, so a miss here would syncconf the same hostname
+	// forever. getent is that glibc lookup. A test LookupHost is
+	// authoritative unless ExtraLookup is set.
+	if r.LookupHost != nil && r.ExtraLookup == nil {
+		return false
+	}
+	more, err := r.extraLookup(ctx, dh)
+	return err == nil && ipListHas(more, lip)
+}
+
+func ipListHas(ips []string, lip net.IP) bool {
+	if lip == nil {
 		return false
 	}
 	for _, ip := range ips {
-		if net.ParseIP(ip).Equal(lip) {
+		if net.ParseIP(strings.TrimSpace(ip)).Equal(lip) {
 			return true
 		}
 	}
@@ -389,6 +457,46 @@ func (r *Runner) lookupHost(ctx context.Context, host string) ([]string, error) 
 		return r.LookupHost(ctx, host)
 	}
 	return net.DefaultResolver.LookupHost(ctx, host)
+}
+
+func (r *Runner) extraLookup(ctx context.Context, host string) ([]string, error) {
+	if r.ExtraLookup != nil {
+		return r.ExtraLookup(ctx, host)
+	}
+	return getentHosts(ctx, host)
+}
+
+// getentHosts resolves host the way wg does, through glibc. Output is not logged.
+func getentHosts(ctx context.Context, host string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "getent", "ahosts", host)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var ips []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		ip := net.ParseIP(fields[0])
+		if ip == nil {
+			continue
+		}
+		s := ip.String()
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		ips = append(ips, s)
+	}
+	if len(ips) == 0 {
+		return nil, errors.New("hypermesh tunnel: getent returned no address")
+	}
+	return ips, nil
 }
 
 func (r *Runner) inspect(ctx context.Context) (liveIface, error) {
@@ -406,7 +514,7 @@ func (r *Runner) inspect(ctx context.Context) (liveIface, error) {
 	live.Exists = true
 	addrOut, addrErr := r.runCmd(ctx, "ip", "-4", "-o", "addr", "show", "dev", r.iface())
 	if addrErr == nil {
-		live.Address = parseIfaceAddr(string(addrOut))
+		live.Address = strings.Join(parseIfaceAddrs(string(addrOut)), ",")
 	}
 	return live, nil
 }
@@ -445,13 +553,24 @@ func parseWGDump(text string) (liveIface, error) {
 }
 
 func parseIfaceAddr(out string) string {
-	fields := strings.Fields(out)
-	for i, f := range fields {
-		if f == "inet" && i+1 < len(fields) {
-			return fields[i+1]
+	addrs := parseIfaceAddrs(out)
+	if len(addrs) == 0 {
+		return ""
+	}
+	return addrs[0]
+}
+
+func parseIfaceAddrs(out string) []string {
+	var addrs []string
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "inet" && i+1 < len(fields) {
+				addrs = append(addrs, fields[i+1])
+			}
 		}
 	}
-	return ""
+	return addrs
 }
 
 func (r *Runner) now() time.Time {
@@ -577,7 +696,8 @@ func wantedRoutes(allowed string, installDefault bool) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("hypermesh tunnel: allowed ip %q: %w", part, err)
 		}
-		s := p.String()
+		// Same mask WireGuard applies. 10.77.0.5/24 is not a route iproute2 accepts.
+		s := p.Masked().String()
 		if !installDefault && (s == "0.0.0.0/0" || s == "::/0") {
 			continue
 		}
