@@ -897,7 +897,7 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
 	if strings.TrimSpace(job.SourceRef) != "" {
-		if err := a.admitModel(pin, dest); err != nil {
+		if err := a.admitModel(job.CatalogID, pin, dest); err != nil {
 			a.log.Warn("model cache admit failed", "err", err)
 		} else if err := a.notePendingModel(job.CatalogID, pin); err != nil {
 			a.log.Warn("model cache pending not saved", "err", err)
@@ -1058,14 +1058,9 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		}
 		return a.leaseStartAlready(existing)
 	}
-	gguf := a.modelForLease()
-	if path, _, found, pendErr := a.pendingModelFile(job.CatalogID); found {
-		if pendErr != nil {
-			a.clearPendingModel(job.CatalogID)
-			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-			return pathb.Result{Passed: false, Reason: "pending model missing"}
-		}
-		gguf = path
+	gguf, pinID, havePin, refuse := a.leaseModelPath(job)
+	if refuse.Reason != "" {
+		return refuse
 	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
@@ -1073,14 +1068,8 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lease_start refused", "reason", reason, "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: reason}
 	}
-	expected, hasExpected := leaseExpectedHash(job)
-	if !hasExpected {
-		a.log.Info("lease_start refused", "reason", "missing expected hash", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-		return pathb.Result{Passed: false, Reason: "missing expected hash"}
-	}
-	if !strings.EqualFold(hash, expected) {
-		a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
+	if res, ok := a.leaseHashCheck(job, hash, pinID, havePin); !ok {
+		return res
 	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
@@ -1251,9 +1240,66 @@ func (a *Agent) leaseRelease(ctx context.Context, job api.Job, reason string) pa
 	return pathb.Result{Passed: true, Reason: reason}
 }
 
+// leaseModelPath picks the GGUF lease_start will mount.
+// A pending pin wins. A non-empty file_hash keeps the previous mount:
+// the loaded cache file, or HYPERMESH_GGUF_PATH when nothing is loaded.
+// With no pin and no file_hash, a cached file is mounted only when
+// index.json records it for this catalog. An empty cache falls back to
+// HYPERMESH_GGUF_PATH. Any other cache file is refused.
+func (a *Agent) leaseModelPath(job api.Job) (gguf, pinID string, havePin bool, refuse pathb.Result) {
+	if path, pin, found, pendErr := a.pendingModelFile(job.CatalogID); found {
+		if pendErr != nil {
+			a.clearPendingModel(job.CatalogID)
+			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return "", "", false, pathb.Result{Passed: false, Reason: "pending model missing"}
+		}
+		return path, pin, true, pathb.Result{}
+	}
+	if _, hasExpected := leaseExpectedHash(job); hasExpected {
+		return a.modelForLease(), "", false, pathb.Result{}
+	}
+	path, ok, empty := a.cachedModelForCatalog(job.CatalogID)
+	if empty {
+		return a.cfg.GGUFHostPath(), "", false, pathb.Result{}
+	}
+	if !ok {
+		a.log.Info("lease_start refused", "reason", "model not verified for catalog", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+		return "", "", false, pathb.Result{Passed: false, Reason: "model not verified for catalog"}
+	}
+	return path, "", false, pathb.Result{}
+}
+
+// leaseHashCheck compares the mounted file to the hash the plane sent.
+// A non-empty file_hash is always checked. An empty file_hash with a
+// pending pin is checked against that pin's sha256. An empty file_hash
+// with no pin reaches here only after the catalog check: the file is
+// the one admitted for this catalog, or HYPERMESH_GGUF_PATH because the
+// cache is empty. The start proceeds and a warning is logged. A later
+// change will require file_hash once the plane sends it.
+func (a *Agent) leaseHashCheck(job api.Job, hash, pinID string, havePin bool) (pathb.Result, bool) {
+	expected, hasExpected := leaseExpectedHash(job)
+	if hasExpected {
+		if !strings.EqualFold(hash, expected) {
+			a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}, false
+		}
+		return pathb.Result{}, true
+	}
+	if havePin {
+		pinNorm, pinErr := normalizeModelID(pinID)
+		if pinErr != nil || !strings.EqualFold(hash, pinNorm) {
+			a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}, false
+		}
+		return pathb.Result{}, true
+	}
+	a.log.Warn("lease_start without file_hash; hash not verified", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+	return pathb.Result{}, true
+}
+
 // leaseExpectedHash is the catalog sha the plane sent on lease_start.
-// Empty is missing. A present value that is not sha256:hex is returned
-// as-is so the mount check refuses it.
+// Empty means the plane omitted it. A present value that is not
+// sha256:hex is returned as-is so the mount check refuses it.
 func leaseExpectedHash(job api.Job) (string, bool) {
 	raw := strings.TrimSpace(job.FileHash)
 	if raw == "" {
