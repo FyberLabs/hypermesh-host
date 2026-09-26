@@ -17,6 +17,17 @@ import (
 // Commit is the git commit injected with -X. Tests may set it.
 var Commit string
 
+// Version is the semver injected with -X, without a leading v.
+// Empty means this binary is not a tagged release. Tests may set it.
+//
+//	-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Version=1.2.3
+var Version string
+
+// CurrentVersion is the link-time semver, or empty.
+func CurrentVersion() string {
+	return strings.TrimPrefix(strings.TrimSpace(Version), "v")
+}
+
 // Current is the build commit to report. It is never a secret.
 func Current() string {
 	if c := strings.TrimSpace(Commit); c != "" {

@@ -11,6 +11,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
+	"github.com/FyberLabs/hypermesh-host/internal/update"
 )
 
 const (
@@ -100,6 +101,24 @@ type Config struct {
 	// WGKeyDir is the host WireGuard private key directory.
 	// Empty uses /etc/wireguard. The agent still owns the key.
 	WGKeyDir string
+	// UpdateChannel is HYPERMESH_UPDATE_CHANNEL: "test", "prod", or empty.
+	// Empty does not check for updates. test tracks the rolling main
+	// prerelease. prod tracks tagged semver releases.
+	UpdateChannel string
+	// UpdateEvery is how often to check the channel. Zero uses one hour.
+	UpdateEvery time.Duration
+	// UpdateRollback is how long a new binary has to heartbeat before
+	// the previous binary is restored. Zero uses two minutes.
+	UpdateRollback time.Duration
+	// UpdatePubKey is the armored public key used to verify checksums.
+	// Empty uses /etc/hypermesh/update-pubkey.asc.
+	UpdatePubKey string
+	// UpdateToken is a GitHub token that can read this private repo.
+	// Never log it. Empty makes a check fail closed.
+	UpdateToken string
+	// UpdateBinary is the path replaced on install. Empty uses the
+	// running executable.
+	UpdateBinary string
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
@@ -129,7 +148,25 @@ func FromEnv() Config {
 		MetricsAllowNonLoopback: envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
 		HostType:                strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
 		WGKeyDir:                strings.TrimSpace(os.Getenv("HYPERMESH_WG_KEY_DIR")),
+		UpdateChannel:           strings.TrimSpace(os.Getenv("HYPERMESH_UPDATE_CHANNEL")),
+		UpdateEvery:             durationEnv("HYPERMESH_UPDATE_EVERY", time.Hour),
+		UpdateRollback:          durationEnv("HYPERMESH_UPDATE_ROLLBACK", 2*time.Minute),
+		UpdatePubKey:            envOr("HYPERMESH_UPDATE_PUBKEY", "/etc/hypermesh/update-pubkey.asc"),
+		UpdateToken:             os.Getenv("HYPERMESH_UPDATE_GITHUB_TOKEN"),
+		UpdateBinary:            strings.TrimSpace(os.Getenv("HYPERMESH_UPDATE_BINARY")),
 	}
+}
+
+func durationEnv(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return -1
+	}
+	return d
 }
 
 func envBool(key string) bool {
@@ -202,6 +239,12 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.PendingModelTTL(); err != nil {
 		return err
+	}
+	if _, err := update.ParseChannel(c.UpdateChannel); err != nil {
+		return err
+	}
+	if c.UpdateEvery < 0 || c.UpdateRollback < 0 {
+		return fmt.Errorf("hypermesh: update interval must be a duration")
 	}
 	return nil
 }

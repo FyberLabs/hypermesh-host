@@ -42,6 +42,7 @@ func main() {
 	flag.BoolVar(&cfg.MetricsAllowNonLoopback, "metrics-allow-non-loopback", cfg.MetricsAllowNonLoopback, "ignored; /metrics binds only loopback or the WireGuard address (HYPERMESH_METRICS_ALLOW_NON_LOOPBACK)")
 	flag.StringVar(&cfg.HostType, "host-type", cfg.HostType, "model (default) or supervisor (enroll and heartbeat, refuse lease_start) (HYPERMESH_HOST_TYPE)")
 	flag.StringVar(&cfg.WGKeyDir, "wg-key-dir", cfg.WGKeyDir, "host WireGuard key directory (HYPERMESH_WG_KEY_DIR)")
+	flag.StringVar(&cfg.UpdateChannel, "update-channel", cfg.UpdateChannel, "update channel test or prod; empty disables (HYPERMESH_UPDATE_CHANNEL)")
 
 	if pre, ownerArgs, ok := splitOwnerArgs(os.Args[1:]); ok {
 		if err := flag.CommandLine.Parse(pre); err != nil {

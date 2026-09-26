@@ -25,7 +25,9 @@ go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
 
 `hypermesh-deploy agx` preflights the pinned AGX image, writes the existing agent env and systemd units, then starts `hypermesh-wg` and `hypermesh-agent`. It stops on the first failure. `-serial` is required. The device id comes from the plane device list for that serial. Catalog must be HTTP 200 at `/api/v1/hypermesh/catalog`. The enroll token is `HYPERMESH_ENROLL_TOKEN` or `-enroll-token-file`, not a command-line value. A rerun on a box that already has `device.json` does not need a fresh token.
 
-Release archives are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
+Release archives for `hypermesh-deploy` are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
+
+Agent releases are separate. `HYPERMESH_UPDATE_CHANNEL=test` tracks the rolling prerelease tag `test` (a build of `main`). `prod` tracks tagged `vX.Y.Z` releases. The agent verifies a GPG signature over `checksums.txt` and the SHA-256 of the binary before it installs. It defers a restart while a lease is running or a job result is unacked, restarts only `hypermesh-agent`, and rolls back to `hypermesh-agent.pre-<version>` if the new binary does not heartbeat. Details, and the GitHub Environment `release` secrets that have to exist before the first publish: [deploy/agx/update.md](deploy/agx/update.md).
 
 `hypermesh-supervisor` is one Linux image (`deploy/supervisor/Dockerfile`, Alpine runtime) and three placements (`HYPERMESH_SUPERVISOR_PLACEMENT`): `outside` (off the network), `host` (enrolls and heartbeats as host type `supervisor`, refuses `lease_start`), and `renter` (`POST /v1/chat/completions` on the chat gateway). Host placement does not certify the box. The renter API key and the enroll token come from the environment or a systemd credential. They are not rewritten into `supervisor.json` on start.
 

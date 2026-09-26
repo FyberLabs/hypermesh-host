@@ -11,6 +11,15 @@ func TestCurrentUsesLdflags(t *testing.T) {
 	}
 }
 
+func TestCurrentVersionStripsV(t *testing.T) {
+	prev := Version
+	t.Cleanup(func() { Version = prev })
+	Version = "v1.2.3"
+	if got := CurrentVersion(); got != "1.2.3" {
+		t.Fatalf("version %q", got)
+	}
+}
+
 func TestCurrentFallbackIsNonEmpty(t *testing.T) {
 	prev := Commit
 	t.Cleanup(func() { Commit = prev })
