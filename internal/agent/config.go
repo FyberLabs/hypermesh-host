@@ -102,20 +102,19 @@ type Config struct {
 	// Empty uses /etc/wireguard. The agent still owns the key.
 	WGKeyDir string
 	// UpdateChannel is HYPERMESH_UPDATE_CHANNEL: "test", "prod", or empty.
-	// Empty does not check for updates. test tracks the rolling main
-	// prerelease. prod tracks tagged semver releases.
+	// Empty does not check for updates. test tracks builds of main.
+	// prod tracks tagged semver releases. The bytes come from the
+	// control plane, not from GitHub.
 	UpdateChannel string
 	// UpdateEvery is how often to check the channel. Zero uses one hour.
 	UpdateEvery time.Duration
 	// UpdateRollback is how long a new binary has to heartbeat before
 	// the previous binary is restored. Zero uses two minutes.
 	UpdateRollback time.Duration
-	// UpdatePubKey is the armored public key used to verify checksums.
+	// UpdatePubKey is the file of trusted armored public keys used to
+	// verify checksums. Several keys may be concatenated for rotation.
 	// Empty uses /etc/hypermesh/update-pubkey.asc.
 	UpdatePubKey string
-	// UpdateToken is a GitHub token that can read this private repo.
-	// Never log it. Empty makes a check fail closed.
-	UpdateToken string
 	// UpdateBinary is the path replaced on install. Empty uses the
 	// running executable.
 	UpdateBinary string
@@ -152,7 +151,6 @@ func FromEnv() Config {
 		UpdateEvery:             durationEnv("HYPERMESH_UPDATE_EVERY", time.Hour),
 		UpdateRollback:          durationEnv("HYPERMESH_UPDATE_ROLLBACK", 2*time.Minute),
 		UpdatePubKey:            envOr("HYPERMESH_UPDATE_PUBKEY", "/etc/hypermesh/update-pubkey.asc"),
-		UpdateToken:             os.Getenv("HYPERMESH_UPDATE_GITHUB_TOKEN"),
 		UpdateBinary:            strings.TrimSpace(os.Getenv("HYPERMESH_UPDATE_BINARY")),
 	}
 }

@@ -635,6 +635,65 @@ func TestClientDoesNotEchoSecretsOnError(t *testing.T) {
 	}
 }
 
+func TestLatestUpdateUsesDeviceCredential(t *testing.T) {
+	const sas = "sig=super-secret-sas"
+	if PathUpdates != "/api/v1/hypermesh/agent/updates/%s" {
+		t.Fatalf("path %s", PathUpdates)
+	}
+	mode := "ok"
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireBearer(t, r)
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		switch mode {
+		case "ok":
+			writeJSON(w, http.StatusOK, UpdateManifest{
+				Channel: "test",
+				Version: "0.0.0",
+				Commit:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				Artifacts: []UpdateArtifact{{
+					Name:   "checksums.txt",
+					SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					Size:   12,
+					URL:    "https://blob.example/c/test/0.0.0/checksums.txt?" + sas,
+				}},
+			})
+		case "empty":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"url":"https://blob.example/c/f?`+sas+`"}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, testTenant)
+	c.DeviceSecret = testSecret
+	m, err := c.LatestUpdate(context.Background(), "test", testDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/v1/hypermesh/agent/updates/test" || gotQuery != "device_id="+testDevice {
+		t.Fatalf("path %s query %s", gotPath, gotQuery)
+	}
+	if m == nil || m.Channel != "test" || len(m.Artifacts) != 1 || !strings.Contains(m.Artifacts[0].URL, sas) {
+		t.Fatalf("manifest %+v", m)
+	}
+	mode = "empty"
+	m, err = c.LatestUpdate(context.Background(), "test", testDevice)
+	if err != nil || m != nil {
+		t.Fatalf("empty manifest %+v %v", m, err)
+	}
+	mode = "boom"
+	_, err = c.LatestUpdate(context.Background(), "test", testDevice)
+	if err == nil || strings.Contains(err.Error(), sas) || strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("error leaked sas: %v", err)
+	}
+	if _, err := c.LatestUpdate(context.Background(), "nope", testDevice); err == nil {
+		t.Fatal("bad channel was sent")
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

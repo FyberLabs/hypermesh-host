@@ -1,13 +1,16 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,20 +33,6 @@ func TestParseChannel(t *testing.T) {
 	}
 	if _, err := ParseChannel("-sfiles"); err == nil {
 		t.Fatal("garbage channel was accepted")
-	}
-}
-
-func TestReleaseAPI(t *testing.T) {
-	testURL, err := ReleaseAPI(ChannelTest)
-	if err != nil || !strings.HasSuffix(testURL, "/releases/tags/test") {
-		t.Fatalf("test url %q %v", testURL, err)
-	}
-	prodURL, err := ReleaseAPI(ChannelProd)
-	if err != nil || !strings.HasSuffix(prodURL, "/releases/latest") {
-		t.Fatalf("prod url %q %v", prodURL, err)
-	}
-	if _, err := ReleaseAPI("dev"); err == nil {
-		t.Fatal("dev channel has an api")
 	}
 }
 
@@ -206,23 +195,7 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		binName:      bin,
 		ManifestName: manRaw,
 	})
-	rel := releaseDoc(map[string]string{
-		ChecksumsName: "https://example.test/sums",
-		SignatureName: "https://example.test/sig",
-		ManifestName:  "https://example.test/man",
-		binName:       "https://example.test/bin",
-	})
-	api, err := ReleaseAPI(ChannelTest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fetch := mapFetch{
-		api:                         rel,
-		"https://example.test/sums": sums,
-		"https://example.test/sig":  []byte("sig"),
-		"https://example.test/man":  manRaw,
-		"https://example.test/bin":  bin,
-	}
+	src := planeSource(man, sums, []byte("sig"), manRaw, binName, bin)
 	base := Config{
 		Channel:       ChannelTest,
 		CurrentCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -236,7 +209,7 @@ func TestTickVerificationAndBusy(t *testing.T) {
 	t.Run("bad signature", func(t *testing.T) {
 		var installed, restarted bool
 		plan, err := Tick(context.Background(), base, Hooks{
-			Fetch:  fetch,
+			Source: src,
 			Verify: func(_, _, _ []byte) error { return ErrRejected },
 			Install: func(string, []byte, string) (string, error) {
 				installed = true
@@ -253,17 +226,26 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		if plan.Action != ActionReject || installed || restarted {
 			t.Fatalf("plan %+v installed %v restarted %v", plan, installed, restarted)
 		}
+		if strings.Contains(plan.Reason, "sig=") {
+			t.Fatalf("reason leaked a query: %s", plan.Reason)
+		}
 	})
 
 	t.Run("checksum mismatch", func(t *testing.T) {
-		bad := mapFetch{}
-		for k, v := range fetch {
-			bad[k] = v
+		tampered := []byte("tampered")
+		bad := planeSource(man, sums, []byte("sig"), manRaw, binName, tampered)
+		// The plane claims the tampered bytes. The signed checksum file
+		// still names the real binary. That must not install.
+		sum := sha256.Sum256(tampered)
+		for i := range bad.cand.Artifacts {
+			if bad.cand.Artifacts[i].Name == binName {
+				bad.cand.Artifacts[i].SHA256 = hex.EncodeToString(sum[:])
+				bad.cand.Artifacts[i].Size = int64(len(tampered))
+			}
 		}
-		bad["https://example.test/bin"] = []byte("tampered")
 		var installed bool
 		plan, err := Tick(context.Background(), base, Hooks{
-			Fetch:  bad,
+			Source: bad,
 			Verify: func(_, _, _ []byte) error { return nil },
 			Install: func(string, []byte, string) (string, error) {
 				installed = true
@@ -273,8 +255,11 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if plan.Action != ActionReject || plan.Reason != "binary checksum rejected" || installed {
+		if plan.Action != ActionReject || installed {
 			t.Fatalf("plan %+v installed %v", plan, installed)
+		}
+		if !strings.Contains(plan.Reason, "plane sha256 does not match signed checksums") && plan.Reason != "binary checksum rejected" {
+			t.Fatalf("reason %q", plan.Reason)
 		}
 	})
 
@@ -283,7 +268,7 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		cfg.Busy = true
 		var installed, restarted bool
 		plan, err := Tick(context.Background(), cfg, Hooks{
-			Fetch:  fetch,
+			Source: src,
 			Verify: func(_, _, _ []byte) error { return nil },
 			Install: func(string, []byte, string) (string, error) {
 				installed = true
@@ -304,7 +289,7 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		var restartName string
 		var restartArgs []string
 		plan, err := Tick(context.Background(), base, Hooks{
-			Fetch:  fetch,
+			Source: src,
 			Verify: func(_, _, _ []byte) error { return nil },
 			Install: func(dest string, payload []byte, previous string) (string, error) {
 				if dest != base.BinaryPath {
@@ -346,6 +331,22 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		}
 		if !m.Deadline.Equal(base.Now.Add(2 * time.Minute)) {
 			t.Fatalf("deadline %s", m.Deadline)
+		}
+	})
+
+	t.Run("sas error is redacted", func(t *testing.T) {
+		const secret = "super-secret-sas"
+		leaky := planeSource(man, sums, []byte("sig"), manRaw, binName, bin)
+		leaky.fetchErr = fmt.Errorf("download https://acct.blob.core.windows.net/c/f?sig=%s failed", secret)
+		_, err := Tick(context.Background(), base, Hooks{
+			Source: leaky,
+			Verify: func(_, _, _ []byte) error { return nil },
+		})
+		if err == nil {
+			t.Fatal("expected download error")
+		}
+		if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "sig=") {
+			t.Fatalf("error leaked sas: %v", err)
 		}
 	})
 }
@@ -403,28 +404,96 @@ func TestWatchRollbackAndConfirm(t *testing.T) {
 	}
 }
 
-func TestHTTPFetcherOmitsToken(t *testing.T) {
-	const token = "test-token-value"
-	var gotAuth string
+func TestFetchRedactsSASAndCapsSize(t *testing.T) {
+	const secret = "super-secret-sas"
+	payload := bytes.Repeat([]byte("a"), 32)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusForbidden)
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("artifact fetch sent auth %q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write(payload)
 	}))
 	defer srv.Close()
-	_, err := (HTTPFetcher{Token: token, Client: srv.Client()}).Get(context.Background(), srv.URL, "")
-	if err == nil {
-		t.Fatal("expected status error")
-	}
-	if strings.Contains(err.Error(), token) {
-		t.Fatalf("error contains token: %v", err)
-	}
-	if gotAuth != "Bearer "+token {
-		t.Fatalf("auth header %q", gotAuth)
-	}
-	_, err = (HTTPFetcher{}).Get(context.Background(), "https://example.test/x", "")
-	if err == nil || strings.Contains(err.Error(), "example.test") && strings.Contains(err.Error(), "Bearer") {
+	raw := srv.URL + "/test/0.0.0/checksums.txt?sig=" + secret
+	got, err := FetchLimited(context.Background(), srv.Client(), raw, int64(len(payload)))
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("got %d bytes", len(got))
+	}
+	_, err = FetchLimited(context.Background(), srv.Client(), raw, 8)
+	if err == nil {
+		t.Fatal("oversized download was accepted")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "?") {
+		t.Fatalf("size error leaked sas: %v", err)
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	_, err = FetchLimited(context.Background(), client, "https://127.0.0.1:1/c/blob?sig="+secret, 4)
+	if err == nil {
+		t.Fatal("expected dial error")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "sig=") {
+		t.Fatalf("dial error leaked sas: %v", err)
+	}
+}
+
+func TestGPGVerifyKeyList(t *testing.T) {
+	if _, err := exec.LookPath("gpg"); err != nil {
+		t.Fatal("gpg is required")
+	}
+	payload := []byte("checksums-for-rotation")
+	pub1, sig1 := armoredKeyAndSig(t, "hm-test-old <old@example.invalid>", payload)
+	pub2, sig2 := armoredKeyAndSig(t, "hm-test-new <new@example.invalid>", payload)
+	both := append(append([]byte{}, pub1...), pub2...)
+	if err := GPGVerify(payload, sig1, both); err != nil {
+		t.Fatalf("old key in the list: %v", err)
+	}
+	if err := GPGVerify(payload, sig2, both); err != nil {
+		t.Fatalf("new key in the list: %v", err)
+	}
+	if err := GPGVerify(payload, sig1, pub2); err == nil {
+		t.Fatal("old signature was accepted after the old key was removed")
+	}
+	if err := GPGVerify(payload, sig2, pub2); err != nil {
+		t.Fatalf("new key alone: %v", err)
+	}
+}
+
+func armoredKeyAndSig(t *testing.T, uid string, payload []byte) (pub, sig []byte) {
+	t.Helper()
+	home := t.TempDir()
+	env := append(os.Environ(), "GNUPGHOME="+home)
+	gen := exec.Command("gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+		"--quick-generate-key", uid, "ed25519", "sign", "never")
+	gen.Env = env
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Fatalf("keygen %s: %v %s", uid, err, out)
+	}
+	exp := exec.Command("gpg", "--batch", "--armor", "--export")
+	exp.Env = env
+	pub, err := exp.Output()
+	if err != nil || !bytes.Contains(pub, []byte("BEGIN PGP PUBLIC KEY BLOCK")) {
+		t.Fatalf("export %s: %v", uid, err)
+	}
+	sum := filepath.Join(home, "checksums.txt")
+	if err := os.WriteFile(sum, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sigPath := filepath.Join(home, "checksums.txt.sig")
+	sign := exec.Command("gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+		"--detach-sign", "--output", sigPath, sum)
+	sign.Env = env
+	if out, err := sign.CombinedOutput(); err != nil {
+		t.Fatalf("sign %s: %v %s", uid, err, out)
+	}
+	sig, err = os.ReadFile(sigPath)
+	if err != nil || len(sig) == 0 {
+		t.Fatal(err)
+	}
+	return pub, sig
 }
 
 func TestReleaseWorkflowContract(t *testing.T) {
@@ -442,10 +511,21 @@ func TestReleaseWorkflowContract(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(body)
+		head, _, _ := strings.Cut(text, "jobs:")
+		if strings.Contains(head, "id-token") || strings.Contains(head, "contents: write") {
+			t.Fatalf("%s workflow default is not contents: read", name)
+		}
 		for _, want := range []string{
 			"contents: read",
 			"contents: write",
+			"id-token: write",
 			"environment: release",
+			"azure/login",
+			"AZURE_CLIENT_ID",
+			"AZURE_TENANT_ID",
+			"AZURE_SUBSCRIPTION_ID",
+			"AZURE_STORAGE_ACCOUNT",
+			"AZURE_STORAGE_CONTAINER",
 			"HYPERMESH_RELEASE_GPG_PRIVATE_KEY",
 			"packaging/release/publish-agent.sh",
 		} {
@@ -453,9 +533,13 @@ func TestReleaseWorkflowContract(t *testing.T) {
 				t.Fatalf("%s missing %s", name, want)
 			}
 		}
-		if strings.Contains(text, "id-token:") || strings.Contains(text, "hypermesh-wg") {
-			t.Fatalf("%s has extra scope or restarts wireguard", name)
+		if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") {
+			t.Fatalf("%s has a storage key or restarts wireguard", name)
 		}
+	}
+	ciText := string(ci)
+	if strings.Contains(ciText, "id-token") {
+		t.Fatal("ci workflow must not request id-token")
 	}
 	script, err := os.ReadFile(filepath.Join(root, "packaging", "release", "publish-agent.sh"))
 	if err != nil {
@@ -471,12 +555,17 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"buildinfo.Commit",
 		"buildinfo.Version",
 		"checksums.txt",
+		"checksums.txt.asc",
 		"--detach-sign",
+		"--auth-mode login",
 		"prerelease",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("publish script missing %s", want)
 		}
+	}
+	if strings.Contains(text, "connection-string") || strings.Contains(text, "--account-key") || strings.Contains(text, "HYPERMESH_UPDATE_GITHUB_TOKEN") {
+		t.Fatal("publish script has a storage key or a host github token")
 	}
 	roll, err := os.ReadFile(filepath.Join(root, "deploy", "lib", "update-rollback"))
 	if err != nil {
@@ -493,14 +582,66 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 }
 
-type mapFetch map[string][]byte
+type fakeSource struct {
+	cand     *Candidate
+	fetchErr error
+	files    map[string][]byte
+}
 
-func (m mapFetch) Get(_ context.Context, url, _ string) ([]byte, error) {
-	b, ok := m[url]
-	if !ok {
-		return nil, ErrRejected
+func (f *fakeSource) Latest(context.Context, string) (*Candidate, error) {
+	return f.cand, nil
+}
+
+func (f *fakeSource) Fetch(_ context.Context, rawURL string, size int64) ([]byte, error) {
+	if f.fetchErr != nil {
+		return nil, f.fetchErr
 	}
-	return b, nil
+	b, ok := f.files[rawURL]
+	if !ok {
+		return nil, fmt.Errorf("hypermesh update: download failed")
+	}
+	if int64(len(b)) != size {
+		return nil, fmt.Errorf("%w: size", ErrRejected)
+	}
+	return append([]byte(nil), b...), nil
+}
+
+func planeSource(man Manifest, sums, sig, manRaw []byte, binName string, bin []byte) *fakeSource {
+	files := map[string][]byte{
+		sasURL(ChecksumsName): sums,
+		sasURL(SignatureName): sig,
+		sasURL(ManifestName):  manRaw,
+		sasURL(binName):       bin,
+	}
+	arts := []Artifact{
+		art(ChecksumsName, sums),
+		art(SignatureName, sig),
+		art(ManifestName, manRaw),
+		art(binName, bin),
+	}
+	return &fakeSource{
+		cand: &Candidate{
+			Channel:   man.Channel,
+			Version:   man.Version,
+			Commit:    man.Commit,
+			Artifacts: arts,
+		},
+		files: files,
+	}
+}
+
+func art(name string, body []byte) Artifact {
+	sum := sha256.Sum256(body)
+	return Artifact{
+		Name:   name,
+		SHA256: hex.EncodeToString(sum[:]),
+		Size:   int64(len(body)),
+		URL:    sasURL(name),
+	}
+}
+
+func sasURL(name string) string {
+	return "https://blob.test/container/test/0.0.0/" + name + "?sig=not-logged"
 }
 
 func checksumFile(files map[string][]byte) []byte {
@@ -513,26 +654,6 @@ func checksumFile(files map[string][]byte) []byte {
 		b.WriteByte('\n')
 	}
 	return []byte(b.String())
-}
-
-func releaseDoc(assets map[string]string) []byte {
-	type asset struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
-	}
-	var rel struct {
-		TagName string  `json:"tag_name"`
-		Assets  []asset `json:"assets"`
-	}
-	rel.TagName = TestTag
-	for name, url := range assets {
-		rel.Assets = append(rel.Assets, asset{Name: name, URL: url})
-	}
-	raw, err := json.Marshal(rel)
-	if err != nil {
-		panic(err)
-	}
-	return raw
 }
 
 type memFS struct {

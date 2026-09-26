@@ -1,19 +1,26 @@
 #!/bin/bash
-# Publish a signed hypermesh-agent build to GitHub Releases.
+# Publish a signed hypermesh-agent build.
 #
 # Usage: publish-agent.sh prod|test
 #
-# prod publishes the tag in GITHUB_REF_NAME (vX.Y.Z) as a stable release.
-# test replaces the rolling prerelease tag "test" (builds of main).
+# prod publishes the tag in GITHUB_REF_NAME (vX.Y.Z).
+# test overwrites the rolling main build at prefix test/0.0.0/.
 #
-# Signing uses the GPG private key in HYPERMESH_RELEASE_GPG_PRIVATE_KEY.
-# That secret is not created by this repo. Provision it, and
-# HYPERMESH_RELEASE_GPG_PASSPHRASE when the key has one, on the GitHub
-# Environment named "release" before the first run. The script refuses
-# to upload anything until the checksum file is signed.
+# Blobs go to a private Azure container. Login is the Azure CLI
+# session from azure/login (GitHub OIDC). This script does not take
+# a storage account key.
 #
-# The repo is private. Agents download with HYPERMESH_UPDATE_GITHUB_TOKEN.
-# This script uses the Actions token (GH_TOKEN) and does not print it.
+# A GitHub Release is also created so a person can download the same
+# bytes. Hosts do not read GitHub. They ask the control plane.
+#
+# Signing uses HYPERMESH_RELEASE_GPG_PRIVATE_KEY on the GitHub
+# Environment named "release". The script refuses to upload when that
+# key is empty. HYPERMESH_RELEASE_GPG_PASSPHRASE is required only when
+# the key has one.
+#
+# AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_CONTAINER are Environment
+# variables (or secrets) on that same Environment. This file does not
+# name a real account or container.
 set -euo pipefail
 
 channel=${1:?usage: publish-agent.sh prod|test}
@@ -30,9 +37,21 @@ if [ -z "${HYPERMESH_RELEASE_GPG_PRIVATE_KEY:-}" ]; then
   echo "Provision it on the GitHub Environment named release (repo admin)." >&2
   exit 1
 fi
+if [ -z "${AZURE_STORAGE_ACCOUNT:-}" ] || [ -z "${AZURE_STORAGE_CONTAINER:-}" ]; then
+  echo "hypermesh release: AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_CONTAINER are required" >&2
+  echo "Set them on the GitHub Environment named release." >&2
+  exit 1
+fi
+case "$AZURE_STORAGE_ACCOUNT" in
+  *[!a-z0-9]*) echo "hypermesh release: AZURE_STORAGE_ACCOUNT is not a storage account name" >&2; exit 1 ;;
+esac
+case "$AZURE_STORAGE_CONTAINER" in
+  *[!a-z0-9-]*) echo "hypermesh release: AZURE_STORAGE_CONTAINER is not a container name" >&2; exit 1 ;;
+esac
 
 command -v go >/dev/null
 command -v gpg >/dev/null
+command -v az >/dev/null
 command -v curl >/dev/null
 command -v python3 >/dev/null
 command -v sha256sum >/dev/null
@@ -96,11 +115,39 @@ gpg --batch --pinentry-mode loopback --passphrase-file "${gnupg}/pass" \
   --local-user "$fpr" \
   --output "${dist}/checksums.txt.sig" \
   --detach-sign "${dist}/checksums.txt"
+gpg --batch --pinentry-mode loopback --passphrase-file "${gnupg}/pass" \
+  --local-user "$fpr" --armor \
+  --output "${dist}/checksums.txt.asc" \
+  --detach-sign "${dist}/checksums.txt"
 gpg --batch --export --armor --output "${dist}/hypermesh-release.pub" "$fpr"
 shred_gnupg=$gnupg
 gnupg=""
 rm -rf "$shred_gnupg"
 unset GNUPGHOME
+unset HYPERMESH_RELEASE_GPG_PRIVATE_KEY HYPERMESH_RELEASE_GPG_PASSPHRASE
+
+prefix="${channel}/${version}"
+upload_blob() {
+  name=$1
+  file=$2
+  az storage blob upload \
+    --auth-mode login \
+    --account-name "$AZURE_STORAGE_ACCOUNT" \
+    --container-name "$AZURE_STORAGE_CONTAINER" \
+    --name "$name" \
+    --file "$file" \
+    --overwrite true \
+    --only-show-errors
+}
+
+upload_blob "${prefix}/hypermesh-agent_${version}_linux_arm64" "${dist}/hypermesh-agent_${version}_linux_arm64"
+upload_blob "${prefix}/hypermesh-agent_${version}_linux_amd64" "${dist}/hypermesh-agent_${version}_linux_amd64"
+upload_blob "${prefix}/release.json" "${dist}/release.json"
+upload_blob "${prefix}/checksums.txt" "${dist}/checksums.txt"
+upload_blob "${prefix}/checksums.txt.sig" "${dist}/checksums.txt.sig"
+upload_blob "${prefix}/checksums.txt.asc" "${dist}/checksums.txt.asc"
+upload_blob "${prefix}/hypermesh-release.pub" "${dist}/hypermesh-release.pub"
+upload_blob "${channel}/current.json" "${dist}/release.json"
 
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
@@ -115,9 +162,9 @@ if [ "$channel" = test ]; then
   fi
 fi
 
-notes="Signed hypermesh-agent ${version} (${GITHUB_SHA})."
+notes="Signed hypermesh-agent ${version} (${GITHUB_SHA}). Hosts install from the control plane."
 if [ "$channel" = test ]; then
-  notes="Rolling build of main ${GITHUB_SHA}. Not a prod release."
+  notes="Rolling build of main ${GITHUB_SHA}. Not a prod release. Hosts install from the control plane."
 fi
 payload=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":sys.argv[1],"body":sys.argv[2],"target_commitish":sys.argv[3],"draft":False,"prerelease":sys.argv[4]=="true"}))' \
   "$tag" "$notes" "$GITHUB_SHA" "$prerelease")
@@ -130,7 +177,7 @@ if [ "$code" != 201 ]; then
 fi
 rel_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/created.json")
 
-upload() {
+upload_github() {
   name=$1
   file=$2
   code=$(curl -sS -o /dev/null -w '%{http_code}' \
@@ -145,11 +192,12 @@ upload() {
   fi
 }
 
-upload "hypermesh-agent_${version}_linux_arm64" "${dist}/hypermesh-agent_${version}_linux_arm64"
-upload "hypermesh-agent_${version}_linux_amd64" "${dist}/hypermesh-agent_${version}_linux_amd64"
-upload release.json "${dist}/release.json"
-upload checksums.txt "${dist}/checksums.txt"
-upload checksums.txt.sig "${dist}/checksums.txt.sig"
-upload hypermesh-release.pub "${dist}/hypermesh-release.pub"
+upload_github "hypermesh-agent_${version}_linux_arm64" "${dist}/hypermesh-agent_${version}_linux_arm64"
+upload_github "hypermesh-agent_${version}_linux_amd64" "${dist}/hypermesh-agent_${version}_linux_amd64"
+upload_github release.json "${dist}/release.json"
+upload_github checksums.txt "${dist}/checksums.txt"
+upload_github checksums.txt.sig "${dist}/checksums.txt.sig"
+upload_github checksums.txt.asc "${dist}/checksums.txt.asc"
+upload_github hypermesh-release.pub "${dist}/hypermesh-release.pub"
 
-echo "hypermesh release: published ${tag} ${GITHUB_SHA}"
+echo "hypermesh release: published ${channel} ${version} ${GITHUB_SHA}"

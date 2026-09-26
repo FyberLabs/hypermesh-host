@@ -1,8 +1,9 @@
 // Package update checks a release channel, verifies the candidate, and
 // installs it without touching WireGuard.
 //
-// test tracks the rolling prerelease tag "test" (builds of main).
-// prod tracks the latest non-prerelease semver tag (vX.Y.Z).
+// test tracks the rolling build of main (blob prefix test/0.0.0/).
+// prod tracks the latest stable semver tag (blob prefix prod/X.Y.Z/).
+// The agent learns the candidate from the control plane, not from GitHub.
 // An empty channel does not check.
 package update
 
@@ -12,21 +13,19 @@ import (
 )
 
 const (
-	// ChannelTest tracks builds of main, published as the rolling
-	// prerelease tag "test".
+	// ChannelTest tracks builds of main. The publish workflow overwrites
+	// the test/0.0.0/ prefix. The commit in release.json is the identity.
 	ChannelTest = "test"
-	// ChannelProd tracks tagged semver releases. GitHub's latest
-	// release ignores prereleases, so the test tag is not prod.
+	// ChannelProd tracks tagged semver releases (vX.Y.Z). A newer version
+	// installs. An older one does not.
 	ChannelProd = "prod"
-
-	// Repo is the private GitHub repo that publishes both channels.
-	Repo = "FyberLabs/hypermesh-host"
-	// TestTag is the rolling prerelease updated on every main build.
-	TestTag = "test"
 
 	ChecksumsName = "checksums.txt"
 	SignatureName = "checksums.txt.sig"
-	ManifestName  = "release.json"
+	// SignatureArmorName is the ASCII-armored detach-sign of checksums.txt.
+	// A host accepts either signature file. One valid signature is enough.
+	SignatureArmorName = "checksums.txt.asc"
+	ManifestName       = "release.json"
 	// PubKeyAsset is uploaded so an operator can install it once.
 	// The agent does not trust a pubkey fetched from the release.
 	PubKeyAsset = "hypermesh-release.pub"
@@ -55,19 +54,6 @@ func ParseChannel(s string) (string, error) {
 		return ChannelTest, nil
 	case ChannelProd:
 		return ChannelProd, nil
-	default:
-		return "", fmt.Errorf("hypermesh update: channel must be test or prod")
-	}
-}
-
-// ReleaseAPI is the GitHub release document for the channel.
-// test is the rolling prerelease. prod is the latest stable release.
-func ReleaseAPI(channel string) (string, error) {
-	switch channel {
-	case ChannelTest:
-		return "https://api.github.com/repos/" + Repo + "/releases/tags/" + TestTag, nil
-	case ChannelProd:
-		return "https://api.github.com/repos/" + Repo + "/releases/latest", nil
 	default:
 		return "", fmt.Errorf("hypermesh update: channel must be test or prod")
 	}

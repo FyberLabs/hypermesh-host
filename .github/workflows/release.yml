@@ -5,7 +5,7 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
-# CI stays contents: read. Only this job can publish a release.
+# CI stays contents: read. Only the release job publishes.
 permissions:
   contents: read
 
@@ -16,6 +16,7 @@ jobs:
     environment: release
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,9 +27,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Publish signed agent
         env:
           GH_TOKEN: ${{ github.token }}
           HYPERMESH_RELEASE_GPG_PRIVATE_KEY: ${{ secrets.HYPERMESH_RELEASE_GPG_PRIVATE_KEY }}
           HYPERMESH_RELEASE_GPG_PASSPHRASE: ${{ secrets.HYPERMESH_RELEASE_GPG_PASSPHRASE }}
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT || secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_STORAGE_CONTAINER || secrets.AZURE_STORAGE_CONTAINER }}
         run: packaging/release/publish-agent.sh prod

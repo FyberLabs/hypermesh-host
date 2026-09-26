@@ -94,6 +94,11 @@ func mapStatus(method, path string, code int, payload []byte, hdr http.Header) e
 	if method == http.MethodPost && path == PathTunnelPeer && code == http.StatusConflict && detailString(payload) == "Tunnel is revoked" {
 		return ErrTunnelRevoked
 	}
+	// The updates route is not an unknown-device lookup. A 404 body must
+	// not be copied: it can echo a SAS URL.
+	if strings.HasPrefix(path, Prefix+"/agent/updates/") && code == http.StatusNotFound {
+		return &StatusError{Method: method, Path: path, StatusCode: code}
+	}
 	switch code {
 	case http.StatusUnauthorized:
 		return ErrUnauthorized

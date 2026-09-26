@@ -87,9 +87,11 @@ func SelectBinary(checksums, arch string) (string, error) {
 	return match, nil
 }
 
-// GPGVerify checks a detached signature over checksums with an armored
-// public key. It uses gpg and a temporary keyring. A missing gpg, a bad
-// key, or a bad signature is a rejection.
+// GPGVerify checks a detached signature over checksums. pubkey is one
+// or more ASCII-armored public keys concatenated in one file (the
+// rotation overlap). gpg accepts the signature when any imported key
+// made it. A missing gpg, a bad key, or a bad signature is a rejection.
+// The agent does not fetch this file from the release.
 func GPGVerify(checksums, sig, pubkey []byte) error {
 	if len(checksums) == 0 || len(sig) == 0 || len(pubkey) == 0 {
 		return fmt.Errorf("%w: checksums, signature, and pubkey are required", ErrRejected)

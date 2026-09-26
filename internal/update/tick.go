@@ -2,10 +2,12 @@ package update
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,8 +16,7 @@ import (
 
 const maxAsset = 64 << 20
 
-// Config is one update check. Token is a GitHub read token for this
-// private repo. It is never logged.
+// Config is one update check. There is no GitHub token on the host.
 type Config struct {
 	Channel        string
 	CurrentVersion string
@@ -24,31 +25,36 @@ type Config struct {
 	BinaryPath     string
 	PubKeyPath     string
 	MarkerPath     string
-	Token          string
 	Busy           bool
 	RollbackWindow time.Duration
 	Now            time.Time
 }
 
-// Hooks replace network, gpg, install, and restart in tests.
-// Nil fields use the production implementations.
+// Hooks replace the plane, gpg, install, and restart in tests.
+// A nil Source is an error. Nil verify, install, and restart use the
+// production implementations.
 type Hooks struct {
-	Fetch    Fetcher
+	Source   UpdateSource
 	Verify   func(checksums, sig, pubkey []byte) error
 	Install  func(dest string, payload []byte, previous string) (string, error)
 	Restart  func(ctx context.Context) error
 	ReadFile func(path string) ([]byte, error)
 }
 
-// Fetcher downloads a URL. accept is the Accept header.
-type Fetcher interface {
-	Get(ctx context.Context, url, accept string) ([]byte, error)
-}
-
 // Tick checks the channel. A verification failure returns a reject
 // plan and a nil error. Transport failures return an error so the
-// agent keeps running and tries again later.
+// agent keeps running and tries again later. Errors never carry a
+// SAS query string.
 func Tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
+	plan, err := tick(ctx, cfg, h)
+	if err != nil {
+		return Plan{}, scrub(err)
+	}
+	plan.Reason = RedactQuery(plan.Reason)
+	return plan, nil
+}
+
+func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	ch, err := ParseChannel(cfg.Channel)
 	if err != nil {
 		return Plan{Action: ActionReject, Reason: "bad channel"}, err
@@ -73,41 +79,39 @@ func Tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	if err != nil || len(pub) == 0 {
 		return Plan{Action: ActionReject, Reason: "update pubkey missing"}, nil
 	}
-	fetch := h.Fetch
-	if fetch == nil {
-		fetch = HTTPFetcher{Token: cfg.Token}
+	if h.Source == nil {
+		return Plan{}, fmt.Errorf("hypermesh update: source is required")
 	}
-	api, err := ReleaseAPI(cfg.Channel)
+	cand, err := h.Source.Latest(ctx, cfg.Channel)
 	if err != nil {
 		return Plan{}, err
 	}
-	raw, err := fetch.Get(ctx, api, "application/vnd.github+json")
-	if err != nil {
-		return Plan{}, err
+	if cand == nil {
+		return Plan{Action: ActionSkip, Reason: "nothing published"}, nil
 	}
-	var rel ghRelease
-	if err := json.Unmarshal(raw, &rel); err != nil {
-		return Plan{}, fmt.Errorf("hypermesh update: release document")
+	if strings.TrimSpace(cand.Channel) != cfg.Channel {
+		return Plan{Action: ActionReject, Reason: "plane channel does not match this box"}, nil
 	}
-	sumsURL, err := assetURL(rel, ChecksumsName)
+
+	sumsArt, err := artifactByName(cand, ChecksumsName)
 	if err != nil {
-		return Plan{Action: ActionReject, Reason: err.Error()}, nil
+		return rejected(err)
 	}
-	sigURL, err := assetURL(rel, SignatureName)
+	sigArt, err := signatureArtifact(cand)
 	if err != nil {
-		return Plan{Action: ActionReject, Reason: "release has no checksum signature"}, nil
+		return rejected(err)
 	}
-	manURL, err := assetURL(rel, ManifestName)
+	manArt, err := artifactByName(cand, ManifestName)
 	if err != nil {
-		return Plan{Action: ActionReject, Reason: "release has no release.json"}, nil
+		return rejected(err)
 	}
-	sums, err := fetch.Get(ctx, sumsURL, "application/octet-stream")
+	sums, err := fetchOne(ctx, h.Source, sumsArt)
 	if err != nil {
-		return Plan{}, err
+		return rejected(err)
 	}
-	sig, err := fetch.Get(ctx, sigURL, "application/octet-stream")
+	sig, err := fetchOne(ctx, h.Source, sigArt)
 	if err != nil {
-		return Plan{}, err
+		return rejected(err)
 	}
 	verify := h.Verify
 	if verify == nil {
@@ -116,9 +120,12 @@ func Tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	if err := verify(sums, sig, pub); err != nil {
 		return Plan{Action: ActionReject, Reason: "checksum signature rejected"}, nil
 	}
-	manRaw, err := fetch.Get(ctx, manURL, "application/octet-stream")
+	if err := planeHashMatches(sums, ManifestName, manArt); err != nil {
+		return rejected(err)
+	}
+	manRaw, err := fetchOne(ctx, h.Source, manArt)
 	if err != nil {
-		return Plan{}, err
+		return rejected(err)
 	}
 	if err := CheckHash(sums, ManifestName, manRaw); err != nil {
 		return Plan{Action: ActionReject, Reason: "release.json checksum rejected"}, nil
@@ -126,6 +133,9 @@ func Tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	var man Manifest
 	if err := json.Unmarshal(manRaw, &man); err != nil {
 		return Plan{Action: ActionReject, Reason: "release.json rejected"}, nil
+	}
+	if man.Channel != cand.Channel || man.Version != cand.Version || !strings.EqualFold(strings.TrimSpace(man.Commit), strings.TrimSpace(cand.Commit)) {
+		return Plan{Action: ActionReject, Reason: "signed release.json does not match the plane"}, nil
 	}
 	plan := Decide(cfg.Channel, cfg.CurrentVersion, cfg.CurrentCommit, man, cfg.Busy)
 	if plan.Action != ActionInstall {
@@ -135,13 +145,16 @@ func Tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	if err != nil {
 		return Plan{Action: ActionReject, Reason: "no binary for this arch"}, nil
 	}
-	binURL, err := assetURL(rel, binName)
+	binArt, err := artifactByName(cand, binName)
 	if err != nil {
-		return Plan{Action: ActionReject, Reason: "binary asset missing"}, nil
+		return rejected(err)
 	}
-	bin, err := fetch.Get(ctx, binURL, "application/octet-stream")
+	if err := planeHashMatches(sums, binName, binArt); err != nil {
+		return rejected(err)
+	}
+	bin, err := fetchOne(ctx, h.Source, binArt)
 	if err != nil {
-		return Plan{}, err
+		return rejected(err)
 	}
 	if err := CheckHash(sums, binName, bin); err != nil {
 		return Plan{Action: ActionReject, Version: plan.Version, Commit: plan.Commit, Reason: "binary checksum rejected"}, nil
@@ -176,74 +189,56 @@ func Tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	return plan, nil
 }
 
-type ghRelease struct {
-	TagName string    `json:"tag_name"`
-	Assets  []ghAsset `json:"assets"`
-}
-
-type ghAsset struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
-
-func assetURL(rel ghRelease, name string) (string, error) {
-	for _, a := range rel.Assets {
-		if a.Name == name && strings.HasPrefix(a.URL, "https://") {
-			return a.URL, nil
-		}
+func rejected(err error) (Plan, error) {
+	if err == nil {
+		return Plan{}, nil
 	}
-	return "", fmt.Errorf("%w: release has no %s", ErrRejected, name)
+	if errors.Is(err, ErrRejected) {
+		return Plan{Action: ActionReject, Reason: RedactQuery(err.Error())}, nil
+	}
+	return Plan{}, err
+}
+
+func fetchOne(ctx context.Context, src UpdateSource, art Artifact) ([]byte, error) {
+	if art.Size <= 0 || art.Size > maxAsset {
+		return nil, fmt.Errorf("%w: size of %s", ErrRejected, art.Name)
+	}
+	if !sha256Hex(art.SHA256) {
+		return nil, fmt.Errorf("%w: sha256 of %s", ErrRejected, art.Name)
+	}
+	body, err := src.Fetch(ctx, art.URL, art.Size)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) != art.Size {
+		return nil, fmt.Errorf("%w: size of %s", ErrRejected, art.Name)
+	}
+	sum := sha256.Sum256(body)
+	got := hex.EncodeToString(sum[:])
+	want := strings.ToLower(strings.TrimSpace(art.SHA256))
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		return nil, fmt.Errorf("%w: sha256 of %s", ErrRejected, art.Name)
+	}
+	return body, nil
+}
+
+// planeHashMatches requires the plane's sha256 for name to be the
+// digest in the signed checksum file. The plane does not choose the
+// digest the agent installs.
+func planeHashMatches(checksums []byte, name string, art Artifact) error {
+	want, err := checksumFor(string(checksums), name)
+	if err != nil {
+		return err
+	}
+	got := strings.ToLower(strings.TrimSpace(art.SHA256))
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		return fmt.Errorf("%w: plane sha256 does not match signed checksums for %s", ErrRejected, name)
+	}
+	return nil
 }
 
 func osRead(path string) ([]byte, error) {
 	return os.ReadFile(path)
-}
-
-// HTTPFetcher downloads GitHub API URLs. The token is sent only as a
-// header and is not included in errors.
-type HTTPFetcher struct {
-	Token  string
-	Client *http.Client
-}
-
-func (h HTTPFetcher) Get(ctx context.Context, rawURL, accept string) ([]byte, error) {
-	if strings.TrimSpace(h.Token) == "" {
-		return nil, fmt.Errorf("hypermesh update: github token is required")
-	}
-	if !strings.HasPrefix(rawURL, "https://") {
-		return nil, fmt.Errorf("hypermesh update: download url must be https")
-	}
-	client := h.Client
-	if client == nil {
-		client = &http.Client{Timeout: 2 * time.Minute}
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("hypermesh update: download")
-	}
-	if accept == "" {
-		accept = "application/vnd.github+json"
-	}
-	req.Header.Set("Accept", accept)
-	req.Header.Set("Authorization", "Bearer "+h.Token)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "hypermesh-agent")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("hypermesh update: download failed")
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAsset+1))
-	if err != nil {
-		return nil, fmt.Errorf("hypermesh update: download failed")
-	}
-	if len(body) > maxAsset {
-		return nil, fmt.Errorf("hypermesh update: asset too large")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("hypermesh update: download status %d", resp.StatusCode)
-	}
-	return body, nil
 }
 
 // RestartAgent restarts hypermesh-agent and nothing else.

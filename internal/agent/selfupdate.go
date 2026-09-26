@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"github.com/FyberLabs/hypermesh-host/internal/update"
 )
@@ -83,7 +84,7 @@ func (a *Agent) maybeSelfUpdate(ctx context.Context) {
 		fn = a.defaultSelfUpdate
 	}
 	if err := fn(ctx, a.Busy()); err != nil {
-		a.log.Warn("update check failed", "err", err)
+		a.log.Warn("update check failed", "err", update.RedactQuery(err.Error()))
 	}
 }
 
@@ -112,10 +113,9 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 		BinaryPath:     binary,
 		PubKeyPath:     a.cfg.UpdatePubKey,
 		MarkerPath:     marker,
-		Token:          a.cfg.UpdateToken,
 		Busy:           busy,
 		RollbackWindow: a.cfg.UpdateRollback,
-	}, update.Hooks{})
+	}, update.Hooks{Source: a.updateSource()})
 	if err != nil {
 		return err
 	}
@@ -123,7 +123,39 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 		"action", plan.Action,
 		"version", plan.Version,
 		"commit", plan.Commit,
-		"reason", plan.Reason,
+		"reason", update.RedactQuery(plan.Reason),
 	)
 	return nil
+}
+
+// updateSource asks the control plane with the device credential the
+// agent already uses. Artifact bytes are fetched from the SAS URL
+// with no Authorization header.
+func (a *Agent) updateSource() update.Source {
+	return update.Source{
+		LatestFn: func(ctx context.Context, channel string) (*update.Candidate, error) {
+			m, err := a.client.LatestUpdate(ctx, channel, a.state.DeviceID)
+			if err != nil || m == nil {
+				return nil, err
+			}
+			return candidateFromManifest(m), nil
+		},
+	}
+}
+
+func candidateFromManifest(m *api.UpdateManifest) *update.Candidate {
+	c := &update.Candidate{
+		Channel: m.Channel,
+		Version: m.Version,
+		Commit:  m.Commit,
+	}
+	for _, art := range m.Artifacts {
+		c.Artifacts = append(c.Artifacts, update.Artifact{
+			Name:   art.Name,
+			SHA256: art.SHA256,
+			Size:   art.Size,
+			URL:    art.URL,
+		})
+	}
+	return c
 }

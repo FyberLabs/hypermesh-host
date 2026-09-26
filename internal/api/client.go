@@ -115,6 +115,32 @@ func (c *Client) AckTunnel(ctx context.Context, deviceID string, req TunnelAckRe
 	return c.doJSON(ctx, http.MethodPost, PathTunnelAck, q, req, http.StatusOK, nil, true)
 }
 
+// LatestUpdate is GET /api/v1/hypermesh/agent/updates/{channel}?device_id=.
+// Auth matches the other device routes: Authorization: Bearer <device_secret>
+// and X-Tenant-ID. A 204 is (nil, nil): the channel has no build.
+// The returned URLs are SAS credentials. Do not log the manifest.
+func (c *Client) LatestUpdate(ctx context.Context, channel, deviceID string) (*UpdateManifest, error) {
+	switch strings.TrimSpace(channel) {
+	case "test", "prod":
+	default:
+		return nil, fmt.Errorf("hypermesh api: channel must be test or prod")
+	}
+	if strings.TrimSpace(deviceID) == "" {
+		return nil, fmt.Errorf("hypermesh api: device_id is required")
+	}
+	q := url.Values{"device_id": {deviceID}}
+	path := fmt.Sprintf(PathUpdates, url.PathEscape(strings.TrimSpace(channel)))
+	var out UpdateManifest
+	err := c.doJSON(ctx, http.MethodGet, path, q, nil, http.StatusOK, &out, true)
+	if err == errNoContent {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // IssueEnrollToken is a platform helper: POST /devices/{id}/enroll-token.
 // Tenant header only. Not used by the agent loop. Do not log the token.
 func (c *Client) IssueEnrollToken(ctx context.Context, deviceID string) (EnrollTokenResponse, error) {

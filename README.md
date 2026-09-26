@@ -27,7 +27,7 @@ go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
 
 Release archives for `hypermesh-deploy` are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
 
-Agent releases are separate. `HYPERMESH_UPDATE_CHANNEL=test` tracks the rolling prerelease tag `test` (a build of `main`). `prod` tracks tagged `vX.Y.Z` releases. The agent verifies a GPG signature over `checksums.txt` and the SHA-256 of the binary before it installs. It defers a restart while a lease is running or a job result is unacked, restarts only `hypermesh-agent`, and rolls back to `hypermesh-agent.pre-<version>` if the new binary does not heartbeat. Details, and the GitHub Environment `release` secrets that have to exist before the first publish: [deploy/agx/update.md](deploy/agx/update.md).
+Agent releases are separate. `HYPERMESH_UPDATE_CHANNEL=test` tracks builds of `main`. `prod` tracks tagged `vX.Y.Z` releases. The host asks the control plane (`GET /api/v1/hypermesh/agent/updates/{channel}`) with its device credential and downloads from the short-lived URL in that response. It verifies a GPG signature over `checksums.txt` and the SHA-256 of the binary before it installs. It defers a restart while a lease is running or a job result is unacked, restarts only `hypermesh-agent`, and rolls back to `hypermesh-agent.pre-<version>` if the new binary does not heartbeat. There is no GitHub token on the box. Details, and what has to exist before the first publish: [deploy/agx/update.md](deploy/agx/update.md).
 
 `hypermesh-supervisor` is one Linux image (`deploy/supervisor/Dockerfile`, Alpine runtime) and three placements (`HYPERMESH_SUPERVISOR_PLACEMENT`): `outside` (off the network), `host` (enrolls and heartbeats as host type `supervisor`, refuses `lease_start`), and `renter` (`POST /v1/chat/completions` on the chat gateway). Host placement does not certify the box. The renter API key and the enroll token come from the environment or a systemd credential. They are not rewritten into `supervisor.json` on start.
 
@@ -62,6 +62,7 @@ After enroll, these routes send `Authorization: Bearer <device_secret>`, `X-Tena
 | Tunnel | `GET /api/v1/hypermesh/agent/tunnel?device_id=` |
 | Tunnel peer | `POST /api/v1/hypermesh/agent/tunnel/peer` (host public key only; no `device_id`) |
 | Tunnel ack | `POST /api/v1/hypermesh/agent/tunnel/ack?device_id=` |
+| Update | `GET /api/v1/hypermesh/agent/updates/{channel}?device_id=` (`test` or `prod`). 204 means nothing published. The 200 JSON is in [deploy/agx/update.md](deploy/agx/update.md). Do not log `artifacts[].url`. |
 
 401 is missing/wrong secret. 403 is secret does not match `device_id`.
 
