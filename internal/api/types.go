@@ -165,8 +165,10 @@ type Job struct {
 	// Content-Length before downloading. Older planes omit the field.
 	SizeBytes int64 `json:"size_bytes,omitempty"`
 	// FileHash is the catalog-approved GGUF sha256 (sha256: plus 64 hex).
-	// lease_start refuses when it is missing or does not match the file
-	// it is about to mount. Distinct from ImageDigest (OCI repo@digest).
+	// A non-empty value is checked against the file lease_start mounts.
+	// Empty is accepted until the plane sends the field: a pending pin
+	// is checked instead, and with no pin the start proceeds unverified.
+	// Distinct from ImageDigest (OCI repo@digest).
 	FileHash string `json:"file_hash,omitempty"`
 	Runtime  string `json:"runtime,omitempty"`
 	Backend  string `json:"backend,omitempty"`

@@ -1059,13 +1059,17 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return a.leaseStartAlready(existing)
 	}
 	gguf := a.modelForLease()
-	if path, _, found, pendErr := a.pendingModelFile(job.CatalogID); found {
+	pinID := ""
+	havePin := false
+	if path, pin, found, pendErr := a.pendingModelFile(job.CatalogID); found {
 		if pendErr != nil {
 			a.clearPendingModel(job.CatalogID)
 			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
 			return pathb.Result{Passed: false, Reason: "pending model missing"}
 		}
 		gguf = path
+		pinID = pin
+		havePin = true
 	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
@@ -1073,14 +1077,8 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lease_start refused", "reason", reason, "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: reason}
 	}
-	expected, hasExpected := leaseExpectedHash(job)
-	if !hasExpected {
-		a.log.Info("lease_start refused", "reason", "missing expected hash", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-		return pathb.Result{Passed: false, Reason: "missing expected hash"}
-	}
-	if !strings.EqualFold(hash, expected) {
-		a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
+	if res, ok := a.leaseHashCheck(job, hash, pinID, havePin); !ok {
+		return res
 	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
@@ -1251,9 +1249,36 @@ func (a *Agent) leaseRelease(ctx context.Context, job api.Job, reason string) pa
 	return pathb.Result{Passed: true, Reason: reason}
 }
 
+// leaseHashCheck compares the mounted file to the hash the plane sent.
+// A non-empty file_hash is always checked. An empty file_hash with a
+// pending pin is checked against that pin's sha256. An empty file_hash
+// with no pin is the transition path: the plane does not send file_hash
+// yet, so the start proceeds and a warning is logged. A later change
+// will require file_hash once the plane sends it.
+func (a *Agent) leaseHashCheck(job api.Job, hash, pinID string, havePin bool) (pathb.Result, bool) {
+	expected, hasExpected := leaseExpectedHash(job)
+	if hasExpected {
+		if !strings.EqualFold(hash, expected) {
+			a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}, false
+		}
+		return pathb.Result{}, true
+	}
+	if havePin {
+		pinNorm, pinErr := normalizeModelID(pinID)
+		if pinErr != nil || !strings.EqualFold(hash, pinNorm) {
+			a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}, false
+		}
+		return pathb.Result{}, true
+	}
+	a.log.Warn("lease_start without file_hash; hash not verified", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+	return pathb.Result{}, true
+}
+
 // leaseExpectedHash is the catalog sha the plane sent on lease_start.
-// Empty is missing. A present value that is not sha256:hex is returned
-// as-is so the mount check refuses it.
+// Empty means the plane omitted it. A present value that is not
+// sha256:hex is returned as-is so the mount check refuses it.
 func leaseExpectedHash(job api.Job) (string, bool) {
 	raw := strings.TrimSpace(job.FileHash)
 	if raw == "" {

@@ -682,13 +682,6 @@ func TestLeaseStartVerifiesPayloadHashWithoutPendingPin(t *testing.T) {
 	if mismatch.Passed || mismatch.Reason != "artifact hash mismatch" || runs != 0 {
 		t.Fatalf("mismatch %+v runs=%d", mismatch, runs)
 	}
-	missing := a.leaseStart(context.Background(), api.Job{
-		JobID: "lease-missing", Kind: api.KindLeaseStart, DeviceID: testDevice,
-		LeaseID: "lease-missing", CatalogID: "cat-a", ImageDigest: oci, Runtime: "nvidia",
-	})
-	if missing.Passed || missing.Reason != "missing expected hash" || runs != 0 {
-		t.Fatalf("missing hash %+v runs=%d", missing, runs)
-	}
 	okStart := a.leaseStart(context.Background(), api.Job{
 		JobID: "lease-b", Kind: api.KindLeaseStart, DeviceID: testDevice,
 		LeaseID: "lease-b", CatalogID: "cat-a", ImageDigest: oci,
@@ -696,6 +689,98 @@ func TestLeaseStartVerifiesPayloadHashWithoutPendingPin(t *testing.T) {
 	})
 	if !okStart.Passed || okStart.ImageHash != pinB || runs != 1 {
 		t.Fatalf("matching payload hash %+v runs=%d", okStart, runs)
+	}
+}
+
+func TestLeaseStartEmptyFileHashVerifiesPendingPin(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.cfg.ModelCacheMax = "100000"
+	a.bindIP = "10.77.0.2/32"
+	body := bytes.Repeat([]byte{'p'}, 40)
+	pin := shaPin(body)
+	a.fetchWeights = func(_ context.Context, dest, _, _ string) error {
+		return os.WriteFile(dest, body, 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-p", pin, 40); !res.Passed {
+		t.Fatalf("pull: %+v", res.Result)
+	}
+	var runs int
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+		}
+		return []byte("cid\n"), nil
+	}}
+	oci := "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('e', 64)
+	other := shaPin(bytes.Repeat([]byte{'q'}, 40))
+	wrong := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-wrong", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-wrong", CatalogID: "cat-p", ImageDigest: oci,
+		FileHash: other, Runtime: "nvidia",
+	})
+	if wrong.Passed || wrong.Reason != "artifact hash mismatch" || runs != 0 {
+		t.Fatalf("non-empty file_hash %+v runs=%d", wrong, runs)
+	}
+	file := filepath.Join(cache, fileName(pin))
+	if err := os.WriteFile(file, bytes.Repeat([]byte{'x'}, 40), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mismatched := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-pin", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-pin", CatalogID: "cat-p", ImageDigest: oci, Runtime: "nvidia",
+	})
+	if mismatched.Passed || mismatched.Reason != "artifact hash mismatch" || runs != 0 {
+		t.Fatalf("pin mismatch %+v runs=%d", mismatched, runs)
+	}
+	if err := os.WriteFile(file, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	okStart := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-ok", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-ok", CatalogID: "cat-p", ImageDigest: oci, Runtime: "nvidia",
+	})
+	if !okStart.Passed || okStart.ImageHash != pin || runs != 1 {
+		t.Fatalf("empty file_hash with pin %+v runs=%d", okStart, runs)
+	}
+}
+
+func TestLeaseStartEmptyFileHashWithoutPinWarns(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.cfg.ModelCacheMax = "100000"
+	a.bindIP = "10.77.0.2/32"
+	var buf bytes.Buffer
+	a.log = slog.New(slog.NewTextHandler(&buf, nil))
+	body := bytes.Repeat([]byte{'n'}, 40)
+	pin := shaPin(body)
+	a.fetchWeights = func(_ context.Context, dest, _, _ string) error {
+		return os.WriteFile(dest, body, 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-n", pin, 40); !res.Passed {
+		t.Fatalf("pull: %+v", res.Result)
+	}
+	cleared := a.runJob(context.Background(), api.Job{
+		JobID: "stop-n", Kind: api.KindLeaseStop, DeviceID: testDevice, CatalogID: "cat-n",
+	})
+	if !cleared.Passed || pendingCatalog(readIndex(t, cache), "cat-n") {
+		t.Fatalf("pin still set %+v", cleared)
+	}
+	var runs int
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+		}
+		return []byte("cid\n"), nil
+	}}
+	oci := "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('f', 64)
+	started := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-n", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-n", CatalogID: "cat-n", ImageDigest: oci, Runtime: "nvidia",
+	})
+	if !started.Passed || started.ImageHash != pin || runs != 1 {
+		t.Fatalf("unverified start %+v runs=%d", started, runs)
+	}
+	if !strings.Contains(buf.String(), "lease_start without file_hash; hash not verified") {
+		t.Fatalf("log %s", buf.String())
 	}
 }
 

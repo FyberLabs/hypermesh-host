@@ -40,7 +40,9 @@ type cacheIndex struct {
 // Expires is written with the index. After that instant the pin is dropped
 // on the next reconcile, so a pull that never starts does not stay pinned.
 // lease_stop, lease_cancel, lease_expiry, and a successful lease_start clear
-// it sooner. A newer lab_pull for the same catalog replaces it.
+// it sooner. The plane does not send lease_cancel or lease_expiry yet, so
+// a cancelled or expired lease drops its pin only when this expiry passes.
+// A newer lab_pull for the same catalog replaces it.
 type cachePending struct {
 	CatalogID string    `json:"catalog_id"`
 	ID        string    `json:"id"`
