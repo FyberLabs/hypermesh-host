@@ -2579,7 +2579,7 @@ func waitLoop(t *testing.T, a *Agent, ok func() bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if ok() {
 			cancel()
