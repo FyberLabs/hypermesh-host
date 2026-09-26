@@ -244,29 +244,89 @@ func (a *Agent) metricsLoop(ctx context.Context) {
 	if every <= 0 {
 		every = 2 * time.Second
 	}
+	failEvery := a.metricsFailEvery
+	if failEvery <= 0 {
+		failEvery = 2 * time.Second
+	}
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
+	var failedAddr string
+	var retryAt time.Time
+	var backoff time.Duration
+	var logged string
+	logOnce := func(msg, addr string, err error) {
+		key := msg + "|" + addr
+		if err != nil {
+			key += "|" + err.Error()
+		}
+		if key == logged {
+			return
+		}
+		logged = key
+		if err != nil {
+			a.log.Error(msg, "addr", addr, "err", err)
+			return
+		}
+		a.log.Info(msg, "addr", addr)
+	}
+	// A failed listen must not stop the listener that is already up.
+	bind := func(addr, host string) bool {
+		mctx, cancel := context.WithCancel(ctx)
+		if _, err := a.serveMetrics(mctx, addr, host); err != nil {
+			cancel()
+			logOnce("metrics endpoint not started", addr, err)
+			return false
+		}
+		if stop != nil {
+			stop()
+		}
+		stop = cancel
+		cur = addr
+		return true
+	}
+	// The first pass tries immediately. A wake does too. The ticker does
+	// not retry an address that just failed; that wait backs off.
+	force := true
 	for {
 		host := a.tunnelMetricsHost()
 		want, refused := metrics.ResolveAddr(a.cfg.MetricsAddr, host)
+		waiting := !force && time.Now().Before(retryAt)
+		if waiting && failedAddr != "" && want == failedAddr {
+			want = metrics.DefaultAddr
+		}
+		force = false
+		// Loopback already failed in this window. Leave it until backoff.
+		if waiting && want == metrics.DefaultAddr && cur == "" {
+			want = cur
+		}
 		if want != cur {
-			if stop != nil {
-				stop()
-				stop = nil
-			}
-			mctx, cancel := context.WithCancel(ctx)
-			stop = cancel
-			bound, err := a.serveMetrics(mctx, want, host)
-			if err != nil {
-				a.log.Error("metrics endpoint not started", "addr", want, "err", err)
-				stop()
-				stop = nil
-				cur = ""
-			} else {
-				cur = want
-				if refused {
-					a.log.Warn("metrics override refused; bound the WireGuard address or loopback", "addr", bound)
+			ok := bind(want, host)
+			if !ok && want != metrics.DefaultAddr {
+				failedAddr = want
+				if backoff <= 0 {
+					backoff = failEvery
+				} else if backoff < 30*time.Second {
+					backoff *= 2
+					if backoff > 30*time.Second {
+						backoff = 30 * time.Second
+					}
 				}
+				retryAt = time.Now().Add(backoff)
+				if cur != metrics.DefaultAddr && bind(metrics.DefaultAddr, "") {
+					logOnce("metrics bound loopback after WireGuard listen failed", metrics.DefaultAddr, nil)
+				}
+			} else if ok && want != metrics.DefaultAddr {
+				failedAddr = ""
+				backoff = 0
+				retryAt = time.Time{}
+				if refused {
+					logOnce("metrics override refused; bound the WireGuard address or loopback", cur, nil)
+				}
+			} else if !ok {
+				if backoff <= 0 {
+					backoff = failEvery
+				}
+				retryAt = time.Now().Add(backoff)
 			}
 		}
 		select {
@@ -274,6 +334,7 @@ func (a *Agent) metricsLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		case <-a.metricsWake:
+			force = true
 		}
 	}
 }
@@ -294,10 +355,28 @@ func (a *Agent) tunnelMetricsHost() string {
 	if a.metricsWG != nil {
 		return a.metricsWG()
 	}
-	if ip := metrics.IfaceAddr("hypermesh"); ip != "" {
+	var ip string
+	if a.ifaceAddr != nil {
+		ip = a.ifaceAddr()
+	} else {
+		ip = metrics.IfaceAddr("hypermesh")
+	}
+	if ip != "" {
 		return ip
 	}
-	return runtime.TunnelBindHost(a.bindIP)
+	return runtime.TunnelBindHost(a.currentBindIP())
+}
+
+func (a *Agent) setBindIP(ip string) {
+	a.bindMu.Lock()
+	a.bindIP = ip
+	a.bindMu.Unlock()
+}
+
+func (a *Agent) currentBindIP() string {
+	a.bindMu.RLock()
+	defer a.bindMu.RUnlock()
+	return a.bindIP
 }
 
 func (a *Agent) pokeMetrics() {

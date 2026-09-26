@@ -23,18 +23,21 @@ import (
 
 // Agent is the host process.
 type Agent struct {
-	cfg             Config
-	client          *api.Client
-	telem           telem.Source
-	pathb           pathb.Runner
-	runtime         *runtime.NVIDIA
-	hip             *runtime.HIP
-	metal           *runtime.Metal
-	tunnels         tunnel.Applier
-	log             *slog.Logger
-	state           State
-	lease           *runtime.Handle
-	applied         string // fingerprint of the host peer we last acked (not tunnel_id)
+	cfg     Config
+	client  *api.Client
+	telem   telem.Source
+	pathb   pathb.Runner
+	runtime *runtime.NVIDIA
+	hip     *runtime.HIP
+	metal   *runtime.Metal
+	tunnels tunnel.Applier
+	log     *slog.Logger
+	state   State
+	lease   *runtime.Handle
+	applied string // fingerprint of the host peer we last acked (not tunnel_id)
+	// bindMu guards bindIP. The metrics loop reads it while the job
+	// loop writes it from the tunnel session.
+	bindMu          sync.RWMutex
 	bindIP          string // last tunnel client address, used to publish completions
 	keyDir          string // host WireGuard private key lives here only
 	peerPosted      bool   // this process already POSTed postedPub (404 counts: the device key was saved)
@@ -86,6 +89,12 @@ type Agent struct {
 	// metricsWG returns the hypermesh address. Nil reads the interface,
 	// then the tunnel session. Tests set this.
 	metricsWG func() string
+	// ifaceAddr overrides the hypermesh interface lookup. Nil uses
+	// metrics.IfaceAddr. Tests set this so a race on bindIP is reached.
+	ifaceAddr func() string
+	// metricsFailEvery is the first delay before retrying a WireGuard
+	// listen that failed. Zero uses 2s. Later tries double until 30s.
+	metricsFailEvery time.Duration
 	// metricsEvery is how often the /metrics bind is reconciled.
 	// Zero uses two seconds.
 	metricsEvery time.Duration
@@ -513,7 +522,7 @@ func (a *Agent) tunnelGone(ctx context.Context) error {
 
 func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv string) error {
 	a.loggedRevoked = false
-	a.bindIP = sess.ClientAddress
+	a.setBindIP(sess.ClientAddress)
 	a.observeBind(sess.ClientAddress)
 	a.pokeMetrics()
 	a.refreshCompletions()
@@ -574,7 +583,7 @@ func (a *Agent) liveCompletionsURL() string {
 	if u := strings.TrimSpace(a.cfg.CompletionsURL); u != "" {
 		return u
 	}
-	host := runtime.TunnelBindHost(a.bindIP)
+	host := runtime.TunnelBindHost(a.currentBindIP())
 	if host == "" {
 		return a.cfg.CompletionsEndpoint()
 	}
@@ -732,7 +741,7 @@ func (a *Agent) ensureCertSample(ctx context.Context) func() {
 		ImageDigest:  digest,
 		Runtime:      "nvidia",
 		HostPort:     a.cfg.PublishPort(),
-		BindAddress:  a.bindIP,
+		BindAddress:  a.currentBindIP(),
 		GGUFPath:     gguf,
 		LlamaJinja:   a.cfg.LlamaJinja,
 		LlamaCtxSize: a.cfg.LlamaCtxSize,
@@ -981,7 +990,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if _, err := runtime.ImageRef(job.ImageDigest); err != nil {
 		return pathb.Result{Passed: false, Reason: leaseStartFailReason(err)}
 	}
-	if runtime.TunnelBindHost(a.bindIP) == "" {
+	if runtime.TunnelBindHost(a.currentBindIP()) == "" {
 		a.log.Info("lease_start refused", "reason", "no tunnel address", "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: "no tunnel address"}
 	}
@@ -1006,7 +1015,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		ImageDigest:  job.ImageDigest,
 		Runtime:      job.Runtime,
 		HostPort:     a.cfg.PublishPort(),
-		BindAddress:  a.bindIP,
+		BindAddress:  a.currentBindIP(),
 		GGUFPath:     gguf,
 		Backend:      job.Backend,
 		LlamaJinja:   a.cfg.LlamaJinja,
