@@ -23,10 +23,10 @@ const DefaultAddr = "127.0.0.1:9464"
 
 // Config is the /metrics server.
 type Config struct {
-	Addr              string
-	AllowNonLoopback  bool
-	Log               *slog.Logger
-	Gather            func() []byte
+	Addr             string
+	AllowNonLoopback bool
+	Log              *slog.Logger
+	Gather           func() []byte
 }
 
 // AuthorizeBind accepts a literal loopback IP. A non-loopback address,
@@ -163,6 +163,7 @@ type Sample struct {
 	WGPID            *int
 	WGPort           *int
 	LeaseCount       *int
+	DiskFreeBytes    *int64
 	LastSyncUnix     *int64
 	LastHTTP         int
 	ErrClass         string
@@ -197,6 +198,9 @@ func Render(s Sample) []byte {
 	}
 	if s.LeaseCount != nil {
 		gauge(&b, "hypermesh_lease_container_count", "Running containers named with the hypermesh- lease prefix. Names are not labels.", nil, strconv.Itoa(*s.LeaseCount))
+	}
+	if s.DiskFreeBytes != nil {
+		gauge(&b, "hypermesh_disk_free_bytes", "Free bytes for non-root users on the filesystem holding the GGUF path (statfs Bavail*Bsize).", nil, strconv.FormatInt(*s.DiskFreeBytes, 10))
 	}
 	if s.LastSyncUnix != nil {
 		gauge(&b, "hypermesh_last_sync_timestamp_seconds", "Unix time of the last successful tunnel sync.", nil, strconv.FormatInt(*s.LastSyncUnix, 10))
