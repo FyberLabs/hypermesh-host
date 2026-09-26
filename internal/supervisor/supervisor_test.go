@@ -1,9 +1,12 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -382,6 +385,150 @@ func TestRenterKeyFromEnvironmentOrCredential(t *testing.T) {
 	got, err := readCredential("HYPERMESH_API_KEY", credAPIKey)
 	if err != nil || got != "hm_from_cred" {
 		t.Fatalf("credential %q %v", got, err)
+	}
+}
+
+func TestListenHandlerForwardsCallerAPIKeyWithSupervisorLease(t *testing.T) {
+	const fixtureKey = "org_fixture_ok"
+	var gotPath, gotKey, gotLease, gotLeaseAlt, gotTenant, gotBody string
+	var hits int
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("X-Api-Key")
+		gotLease = r.Header.Get("X-Hypermesh-Lease-Id")
+		gotLeaseAlt = r.Header.Get("X-Lease-Id")
+		gotTenant = r.Header.Get("X-Tenant-ID")
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"echo org_fixture_ok"}}]}`))
+	}))
+	defer gw.Close()
+
+	var logs bytes.Buffer
+	s := &Supervisor{
+		Placement: PlacementRenter,
+		HTTP:      gw.Client(),
+		Log:       slog.New(slog.NewTextHandler(&logs, nil)),
+		Creds: Credentials{
+			APIKey:   "stored_fixture_key",
+			TenantID: "8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d",
+			LeaseID:  "lease_1",
+			ChatBase: gw.URL,
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, ChatCompletionsPath, strings.NewReader(`{"messages":[{"role":"user","content":"count the sheep"}]}`))
+	req.Header.Set("X-Api-Key", fixtureKey)
+	req.Header.Set("X-Lease-Id", "caller_lease")
+	req.Header.Set("X-Hypermesh-Lease-Id", "caller_hm_lease")
+	req.Header.Set("X-Tenant-ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if hits != 1 {
+		t.Fatalf("upstream hits %d", hits)
+	}
+	if gotPath != ChatCompletionsPath {
+		t.Fatalf("path %s", gotPath)
+	}
+	if gotKey != fixtureKey {
+		t.Fatalf("upstream key %q", gotKey)
+	}
+	if gotKey == s.Creds.APIKey {
+		t.Fatal("forward used the stored renter key")
+	}
+	if gotLease != "lease_1" || gotLeaseAlt != "lease_1" {
+		t.Fatalf("lease headers hypermesh=%q lease=%q", gotLease, gotLeaseAlt)
+	}
+	if gotTenant != s.Creds.TenantID {
+		t.Fatalf("tenant %q", gotTenant)
+	}
+	if strings.Contains(gotBody, fixtureKey) || strings.Contains(gotBody, "llama-3.1-8b-q4") {
+		t.Fatalf("forwarded body %s", gotBody)
+	}
+	if !strings.Contains(gotBody, "count the sheep") {
+		t.Fatalf("forwarded body %s", gotBody)
+	}
+	if strings.Contains(rec.Body.String(), fixtureKey) || strings.Contains(rec.Body.String(), "stored_fixture_key") {
+		t.Fatalf("response leaked a key\n%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "echo ***") {
+		t.Fatalf("response %s", rec.Body.String())
+	}
+	if strings.Contains(logs.String(), fixtureKey) || strings.Contains(logs.String(), "stored_fixture_key") {
+		t.Fatalf("logs leaked a key\n%s", logs.String())
+	}
+	if s.Creds.APIKey != "stored_fixture_key" {
+		t.Fatalf("stored key was replaced: %q", s.Creds.APIKey)
+	}
+}
+
+func TestListenHandlerRejectsMissingOrForbiddenAPIKey(t *testing.T) {
+	hits := 0
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gw.Close()
+
+	var logs bytes.Buffer
+	s := &Supervisor{
+		Placement: PlacementRenter,
+		HTTP:      gw.Client(),
+		Log:       slog.New(slog.NewTextHandler(&logs, nil)),
+		Creds: Credentials{
+			APIKey:   "stored_fixture_key",
+			TenantID: "8f8e8d8c-7b6a-4a59-8c3d-2e1f0a9b8c7d",
+			LeaseID:  "lease_1",
+			ChatBase: gw.URL,
+		},
+	}
+
+	cases := []struct {
+		name   string
+		set    bool
+		key    string
+		want   string
+		absent string
+	}{
+		{name: "missing", want: "api key is required"},
+		{name: "empty", set: true, key: "", want: "api key is required"},
+		{name: "blank", set: true, key: "   ", want: "api key is required"},
+		{name: "dev", set: true, key: "hm_dev_fixture_tail", want: "hm_dev_ is not a renter identity", absent: "fixture_tail"},
+		{name: "router", set: true, key: "hm_rtr_fixture_tail", want: "hm_rtr_ is not a renter identity", absent: "fixture_tail"},
+		{name: "site", set: true, key: "hm_site_fixture_tail", want: "hm_site_ is not a renter identity", absent: "fixture_tail"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, ChatCompletionsPath, strings.NewReader(`{"messages":[{"role":"user","content":"count the sheep"}]}`))
+			if tc.set {
+				req.Header.Set("X-Api-Key", tc.key)
+			}
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("body %q", rec.Body.String())
+			}
+			if tc.absent != "" && strings.Contains(rec.Body.String(), tc.absent) {
+				t.Fatalf("response contained %q\n%s", tc.absent, rec.Body.String())
+			}
+			if tc.key != "" && strings.Contains(rec.Body.String(), tc.key) {
+				t.Fatalf("response contained the key\n%s", rec.Body.String())
+			}
+		})
+	}
+	if hits != 0 {
+		t.Fatalf("upstream was called %d times", hits)
+	}
+	if strings.Contains(logs.String(), "fixture_tail") || strings.Contains(logs.String(), "stored_fixture_key") {
+		t.Fatalf("logs leaked a key\n%s", logs.String())
 	}
 }
 
