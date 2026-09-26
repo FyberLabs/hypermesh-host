@@ -8,7 +8,7 @@ The agent checks for a new binary on a channel set in `/etc/hypermesh/agent.env`
 
 | `HYPERMESH_UPDATE_CHANNEL` | What it tracks | Blob prefix |
 |---|---|---|
-| `test` | Builds of `main`. The commit in `release.json` is the identity. The binary version stays `0.0.0`. | `test/<release-id>/`. release-id is `<run number>-<first 12 hex chars of the commit>` (`42-0123456789ab`). The directory is not overwritten. Order is the integer `build`, not the string order of the release-id. |
+| `test` | Builds of `main`. The commit in `release.json` is the identity. The binary version stays `0.0.0`. | `test/<release-id>/`. release-id is `<build>-<first 12 hex chars of the commit>` (`58-0123456789ab`). The directory is not overwritten. Order is the integer `build`, not the string order of the release-id. |
 | `prod` | Tagged semver `vX.Y.Z`. A newer version installs. An older one does not. | `prod/<X.Y.Z>/`. release-id is the semver with no leading `v`. The directory is not overwritten. The publisher also refuses to move the pointer to a semver or a build number that is not strictly newer. |
 
 One workflow, `.github/workflows/release.yml`, publishes both channels: a push to `main` is `test`, and a tag `vX.Y.Z` is `prod`. It runs `packaging/release/publish-agent.sh`. A GitHub Release is also created so a person can download the files. The agent does not read it.
@@ -31,7 +31,7 @@ Objects in `<channel>/<release-id>/`:
 - `checksums.txt.sig` and `checksums.txt.asc` (detached GPG signatures over `checksums.txt`)
 - `hypermesh-release.pub` (for an operator to install once; the agent does not trust a pubkey from the container)
 
-`build` is `GITHUB_RUN_NUMBER` of that single workflow file. GitHub increases it by one for each run, whether the run publishes test or prod. One sequence across channels: a host switching channel only moves to a strictly newer build. Separate workflow files would give prod build 3 after test build 57, and the host would refuse every prod update. ldflags set `buildinfo.Commit`, `buildinfo.Version`, and `buildinfo.Build` to the same number. A development binary has build 0.
+`build` is one sequence across channels. While the `release-publish` group is held, the publisher sets it to `max(build in channels/test.json, build in channels/prod.json, GITHUB_RUN_NUMBER) + 1`. A missing index is left out of the max. That number is written into signed `release.json`, the binary ldflags, and the channel index. A host switching channel only moves to a strictly newer build: test build 57 accepts prod build 58 and refuses a replayed build of 57 or 3. ldflags set `buildinfo.Commit`, `buildinfo.Version`, and `buildinfo.Build` to the same number. A development binary has build 0.
 
 The host refuses a candidate whose signed `build` is less than or equal to its own, including an equal number, on whichever channel it is checking. Build 0 on a candidate is not newer than a running build of 0, so it is refused. A development binary can install the first positive build. Before replacing `channels/prod.json`, the publisher reads the current `build` and `version` and fails when the new build is not greater or the new semver is not strictly greater. A missing `channels/prod.json` is the first prod publish. A later re-run of an older tag gets a higher run number; the semver check still refuses that pointer move.
 
@@ -41,7 +41,7 @@ Binaries are `CGO_ENABLED=0` builds of `./cmd/agent` for `linux/arm64` and `linu
 
 The storage account name and container name are GitHub Environment variables. This repo does not write them into the workflow or the publish script. Upload uses `az storage blob upload --auth-mode login` after `azure/login` (`allow-no-subscriptions: true`, because the release app has no subscription role). There is no storage account key in the workflow.
 
-Concurrency groups are `release-test` and `release-prod` inside that one file (`release-${{ channel }}`). A run already uploading is not cancelled. `AZURE_CONFIG_DIR` is the job temp directory. An always-run step logs `az` out and removes that directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners. Environment `release` gates the job, including the prod path. The tag-on-main check runs only for a tag.
+Test and prod publish through one concurrency group, `release-publish`, with `cancel-in-progress: false`, so runs queue instead of cancelling. `max+1` is computed only inside that lock. `AZURE_CONFIG_DIR` is the job temp directory. An always-run step logs `az` out and removes that directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners. Environment `release` gates the job, including the prod path. The tag-on-main check runs only for a tag.
 
 ## What the host calls
 

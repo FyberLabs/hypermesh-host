@@ -1,11 +1,11 @@
 # Release-id helpers for publish-agent.sh.
 # Tests source this file. It does not upload and does not read secrets.
 
-# release_id_test RUN SHA
-# RUN is the positive workflow run number (GITHUB_RUN_NUMBER). SHA is
-# the full 40-hex commit. The result is <run>-<first 12 hex chars>.
-# That directory is immutable. Order is the integer build, not the
-# string order of this id.
+# release_id_test BUILD SHA
+# BUILD is the shared positive build number. SHA is the full 40-hex
+# commit. The result is <build>-<first 12 hex chars>. That directory
+# is immutable. Order is the integer build, not the string order of
+# this id.
 release_id_test() {
   local run=$1 sha=$2 hex
   if ! [[ "$run" =~ ^[1-9][0-9]*$ ]]; then
@@ -77,4 +77,31 @@ release_id_prod() {
     return 1
   fi
   printf '%s\n' "$version"
+}
+
+# next_build TEST_BUILD PROD_BUILD RUN_NUMBER
+# Each argument is an integer, or empty when that index is missing.
+# The result is one greater than the largest integer among them.
+# Call this only while the release-publish concurrency group is held.
+# An empty set of inputs fails.
+next_build() {
+  local max=0 seen=0 n
+  for n in "$@"; do
+    if [ -z "$n" ]; then
+      continue
+    fi
+    if ! [[ "$n" =~ ^[0-9]+$ ]]; then
+      echo "hypermesh release: build is not an integer" >&2
+      return 1
+    fi
+    seen=1
+    if [ "$((10#$n))" -gt "$max" ]; then
+      max=$((10#$n))
+    fi
+  done
+  if [ "$seen" -eq 0 ]; then
+    echo "hypermesh release: no build to increment" >&2
+    return 1
+  fi
+  printf '%s\n' "$((max + 1))"
 }

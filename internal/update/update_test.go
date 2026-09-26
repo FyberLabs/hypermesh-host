@@ -64,6 +64,9 @@ func TestDecide(t *testing.T) {
 		{"channel mismatch", ChannelProd, "1.0.0", "c", 1, 0, Manifest{Channel: ChannelTest, Version: "1.2.0", Commit: "d", Build: 9}, false, ActionReject},
 		{"older build", ChannelTest, "0.0.0", "old", 5, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 4}, false, ActionReject},
 		{"equal build", ChannelTest, "0.0.0", "old", 5, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 5}, false, ActionReject},
+		{"switch test to newer prod", ChannelProd, "0.0.0", "testcommit", 57, 0, Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "prodcommit", Build: 58}, false, ActionInstall},
+		{"replayed equal prod build", ChannelProd, "0.0.0", "testcommit", 57, 0, Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "prodcommit", Build: 57}, false, ActionReject},
+		{"replayed lower prod build", ChannelProd, "0.0.0", "testcommit", 57, 0, Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "prodcommit", Build: 3}, false, ActionReject},
 		{"zero build", ChannelTest, "0.0.0", "old", 0, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new"}, false, ActionReject},
 		{"rolled back build", ChannelTest, "0.0.0", "old", 3, 5, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "bad", Build: 5}, false, ActionSkip},
 		{"after rolled back build", ChannelTest, "0.0.0", "old", 3, 5, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 6}, false, ActionInstall},
@@ -662,7 +665,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"- main",
 		`v[0-9]+.[0-9]+.[0-9]+`,
 		"cancel-in-progress: false",
-		"group: release-${{ github.ref_type == 'tag' && 'prod' || 'test' }}",
+		"group: release-publish",
 		"AZURE_CONFIG_DIR: ${{ runner.temp }}/az",
 		"az logout",
 		"if: always()",
@@ -680,6 +683,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
 		t.Fatal("release.yml has a storage key, a hardcoded account, or restarts wireguard")
+	}
+	if strings.Contains(text, "next_build") || strings.Contains(text, "group: release-test") || strings.Contains(text, "group: release-prod") {
+		t.Fatal("build max+1 or a per-channel group escaped the release-publish lock")
 	}
 	for _, line := range strings.Split(text, "\n") {
 		trim := strings.TrimSpace(line)
@@ -806,6 +812,38 @@ func sasURL(name string) string {
 	return "https://blob.test/container/test/20260926120000-bbbbbbbbbbbb/" + name + "?sig=not-logged"
 }
 
+func TestNextBuild(t *testing.T) {
+	layout := filepath.Join("..", "..", "packaging", "release", "layout.sh")
+	call := func(testBuild, prodBuild, run string) (string, error) {
+		t.Helper()
+		out, err := exec.Command("bash", "-c", `source "$1"; next_build "$2" "$3" "$4"`, "bash", layout, testBuild, prodBuild, run).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	got, err := call("", "", "5")
+	if err != nil || got != "6" {
+		t.Fatalf("both indexes missing: %q %v", got, err)
+	}
+	got, err = call("", "4", "5")
+	if err != nil || got != "6" {
+		t.Fatalf("test index missing: %q %v", got, err)
+	}
+	got, err = call("57", "", "3")
+	if err != nil || got != "58" {
+		t.Fatalf("prod index missing: %q %v", got, err)
+	}
+	got, err = call("57", "40", "60")
+	if err != nil || got != "61" {
+		t.Fatalf("run number floor: %q %v", got, err)
+	}
+	got, err = call("57", "58", "3")
+	if err != nil || got != "59" {
+		t.Fatalf("index above run number: %q %v", got, err)
+	}
+	if _, err := call("", "", ""); err == nil {
+		t.Fatal("no inputs was accepted")
+	}
+}
+
 func TestReleaseIDAndManifestOrder(t *testing.T) {
 	layout := filepath.Join("..", "..", "packaging", "release", "layout.sh")
 	id := func(fn string, args ...string) string {
@@ -887,7 +925,21 @@ func TestReleaseIDAndManifestOrder(t *testing.T) {
 		t.Fatal("channel manifest path or immutable upload is missing")
 	}
 	if !strings.Contains(text, `release_id=$(release_id_test "$build" "$GITHUB_SHA")`) {
-		t.Fatal("test release id is not <run number>-<shortsha>")
+		t.Fatal("test release id is not <build>-<shortsha>")
+	}
+	buildAt := strings.Index(text, "# publish-order: build")
+	ldflagsAt := strings.Index(text, "buildinfo.Build=${build}")
+	if buildAt < 0 || ldflagsAt < buildAt {
+		t.Fatal("build max+1 is not computed before it is baked into the binary")
+	}
+	if !strings.Contains(text, `build=$(next_build "$test_build" "$prod_build" "$run_number")`) {
+		t.Fatal("published build is not max(test, prod, run number)+1")
+	}
+	if !strings.Contains(text, "read_index_build test") || !strings.Contains(text, "read_index_build prod") {
+		t.Fatal("publisher does not read both channel indexes")
+	}
+	if strings.Contains(text, "build=${GITHUB_RUN_NUMBER") {
+		t.Fatal("published build is the raw run number")
 	}
 	start := strings.Index(text, "write_channel_manifest()")
 	end := strings.Index(text, "# Single Put Blob")

@@ -7,12 +7,13 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
-# One workflow file so GITHUB_RUN_NUMBER is one sequence across channels.
-# A host that switches from test to prod only moves to a strictly newer
-# build. The group still isolates test from prod: a main push does not
-# cancel a tag publish, and neither cancels a run already uploading.
+# one sequence across channels; a host switching channel only moves to
+# a strictly newer build. Every test and prod publish queues on this
+# group. cancel-in-progress is false, so a run already uploading is
+# not cancelled. The publish script computes max+1 only while this
+# group is held. Do not compute that number in an earlier job.
 concurrency:
-  group: release-${{ github.ref_type == 'tag' && 'prod' || 'test' }}
+  group: release-publish
   cancel-in-progress: false
 
 # CI stays contents: read. Only the release job publishes.

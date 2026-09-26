@@ -10,7 +10,7 @@
 #   test/<release-id>/...
 #   prod/<release-id>/...
 #
-# test release-id is <run number>-<first 12 hex chars of the commit>.
+# test release-id is <build>-<first 12 hex chars of the commit>.
 # prod release-id is X.Y.Z. Blobs go under test/<release-id>/ or
 # prod/<release-id>/. A release-id directory is not overwritten.
 # channels/<channel>.json is uploaded only after every artifact in
@@ -28,15 +28,14 @@
 # Login is the Azure CLI session from azure/login (GitHub OIDC).
 # This script does not take a storage account key.
 #
-# Build number is GITHUB_RUN_NUMBER of .github/workflows/release.yml.
-# That one file publishes both channels, so test and prod share one sequence across channels.
-# A host switching channel only moves to a strictly newer build.
-# Two workflow files would each have a counter,
-# and a prod build 3 would lose to a test build 57 forever.
-# The number is written into the signed release.json, the channel
-# manifest, and the binary (buildinfo.Build). The host refuses a
-# candidate whose build is not greater than its own. Before
-# channels/prod.json is replaced, this script reads the current
+# one sequence across channels; a host switching channel only moves to
+# a strictly newer build. This script runs inside the release-publish
+# concurrency group and, only there, sets
+# build = max(channels/test.json, channels/prod.json, GITHUB_RUN_NUMBER) + 1.
+# A missing index is skipped. The number is written into the signed
+# release.json, the channel manifest, and the binary (buildinfo.Build).
+# The host refuses a candidate whose build is not greater than its own.
+# Before channels/prod.json is replaced, this script reads the current
 # pointer and refuses a build or a semver that is not strictly newer.
 #
 # A GitHub Release is also created so a person can download the same
@@ -78,9 +77,9 @@ case "$AZURE_STORAGE_CONTAINER" in
   *[!a-z0-9-]*) echo "hypermesh release: AZURE_STORAGE_CONTAINER is not a container name" >&2; exit 1 ;;
 esac
 
-# One sequence across channels. release.yml is the only publisher.
-build=${GITHUB_RUN_NUMBER:-}
-if ! [[ "$build" =~ ^[1-9][0-9]*$ ]]; then
+# Floor for next_build. Not the published build by itself.
+run_number=${GITHUB_RUN_NUMBER:-}
+if ! [[ "$run_number" =~ ^[1-9][0-9]*$ ]]; then
   echo "hypermesh release: GITHUB_RUN_NUMBER must be a positive integer" >&2
   exit 1
 fi
@@ -91,6 +90,34 @@ command -v az >/dev/null
 command -v curl >/dev/null
 command -v python3 >/dev/null
 command -v sha256sum >/dev/null
+
+az_blob() {
+  az storage blob "$@" \
+    --auth-mode login \
+    --account-name "$AZURE_STORAGE_ACCOUNT" \
+    --container-name "$AZURE_STORAGE_CONTAINER"
+}
+
+# Prints the build from channels/<name>.json, or an empty line when
+# that blob is missing. A missing build field is also empty.
+read_index_build() {
+  local name=$1 exists tmp
+  exists=$(az_blob exists --name "channels/${name}.json" --query exists --output tsv)
+  if [ "$exists" != "true" ]; then
+    printf '\n'
+    return 0
+  fi
+  tmp=$(mktemp)
+  az_blob download --name "channels/${name}.json" --file "$tmp" --overwrite true --only-show-errors
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); b=d.get("build"); print("" if b is None else int(b))' "$tmp"
+  rm -f "$tmp"
+}
+
+# publish-order: build
+# max+1 stays inside the release-publish lock. Do not compute it earlier.
+test_build=$(read_index_build test)
+prod_build=$(read_index_build prod)
+build=$(next_build "$test_build" "$prod_build" "$run_number")
 
 if [ "$channel" = prod ]; then
   tag=${GITHUB_REF_NAME:?}
@@ -188,13 +215,6 @@ artifact_names=(
   checksums.txt.asc
   hypermesh-release.pub
 )
-
-az_blob() {
-  az storage blob "$@" \
-    --auth-mode login \
-    --account-name "$AZURE_STORAGE_ACCOUNT" \
-    --container-name "$AZURE_STORAGE_CONTAINER"
-}
 
 # Leave an existing object in place. verify_uploaded rejects it when
 # the bytes differ, and the channel manifest is not moved.
