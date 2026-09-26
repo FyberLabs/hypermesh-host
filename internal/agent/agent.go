@@ -785,6 +785,10 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 		return jobOutcome{Result: a.leaseStart(ctx, job)}
 	case api.KindLeaseStop:
 		return jobOutcome{Result: a.leaseStop(ctx, job)}
+	case api.KindLeaseCancel:
+		return jobOutcome{Result: a.leaseRelease(ctx, job, "lease_cancel")}
+	case api.KindLeaseExpiry:
+		return jobOutcome{Result: a.leaseRelease(ctx, job, "lease_expiry")}
 	case api.KindSellPause:
 		return a.sellPause(job)
 	case "":
@@ -989,14 +993,13 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return a.leaseStartAlready(existing)
 	}
 	gguf := a.modelForLease()
-	expected := ""
-	if path, pin, found, pendErr := a.pendingModelFile(job.CatalogID); found {
+	if path, _, found, pendErr := a.pendingModelFile(job.CatalogID); found {
 		if pendErr != nil {
+			a.clearPendingModel(job.CatalogID)
 			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
 			return pathb.Result{Passed: false, Reason: "pending model missing"}
 		}
 		gguf = path
-		expected = pin
 	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
@@ -1004,7 +1007,12 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lease_start refused", "reason", reason, "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: reason}
 	}
-	if expected != "" && !strings.EqualFold(hash, expected) {
+	expected, hasExpected := leaseExpectedHash(job)
+	if !hasExpected {
+		a.log.Info("lease_start refused", "reason", "missing expected hash", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+		return pathb.Result{Passed: false, Reason: "missing expected hash"}
+	}
+	if !strings.EqualFold(hash, expected) {
 		a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
 		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
@@ -1133,7 +1141,9 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	}
 	if h == nil {
 		// Soft no-op: already stopped / no local handle. Do not fail.
-		// Prefer an existing hash; do not invent one.
+		// Prefer an existing hash; do not invent one. A pin for a lease
+		// that never started is still released.
+		a.clearPendingForLease(job, nil)
 		a.log.Info("lease_stop", "lease_id", job.LeaseID, "reason", "no local handle")
 		snap, _ := a.telem.Collect(ctx)
 		return pathb.Result{Passed: true, ImageHash: a.preferredImageHash(nil, snap), Reason: "lease_stop"}
@@ -1151,12 +1161,43 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	if err := a.stopHandle(ctx, h); err != nil {
 		return pathb.Result{Passed: false, Reason: "runtime stop failed"}
 	}
+	a.clearPendingForLease(job, h)
 	a.setLease(nil)
 	_ = a.saveLease(nil)
 	// Host WireGuard peer stays up. Teardown only on GET revoked or 204.
 	a.log.Info("lease_stop", "lease_id", job.LeaseID)
 	snap, _ := a.telem.Collect(ctx)
 	return pathb.Result{Passed: true, ImageHash: a.preferredImageHash(h, snap), Reason: "lease_stop"}
+}
+
+// leaseRelease clears the catalog pin. A cancel or expiry for the
+// running lease also stops that container.
+func (a *Agent) leaseRelease(ctx context.Context, job api.Job, reason string) pathb.Result {
+	if h := a.localLease(); h != nil && strings.TrimSpace(job.LeaseID) != "" && strings.TrimSpace(h.LeaseID) == strings.TrimSpace(job.LeaseID) {
+		res := a.leaseStop(ctx, job)
+		if res.Passed {
+			res.Reason = reason
+		}
+		return res
+	}
+	a.clearPendingForLease(job, nil)
+	a.log.Info(reason, "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+	return pathb.Result{Passed: true, Reason: reason}
+}
+
+// leaseExpectedHash is the catalog sha the plane sent on lease_start.
+// Empty is missing. A present value that is not sha256:hex is returned
+// as-is so the mount check refuses it.
+func leaseExpectedHash(job api.Job) (string, bool) {
+	raw := strings.TrimSpace(job.FileHash)
+	if raw == "" {
+		return "", false
+	}
+	id, err := normalizeModelID(raw)
+	if err != nil {
+		return raw, true
+	}
+	return id, true
 }
 
 func (a *Agent) localLease() *runtime.Handle {

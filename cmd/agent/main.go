@@ -33,6 +33,7 @@ func main() {
 	flag.StringVar(&cfg.DiskFloor, "disk-floor-bytes", cfg.DiskFloor, "bytes that must remain free after a model download (HYPERMESH_DISK_FLOOR_BYTES, default 2 GiB)")
 	flag.StringVar(&cfg.DiskMargin, "disk-margin-bytes", cfg.DiskMargin, "extra bytes required beyond the object size (HYPERMESH_DISK_MARGIN_BYTES, default 64 MiB)")
 	flag.StringVar(&cfg.ModelCacheMax, "model-cache-max-bytes", cfg.ModelCacheMax, "model cache byte budget (HYPERMESH_MODEL_CACHE_MAX_BYTES; default is filesystem size minus the disk floor)")
+	flag.StringVar(&cfg.PendingTTL, "model-cache-pending-ttl", cfg.PendingTTL, "how long a catalog pin stays unevictable (HYPERMESH_MODEL_CACHE_PENDING_TTL; default 30m)")
 	flag.StringVar(&cfg.LlamaJinja, "llama-jinja", cfg.LlamaJinja, "lease llama-server LLAMA_ARG_JINJA (HYPERMESH_LLAMA_JINJA)")
 	flag.StringVar(&cfg.LlamaCtxSize, "llama-ctx-size", cfg.LlamaCtxSize, "lease llama-server LLAMA_ARG_CTX_SIZE (HYPERMESH_LLAMA_CTX_SIZE)")
 	flag.StringVar(&cfg.LlamaTimeout, "llama-timeout", cfg.LlamaTimeout, "lease llama-server LLAMA_ARG_TIMEOUT seconds (HYPERMESH_LLAMA_TIMEOUT)")

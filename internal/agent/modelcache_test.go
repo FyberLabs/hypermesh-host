@@ -322,6 +322,7 @@ func TestLeaseStartUpdatesModelLastUsed(t *testing.T) {
 		LeaseID:     "lease-9",
 		CatalogID:   "llama-3.1-8b-q4",
 		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('a', 64),
+		FileHash:    hash,
 		Runtime:     "nvidia",
 	})
 	if !res.Passed {
@@ -440,6 +441,7 @@ func TestPendingModelIsNotEvictedAndLeaseMountsIt(t *testing.T) {
 		LeaseID:     "lease-a",
 		CatalogID:   "cat-a",
 		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('a', 64),
+		FileHash:    pinA,
 		Runtime:     "nvidia",
 	})
 	if !res.Passed || res.ImageHash != pinA {
@@ -486,6 +488,7 @@ func TestLeaseStartRefusesMismatchedPendingModel(t *testing.T) {
 		LeaseID:     "lease-a",
 		CatalogID:   "cat-a",
 		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('b', 64),
+		FileHash:    pin,
 		Runtime:     "nvidia",
 	})
 	if res.Passed || res.Reason != "artifact hash mismatch" {
@@ -529,6 +532,183 @@ func TestLeaseStartRefusesMissingPendingModel(t *testing.T) {
 	}
 	if starts != 0 {
 		t.Fatal("container started without the pending model")
+	}
+	if pendingCatalog(readIndex(t, cache), "cat-a") {
+		t.Fatal("missing file left the pin in place")
+	}
+	again := a.leaseStart(context.Background(), api.Job{
+		JobID:       "lease-a-2",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-a-2",
+		CatalogID:   "cat-a",
+		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('c', 64),
+		FileHash:    pin,
+		Runtime:     "nvidia",
+	})
+	if again.Passed || again.Reason == "pending model missing" {
+		t.Fatalf("cleared pin must not block the catalog: %+v", again)
+	}
+	if starts != 0 {
+		t.Fatal("cleared pin started a container")
+	}
+	if res := pullCatalog(t, a, "cat-a", pin, int64(len(body))); !res.Passed {
+		t.Fatalf("replacement pull: %+v", res.Result)
+	}
+	if !pendingCatalog(readIndex(t, cache), "cat-a") {
+		t.Fatal("replacement pull did not record a pin")
+	}
+	started := a.leaseStart(context.Background(), api.Job{
+		JobID:       "lease-a-3",
+		Kind:        api.KindLeaseStart,
+		DeviceID:    testDevice,
+		LeaseID:     "lease-a-3",
+		CatalogID:   "cat-a",
+		ImageDigest: "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('c', 64),
+		FileHash:    pin,
+		Runtime:     "nvidia",
+	})
+	if !started.Passed || started.ImageHash != pin || starts == 0 {
+		t.Fatalf("start after replacement %+v runs=%d", started, starts)
+	}
+}
+
+func TestPendingPinExpiresAndLeaseReleaseClearsIt(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.cfg.ModelCacheMax = "100000"
+	a.cfg.PendingTTL = "1m"
+	now := time.Date(2026, 9, 26, 18, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return now }
+	bodies := map[string][]byte{}
+	a.fetchWeights = func(_ context.Context, dest, _, pin string) error {
+		return os.WriteFile(dest, bodies[pin], 0o600)
+	}
+	pins := map[string]string{}
+	for _, cat := range []string{"cat-a", "cat-b", "cat-c", "cat-d"} {
+		body := bytes.Repeat([]byte{cat[len(cat)-1]}, 40)
+		pin := shaPin(body)
+		bodies[pin] = body
+		pins[cat] = pin
+		if res := pullCatalog(t, a, cat, pin, int64(len(body))); !res.Passed {
+			t.Fatalf("pull %s: %+v", cat, res.Result)
+		}
+	}
+	idx := readIndex(t, cache)
+	for _, cat := range []string{"cat-a", "cat-b", "cat-c", "cat-d"} {
+		p := findPending(idx, cat)
+		if p == nil || p.ID != pins[cat] || !p.Expires.Equal(now.Add(time.Minute)) {
+			t.Fatalf("pin %s: %+v", cat, p)
+		}
+	}
+	stop := a.runJob(context.Background(), api.Job{
+		JobID: "stop-a", Kind: api.KindLeaseStop, DeviceID: testDevice,
+		LeaseID: "lease-none", CatalogID: "cat-a",
+	})
+	if !stop.Passed || stop.Reason != "lease_stop" {
+		t.Fatalf("stop %+v", stop)
+	}
+	cancel := a.runJob(context.Background(), api.Job{
+		JobID: "cancel-b", Kind: api.KindLeaseCancel, DeviceID: testDevice,
+		LeaseID: "lease-none", CatalogID: "cat-b",
+	})
+	if !cancel.Passed || cancel.Reason != "lease_cancel" {
+		t.Fatalf("cancel %+v", cancel)
+	}
+	expiry := a.runJob(context.Background(), api.Job{
+		JobID: "expiry-c", Kind: api.KindLeaseExpiry, DeviceID: testDevice,
+		LeaseID: "lease-none", CatalogID: "cat-c",
+	})
+	if !expiry.Passed || expiry.Reason != "lease_expiry" {
+		t.Fatalf("expiry %+v", expiry)
+	}
+	idx = readIndex(t, cache)
+	if pendingCatalog(idx, "cat-a") || pendingCatalog(idx, "cat-b") || pendingCatalog(idx, "cat-c") || !pendingCatalog(idx, "cat-d") {
+		t.Fatalf("pins after release %+v", idx.Pending)
+	}
+	a.now = func() time.Time { return now.Add(2 * time.Minute) }
+	used, evictable, ok := a.modelCacheUsage()
+	if !ok || used != 160 || evictable != 120 {
+		t.Fatalf("usage used=%d evictable=%d ok=%v", used, evictable, ok)
+	}
+	idx = readIndex(t, cache)
+	if len(idx.Pending) != 0 {
+		t.Fatalf("expired pin remains %+v", idx.Pending)
+	}
+	if findModel(idx, pins["cat-d"]) == nil {
+		t.Fatal("expired pin deleted the file")
+	}
+}
+
+func TestLeaseStartVerifiesPayloadHashWithoutPendingPin(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.cfg.ModelCacheMax = "100000"
+	a.bindIP = "10.77.0.2/32"
+	bodyA := bytes.Repeat([]byte{'a'}, 50)
+	bodyB := bytes.Repeat([]byte{'b'}, 50)
+	pinA, pinB := shaPin(bodyA), shaPin(bodyB)
+	bodies := map[string][]byte{pinA: bodyA, pinB: bodyB}
+	a.fetchWeights = func(_ context.Context, dest, _, pin string) error {
+		return os.WriteFile(dest, bodies[pin], 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-a", pinA, 50); !res.Passed {
+		t.Fatalf("pull A: %+v", res.Result)
+	}
+	if res := pullCatalog(t, a, "cat-b", pinB, 50); !res.Passed {
+		t.Fatalf("pull B: %+v", res.Result)
+	}
+	cleared := a.runJob(context.Background(), api.Job{
+		JobID: "stop-a", Kind: api.KindLeaseStop, DeviceID: testDevice,
+		CatalogID: "cat-a",
+	})
+	if !cleared.Passed {
+		t.Fatalf("stop %+v", cleared)
+	}
+	if pendingCatalog(readIndex(t, cache), "cat-a") {
+		t.Fatal("cat-a pin still set")
+	}
+	var runs int
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+		}
+		return []byte("cid\n"), nil
+	}}
+	oci := "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('d', 64)
+	mismatch := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-mismatch", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-mismatch", CatalogID: "cat-a", ImageDigest: oci,
+		FileHash: pinA, Runtime: "nvidia",
+	})
+	if mismatch.Passed || mismatch.Reason != "artifact hash mismatch" || runs != 0 {
+		t.Fatalf("mismatch %+v runs=%d", mismatch, runs)
+	}
+	missing := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-missing", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-missing", CatalogID: "cat-a", ImageDigest: oci, Runtime: "nvidia",
+	})
+	if missing.Passed || missing.Reason != "missing expected hash" || runs != 0 {
+		t.Fatalf("missing hash %+v runs=%d", missing, runs)
+	}
+	okStart := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-b", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-b", CatalogID: "cat-a", ImageDigest: oci,
+		FileHash: pinB, Runtime: "nvidia",
+	})
+	if !okStart.Passed || okStart.ImageHash != pinB || runs != 1 {
+		t.Fatalf("matching payload hash %+v runs=%d", okStart, runs)
+	}
+}
+
+func TestPendingModelTTLDefault(t *testing.T) {
+	d, err := (Config{}).PendingModelTTL()
+	if err != nil || d != 30*time.Minute {
+		t.Fatalf("default %s %v", d, err)
+	}
+	if _, err := (Config{PendingTTL: "0"}).PendingModelTTL(); err == nil {
+		t.Fatal("zero ttl accepted")
+	}
+	if _, err := (Config{PendingTTL: "nope"}).PendingModelTTL(); err == nil {
+		t.Fatal("bad ttl accepted")
 	}
 }
 
@@ -687,6 +867,19 @@ func readIndex(t *testing.T, dir string) cacheIndex {
 		t.Fatal(err)
 	}
 	return idx
+}
+
+func findPending(idx cacheIndex, catalog string) *cachePending {
+	for i := range idx.Pending {
+		if idx.Pending[i].CatalogID == catalog {
+			return &idx.Pending[i]
+		}
+	}
+	return nil
+}
+
+func pendingCatalog(idx cacheIndex, catalog string) bool {
+	return findPending(idx, catalog) != nil
 }
 
 func findModel(idx cacheIndex, id string) *cacheModel {

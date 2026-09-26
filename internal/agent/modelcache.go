@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
 // cacheDirName is the model store under the GGUF data directory.
@@ -35,11 +37,14 @@ type cacheIndex struct {
 }
 
 // cachePending is a model a later lease_start for this catalog must mount.
-// It stays pinned until that lease starts, so a newer lab_pull cannot evict it
-// and the lease cannot start a different file.
+// Expires is written with the index. After that instant the pin is dropped
+// on the next reconcile, so a pull that never starts does not stay pinned.
+// lease_stop, lease_cancel, lease_expiry, and a successful lease_start clear
+// it sooner. A newer lab_pull for the same catalog replaces it.
 type cachePending struct {
-	CatalogID string `json:"catalog_id"`
-	ID        string `json:"id"`
+	CatalogID string    `json:"catalog_id"`
+	ID        string    `json:"id"`
+	Expires   time.Time `json:"expires"`
 }
 
 type cacheModel struct {
@@ -196,7 +201,7 @@ func (a *Agent) reconcileCacheDirLocked(dir string) (cacheIndex, error) {
 	if err != nil {
 		return cacheIndex{}, err
 	}
-	next, changed, err := reconcileIndex(dir, idx)
+	next, changed, err := reconcileIndex(dir, idx, a.clock())
 	if err != nil {
 		return cacheIndex{}, err
 	}
@@ -226,7 +231,7 @@ func readCacheIndex(dir string) (cacheIndex, bool, error) {
 	return idx, false, nil
 }
 
-func reconcileIndex(dir string, idx cacheIndex) (cacheIndex, bool, error) {
+func reconcileIndex(dir string, idx cacheIndex, now time.Time) (cacheIndex, bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return cacheIndex{}, false, err
@@ -308,7 +313,7 @@ func reconcileIndex(dir string, idx cacheIndex) (cacheIndex, bool, error) {
 	if idx.Loaded != loaded {
 		changed = true
 	}
-	pending, pendChanged := reconcilePending(idx.Pending)
+	pending, pendChanged := reconcilePending(idx.Pending, now)
 	if pendChanged {
 		changed = true
 	}
@@ -316,8 +321,9 @@ func reconcileIndex(dir string, idx cacheIndex) (cacheIndex, bool, error) {
 	return cacheIndex{Loaded: loaded, Models: kept, Pending: pending}, changed, nil
 }
 
-func reconcilePending(in []cachePending) ([]cachePending, bool) {
+func reconcilePending(in []cachePending, now time.Time) ([]cachePending, bool) {
 	changed := false
+	now = now.UTC()
 	var out []cachePending
 	seen := map[string]struct{}{}
 	for _, p := range in {
@@ -327,17 +333,24 @@ func reconcilePending(in []cachePending) ([]cachePending, bool) {
 			changed = true
 			continue
 		}
-		// A missing file stays recorded. lease_start must refuse that
-		// catalog instead of mounting a different model.
+		// A zero or past expiry is not a pin. A missing file stays
+		// recorded until lease_start clears it or this expiry passes,
+		// so a vanished file cannot be replaced by a different model
+		// on that one start.
+		if p.Expires.IsZero() || !p.Expires.After(now) {
+			changed = true
+			continue
+		}
 		if _, dup := seen[cat]; dup {
 			changed = true
 			continue
 		}
 		seen[cat] = struct{}{}
-		if p.CatalogID != cat || p.ID != id {
+		exp := p.Expires.UTC()
+		if p.CatalogID != cat || p.ID != id || !p.Expires.Equal(exp) {
 			changed = true
 		}
-		out = append(out, cachePending{CatalogID: cat, ID: id})
+		out = append(out, cachePending{CatalogID: cat, ID: id, Expires: exp})
 	}
 	return out, changed
 }
@@ -683,6 +696,11 @@ func (a *Agent) notePendingModel(catalog, pin string) error {
 	if err != nil || catalog == "" {
 		return err
 	}
+	ttl, err := a.cfg.PendingModelTTL()
+	if err != nil {
+		return err
+	}
+	expires := a.clock().UTC().Add(ttl)
 	dir, err := modelCacheDir(a.cfg.GGUFHostPath())
 	if err != nil {
 		return err
@@ -699,17 +717,33 @@ func (a *Agent) notePendingModel(catalog, pin string) error {
 	replaced := false
 	for _, p := range idx.Pending {
 		if p.CatalogID == catalog {
-			next = append(next, cachePending{CatalogID: catalog, ID: id})
+			next = append(next, cachePending{CatalogID: catalog, ID: id, Expires: expires})
 			replaced = true
 			continue
 		}
 		next = append(next, p)
 	}
 	if !replaced {
-		next = append(next, cachePending{CatalogID: catalog, ID: id})
+		next = append(next, cachePending{CatalogID: catalog, ID: id, Expires: expires})
 	}
 	idx.Pending = next
 	return writeCacheIndex(dir, idx)
+}
+
+// clearPendingForLease drops the pin for the job catalog and, when the
+// stopped handle names a different catalog, that one too.
+func (a *Agent) clearPendingForLease(job api.Job, h *runtime.Handle) {
+	cat := strings.TrimSpace(job.CatalogID)
+	if cat != "" {
+		a.clearPendingModel(cat)
+	}
+	if h == nil {
+		return
+	}
+	handleCat := strings.TrimSpace(h.CatalogID)
+	if handleCat != "" && handleCat != cat {
+		a.clearPendingModel(handleCat)
+	}
 }
 
 func (a *Agent) clearPendingModel(catalog string) {

@@ -138,6 +138,8 @@ const (
 	KindInstanceCheck JobKind = "instance_check"
 	KindLeaseStart    JobKind = "lease_start"
 	KindLeaseStop     JobKind = "lease_stop"
+	KindLeaseCancel   JobKind = "lease_cancel"
+	KindLeaseExpiry   JobKind = "lease_expiry"
 	KindSellPause     JobKind = "sell_pause"
 )
 
@@ -161,11 +163,15 @@ type Job struct {
 	// SizeBytes is the expected artifact size for lab_pull when the plane
 	// sends it. Zero means this box learns the size from HTTP HEAD
 	// Content-Length before downloading. Older planes omit the field.
-	SizeBytes int64  `json:"size_bytes,omitempty"`
-	Runtime   string `json:"runtime,omitempty"`
-	Backend   string `json:"backend,omitempty"`
-	SuiteID   string `json:"suite_id,omitempty"`
-	Until     string `json:"until,omitempty"`
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+	// FileHash is the catalog-approved GGUF sha256 (sha256: plus 64 hex).
+	// lease_start refuses when it is missing or does not match the file
+	// it is about to mount. Distinct from ImageDigest (OCI repo@digest).
+	FileHash string `json:"file_hash,omitempty"`
+	Runtime  string `json:"runtime,omitempty"`
+	Backend  string `json:"backend,omitempty"`
+	SuiteID  string `json:"suite_id,omitempty"`
+	Until    string `json:"until,omitempty"`
 }
 
 // ScorecardReport is POST /agent/scorecard.
