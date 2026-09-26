@@ -11,13 +11,16 @@ on:
 # one sequence across channels; a host switching channel only moves to
 # a strictly newer build. Every test and prod publish uses this group.
 # cancel-in-progress is false, so a run already uploading is not
-# cancelled. actionlint 1.7.12 rejects the concurrency property that
-# would keep more than one pending run, so this file does not set
-# that property. publish-agent.sh also leases locks/publish and waits
-# until it holds that lease. max+1 is computed only inside the job.
+# cancelled. queue: max keeps every pending run. actionlint 1.7.12's
+# schema does not list that key; .github/actionlint.yaml ignores the
+# exact error on release workflows. publish-agent.sh leases
+# locks/release-publish, the one blob both publishers may write and
+# lease outside their channel, and waits until it holds that lease.
+# max+1 is computed only inside the job.
 concurrency:
   group: release-publish
   cancel-in-progress: false
+  queue: max
 
 # CI stays contents: read. Only the release job publishes.
 permissions:
@@ -71,14 +74,15 @@ jobs:
           cache: true
 
       # Two repo variables, not one shared client id and not an environment.
-      # Test output is hypermesh_host_test_github_client_id.
-      # Prod output is hypermesh_host_prod_github_client_id.
+      # Spellings are hypermesh_host_release_next_steps in infra #143.
+      # Test output is hypermesh_host_test_client_id.
+      # Prod output is hypermesh_host_prod_client_id.
       - name: Azure login (test)
         if: env.channel == 'test'
         # azure/login v2
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID_TEST }}
+          client-id: ${{ vars.HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           allow-no-subscriptions: true
@@ -88,7 +92,7 @@ jobs:
         # azure/login v2
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID_PROD }}
+          client-id: ${{ vars.HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           allow-no-subscriptions: true

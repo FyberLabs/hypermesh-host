@@ -50,11 +50,18 @@ channel_artifact_name() {
 }
 
 # channel_write_allowed CHANNEL NAME
-# Infra #143 lets the test publisher mutate only test/ and
-# channels/test.json, and the prod publisher mutate only prod/ and
-# channels/prod.json. locks/publish is not in either scope.
+# Each publisher writes its own prefix and its own channel pointer.
+# Both also write exactly locks/release-publish, and nothing else
+# outside that prefix. Cross-channel indexes are not writes.
 channel_write_allowed() {
   local channel=$1 name=$2
+  case "$channel" in
+    test|prod) ;;
+    *) return 1 ;;
+  esac
+  if [ "$name" = "locks/release-publish" ]; then
+    return 0
+  fi
   case "$channel" in
     test)
       if [ "$name" = "channels/test.json" ]; then
@@ -68,10 +75,172 @@ channel_write_allowed() {
       fi
       channel_artifact_name prod "$name"
       ;;
+  esac
+}
+
+# publish_blob_allowed CHANNEL OP NAME
+# OP is read, write, or tag.
+# Test may read channels/prod.json. Prod may read channels/test.json.
+# Those reads are not writes. Tag is test artifacts only, superseded
+# by the caller. Prod has no tag operation.
+publish_blob_allowed() {
+  local channel=$1 op=$2 name=$3
+  case "$op" in
+    read)
+      if [ "$name" = "locks/release-publish" ]; then
+        case "$channel" in
+          test|prod) return 0 ;;
+          *) return 1 ;;
+        esac
+      fi
+      case "$channel" in
+        test)
+          case "$name" in
+            channels/test.json|channels/prod.json) return 0 ;;
+          esac
+          channel_artifact_name test "$name"
+          ;;
+        prod)
+          case "$name" in
+            channels/prod.json|channels/test.json) return 0 ;;
+          esac
+          channel_artifact_name prod "$name"
+          ;;
+        *) return 1 ;;
+      esac
+      ;;
+    write)
+      channel_write_allowed "$channel" "$name"
+      ;;
+    tag)
+      [ "$channel" = test ] || return 1
+      channel_artifact_name test "$name"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# publish_list_allowed CHANNEL PREFIX
+# Only the test publisher lists, and only under test/. Prod does not list.
+publish_list_allowed() {
+  local channel=$1 prefix=$2
+  [ "$channel" = test ] || return 1
+  case "$prefix" in
+    test/) return 0 ;;
+    test/*)
+      case "$prefix" in
+        *..*|*\\*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# enforce_publish_blob CHANNEL AZ_STORAGE_BLOB_ARGS...
+# Refuses delete and any blob call outside publish_blob_allowed.
+# Tag values must be exactly superseded=true.
+enforce_publish_blob() {
+  local channel=$1
+  shift
+  local cmd=${1:-}
+  shift || true
+  local op name="" prefix="" tags="" expect="" arg
+  case "$cmd" in
+    exists|download) op="read" ;;
+    upload) op="write" ;;
+    list) op="list" ;;
+    tag)
+      op="tag"
+      if [ "${1:-}" = set ]; then
+        shift
+      fi
+      ;;
     *)
+      echo "hypermesh release: refusing blob ${cmd:-<empty>} on the ${channel} publisher" >&2
       return 1
       ;;
   esac
+  for arg in "$@"; do
+    if [ -n "$expect" ]; then
+      case "$expect" in
+        name) name=$arg ;;
+        prefix) prefix=$arg ;;
+        tags) tags=$arg ;;
+      esac
+      expect=""
+      continue
+    fi
+    case "$arg" in
+      --name|--blob-name) expect=name ;;
+      --prefix) expect=prefix ;;
+      --tags) expect=tags ;;
+      --name=*) name=${arg#--name=} ;;
+      --blob-name=*) name=${arg#--blob-name=} ;;
+      --prefix=*) prefix=${arg#--prefix=} ;;
+      --tags=*) tags=${arg#--tags=} ;;
+    esac
+  done
+  if [ -n "$expect" ]; then
+    echo "hypermesh release: blob ${cmd} is missing a value" >&2
+    return 1
+  fi
+  if [ "$op" = list ]; then
+    if ! publish_list_allowed "$channel" "$prefix"; then
+      echo "hypermesh release: refusing to list ${prefix:-<empty>} on the ${channel} publisher" >&2
+      return 1
+    fi
+    return 0
+  fi
+  if [ -z "$name" ]; then
+    echo "hypermesh release: blob ${cmd} needs a name" >&2
+    return 1
+  fi
+  if ! publish_blob_allowed "$channel" "$op" "$name"; then
+    echo "hypermesh release: refusing ${op} of ${name} on the ${channel} publisher" >&2
+    return 1
+  fi
+  if [ "$op" = tag ] && [ "$tags" != "superseded=true" ]; then
+    echo "hypermesh release: refusing tag ${tags:-<empty>} on ${name}" >&2
+    return 1
+  fi
+}
+
+# enforce_publish_lease CHANNEL AZ_STORAGE_BLOB_LEASE_ARGS...
+# Lease is a write of locks/release-publish. No other blob, and only
+# acquire, renew, or release.
+enforce_publish_lease() {
+  local channel=$1
+  shift
+  local cmd=${1:-}
+  shift || true
+  local name="" expect="" arg
+  case "$cmd" in
+    acquire|renew|release) ;;
+    *)
+      echo "hypermesh release: refusing lease ${cmd:-<empty>}" >&2
+      return 1
+      ;;
+  esac
+  for arg in "$@"; do
+    if [ -n "$expect" ]; then
+      name=$arg
+      expect=""
+      continue
+    fi
+    case "$arg" in
+      --blob-name) expect=name ;;
+      --blob-name=*) name=${arg#--blob-name=} ;;
+    esac
+  done
+  if [ "$name" != "locks/release-publish" ]; then
+    echo "hypermesh release: refusing lease on ${name:-<empty>}" >&2
+    return 1
+  fi
+  if ! publish_blob_allowed "$channel" write "$name"; then
+    echo "hypermesh release: refusing lease on ${name} for the ${channel} publisher" >&2
+    return 1
+  fi
 }
 
 # require_channel_write CHANNEL NAME
@@ -281,30 +450,30 @@ require_builds_ahead() {
 }
 
 # acquire_publish_lease
-# Creates locks/publish when it is absent, then acquires a 60s lease.
+# Creates locks/release-publish when it is absent, then acquires a 60s lease.
 # Another holder is a wait. Any other error fails immediately.
 # Prints the lease id on stdout.
-# locks/publish is outside the #143 per-channel write condition.
-# The lease stays here until infra confirms that permission.
+# That blob is the one write and lease both publishers have outside
+# their channel prefix. Nothing else outside the prefix is written.
 acquire_publish_lease() {
   local attempts=${HYPERMESH_LEASE_ATTEMPTS:-120}
   local pause=${HYPERMESH_LEASE_PAUSE:-15}
   local i exists empty id errf
-  if ! exists=$(az_blob exists --name "locks/publish" --query exists --output tsv); then
+  if ! exists=$(az_blob exists --name "locks/release-publish" --query exists --output tsv); then
     echo "hypermesh release: lock blob lookup failed" >&2
     return 1
   fi
   if [ "$exists" = "false" ]; then
     empty=$(mktemp)
     : >"$empty"
-    if ! az_blob upload --name "locks/publish" --file "$empty" --overwrite false --only-show-errors; then
+    if ! az_blob upload --name "locks/release-publish" --file "$empty" --overwrite false --only-show-errors; then
       rm -f "$empty"
-      if ! exists=$(az_blob exists --name "locks/publish" --query exists --output tsv); then
+      if ! exists=$(az_blob exists --name "locks/release-publish" --query exists --output tsv); then
         echo "hypermesh release: lock blob lookup failed" >&2
         return 1
       fi
       if [ "$exists" != "true" ]; then
-        echo "hypermesh release: could not create locks/publish" >&2
+        echo "hypermesh release: could not create locks/release-publish" >&2
         return 1
       fi
     else
@@ -318,7 +487,7 @@ acquire_publish_lease() {
   i=0
   while [ "$i" -lt "$attempts" ]; do
     i=$((i + 1))
-    if id=$(az_lease acquire --blob-name "locks/publish" --lease-duration 60 --query leaseId --output tsv 2>"$errf"); then
+    if id=$(az_lease acquire --blob-name "locks/release-publish" --lease-duration 60 --query leaseId --output tsv 2>"$errf"); then
       if [ -n "$id" ]; then
         rm -f "$errf"
         printf '%s\n' "$id"
@@ -337,7 +506,7 @@ acquire_publish_lease() {
     sleep "$pause"
   done
   rm -f "$errf"
-  echo "hypermesh release: timed out waiting for locks/publish" >&2
+  echo "hypermesh release: timed out waiting for locks/release-publish" >&2
   return 1
 }
 
@@ -348,7 +517,7 @@ renew_publish_lease() {
   local id=$1 every=${HYPERMESH_LEASE_RENEW:-30}
   while true; do
     sleep "$every"
-    az_lease renew --blob-name "locks/publish" --lease-id "$id" || true
+    az_lease renew --blob-name "locks/release-publish" --lease-id "$id" || true
   done
 }
 
@@ -358,7 +527,7 @@ release_publish_lease() {
   if [ -z "$id" ]; then
     return 0
   fi
-  az_lease release --blob-name "locks/publish" --lease-id "$id" || true
+  az_lease release --blob-name "locks/release-publish" --lease-id "$id" || true
 }
 
 # gpg_signature_ok

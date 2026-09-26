@@ -9,7 +9,7 @@
 #   channels/prod.json
 #   test/<release-id>/...
 #   prod/<release-id>/...
-#   locks/publish
+#   locks/release-publish
 #
 # test release-id is <build>-<first 12 hex chars of the commit>.
 # prod release-id is X.Y.Z. Blobs go under test/<release-id>/ or
@@ -37,7 +37,7 @@
 #
 # one sequence across channels; a host switching channel only moves to
 # a strictly newer build. This script runs inside the release-publish
-# concurrency group and holds a lease on locks/publish. Only while
+# concurrency group and holds a lease on locks/release-publish. Only while
 # both are held, it sets
 # build = max(channels/test.json, channels/prod.json, GITHUB_RUN_NUMBER) + 1.
 # A missing index is skipped. Any other index read fails the publish.
@@ -63,10 +63,13 @@
 # when the key secret is empty. The passphrase may be empty when the
 # key has none.
 #
-# The test publisher writes only test/<release-id>/ and
-# channels/test.json. The prod publisher writes only prod/<release-id>/
-# and channels/prod.json. Both still lease locks/publish. That lock is
-# outside those prefixes and is unchanged until infra confirms it.
+# The test publisher writes test/<release-id>/, channels/test.json, and
+# locks/release-publish. It reads channels/prod.json and does not write
+# it. It sets superseded=true on older test/ artifacts. The prod
+# publisher writes prod/<release-id>/, channels/prod.json, and
+# locks/release-publish. It reads channels/test.json and does not write
+# it. Prod does not delete blobs and does not set blob tags. The lease
+# blob is the only object either publisher writes outside its channel.
 set -euo pipefail
 shopt -s inherit_errexit
 
@@ -115,6 +118,7 @@ command -v python3 >/dev/null
 command -v sha256sum >/dev/null
 
 az_blob() {
+  enforce_publish_blob "$channel" "$@"
   az storage blob "$@" \
     --auth-mode login \
     --account-name "$AZURE_STORAGE_ACCOUNT" \
@@ -122,6 +126,7 @@ az_blob() {
 }
 
 az_lease() {
+  enforce_publish_lease "$channel" "$@"
   az storage blob lease "$@" \
     --auth-mode login \
     --account-name "$AZURE_STORAGE_ACCOUNT" \
@@ -151,9 +156,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# GitHub keeps one pending run per concurrency group. The lease is the
-# lock this job can actually hold: wait until locks/publish is free,
-# then renew it until exit.
+# queue: max keeps pending runs of this group. The lease is the lock
+# this job holds: wait until locks/release-publish is free, then renew
+# it until exit.
 lease_id=$(acquire_publish_lease)
 renew_publish_lease "$lease_id" &
 renew_pid=$!

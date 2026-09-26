@@ -772,8 +772,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"id-token: write",
 		"workflow_dispatch",
 		"azure/login",
-		"vars.AZURE_CLIENT_ID_TEST",
-		"vars.AZURE_CLIENT_ID_PROD",
+		"vars.HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID",
+		"vars.HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID",
 		"vars.AZURE_TENANT_ID",
 		"vars.AZURE_SUBSCRIPTION_ID",
 		"vars.AZURE_STORAGE_ACCOUNT",
@@ -789,6 +789,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"- main",
 		`v[0-9]+.[0-9]+.[0-9]+`,
 		"cancel-in-progress: false",
+		"queue: max",
 		"group: release-publish",
 		"AZURE_CONFIG_DIR=$RUNNER_TEMP/az",
 		"GITHUB_ENV",
@@ -826,8 +827,24 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(text, "set -x") {
 		t.Fatal("release.yml enables xtrace")
 	}
-	if strings.Contains(text, "queue:") {
-		t.Fatal("release.yml sets a concurrency key actionlint 1.7.12 rejects")
+	if strings.Contains(text, "AZURE_CLIENT_ID_TEST") || strings.Contains(text, "AZURE_CLIENT_ID_PROD") {
+		t.Fatal("release.yml still uses the old client id variable names")
+	}
+	if strings.Contains(strings.ReplaceAll(text, "locks/release-publish", ""), "locks/publish") {
+		t.Fatal("release.yml still leases locks/publish")
+	}
+	lintCfg, err := os.ReadFile(filepath.Join(root, ".github", "actionlint.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lintText := string(lintCfg)
+	for _, want := range []string{
+		".github/workflows/release*.yml:",
+		`unexpected key "queue" for "concurrency" section`,
+	} {
+		if !strings.Contains(lintText, want) {
+			t.Fatalf("actionlint.yaml missing %s", want)
+		}
 	}
 	if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
 		t.Fatal("release.yml has a storage key, a hardcoded account, or restarts wireguard")
@@ -875,7 +892,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"--detach-sign",
 		"--auth-mode login",
 		"prerelease",
-		"locks/publish",
+		"locks/release-publish",
+		"enforce_publish_blob",
+		"enforce_publish_lease",
 		"require_builds_ahead",
 		"classify_prod_reuse",
 		"bump the version",
@@ -891,6 +910,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("publish script missing %s", want)
 		}
+	}
+	if strings.Contains(strings.ReplaceAll(text, "locks/release-publish", ""), "locks/publish") {
+		t.Fatal("publish script still names locks/publish")
 	}
 	if strings.Contains(text, "connection-string") || strings.Contains(text, "--account-key") || strings.Contains(text, "HYPERMESH_UPDATE_GITHUB_TOKEN") {
 		t.Fatal("publish script has a storage key or a host github token")
@@ -919,11 +941,17 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"hypermesh-host-release-gpg-private-key",
 		"hypermesh-host-release-gpg-passphrase",
 		"channel_write_allowed",
+		"publish_blob_allowed",
+		"publish_list_allowed",
+		"locks/release-publish",
 		"--auth-mode login",
 	} {
 		if !strings.Contains(layoutText, want) {
 			t.Fatalf("layout.sh missing %s", want)
 		}
+	}
+	if strings.Contains(strings.ReplaceAll(layoutText, "locks/release-publish", ""), "locks/publish") {
+		t.Fatal("layout.sh still names locks/publish")
 	}
 	if strings.Contains(layoutText, "set -x") {
 		t.Fatal("layout.sh enables xtrace")
@@ -938,8 +966,13 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"HYPERMESH_RELEASE_KV_NAME",
 		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
 		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",
-		"AZURE_CLIENT_ID_TEST",
-		"AZURE_CLIENT_ID_PROD",
+		"HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID",
+		"HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID",
+		"AZURE_TENANT_ID",
+		"AZURE_SUBSCRIPTION_ID",
+		"AZURE_STORAGE_ACCOUNT",
+		"AZURE_STORAGE_CONTAINER",
+		"locks/release-publish",
 		"kv-fyber-hmhost",
 		"hypermesh-host-release-gpg-private-key",
 		"hypermesh-host-release-gpg-passphrase",
@@ -986,11 +1019,14 @@ no() {
 }
 ok test channels/test.json
 ok test test/58-0123456789ab/release.json
+ok test locks/release-publish
 ok prod channels/prod.json
 ok prod prod/1.2.3/checksums.txt
+ok prod locks/release-publish
 no test channels/prod.json
 no test prod/1.2.3/release.json
 no test locks/publish
+no test locks/release-publish/extra
 no test test/58-0123456789ab
 no test 'test/../channels/prod.json'
 no prod channels/test.json
@@ -999,6 +1035,103 @@ no prod locks/publish
 no prod 'prod/../channels/test.json'
 if channel_artifact_name test channels/test.json; then
   echo "tag scope included the manifest" >&2
+  exit 1
+fi
+read_ok() {
+  if ! publish_blob_allowed "$1" read "$2"; then
+    echo "read rejected $1 $2" >&2
+    exit 1
+  fi
+}
+read_no() {
+  if publish_blob_allowed "$1" read "$2"; then
+    echo "read allowed $1 $2" >&2
+    exit 1
+  fi
+}
+read_ok test channels/prod.json
+read_ok test channels/test.json
+read_ok test locks/release-publish
+read_ok prod channels/test.json
+read_ok prod channels/prod.json
+read_ok prod locks/release-publish
+read_no test prod/1.2.3/release.json
+read_no prod test/58-0123456789ab/release.json
+read_no test locks/publish
+if publish_blob_allowed prod tag test/58-0123456789ab/release.json; then
+  echo "prod tag allowed" >&2
+  exit 1
+fi
+if publish_blob_allowed test tag channels/test.json; then
+  echo "manifest tag allowed" >&2
+  exit 1
+fi
+if publish_blob_allowed test tag locks/release-publish; then
+  echo "lock tag allowed" >&2
+  exit 1
+fi
+if ! publish_blob_allowed test tag test/58-0123456789ab/release.json; then
+  echo "test artifact tag rejected" >&2
+  exit 1
+fi
+if publish_list_allowed prod test/; then
+  echo "prod list allowed" >&2
+  exit 1
+fi
+if ! publish_list_allowed test test/; then
+  echo "test list rejected" >&2
+  exit 1
+fi
+if publish_list_allowed test 'test/../channels/'; then
+  echo "test list escape allowed" >&2
+  exit 1
+fi
+if enforce_publish_blob prod delete --name prod/1.2.3/release.json; then
+  echo "prod delete allowed" >&2
+  exit 1
+fi
+if enforce_publish_blob prod tag set --name prod/1.2.3/release.json --tags superseded=true; then
+  echo "prod tag call allowed" >&2
+  exit 1
+fi
+if enforce_publish_blob test upload --name channels/prod.json --overwrite true; then
+  echo "test write of prod pointer allowed" >&2
+  exit 1
+fi
+if enforce_publish_blob prod upload --name channels/test.json --overwrite true; then
+  echo "prod write of test pointer allowed" >&2
+  exit 1
+fi
+if ! enforce_publish_blob test exists --name channels/prod.json; then
+  echo "test read of prod pointer rejected" >&2
+  exit 1
+fi
+if ! enforce_publish_blob prod exists --name channels/test.json; then
+  echo "prod read of test pointer rejected" >&2
+  exit 1
+fi
+if ! enforce_publish_blob test tag set --name test/58-0123456789ab/release.json --tags superseded=true; then
+  echo "test superseded tag rejected" >&2
+  exit 1
+fi
+if enforce_publish_blob test tag set --name test/58-0123456789ab/release.json --tags other=true; then
+  echo "other tag allowed" >&2
+  exit 1
+fi
+if ! enforce_publish_lease test acquire --blob-name locks/release-publish --lease-duration 60; then
+  echo "test lease rejected" >&2
+  exit 1
+fi
+if ! enforce_publish_lease prod renew --blob-name locks/release-publish --lease-id abc; then
+  echo "prod lease rejected" >&2
+  exit 1
+fi
+if enforce_publish_lease prod acquire --blob-name locks/publish; then
+  echo "old lock lease allowed" >&2
+  exit 1
+fi
+if enforce_publish_lease test break --blob-name locks/release-publish; then
+  echo "lease break allowed" >&2
   exit 1
 fi
 `
