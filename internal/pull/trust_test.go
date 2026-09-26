@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTrustedDownloadURLAllowlist(t *testing.T) {
@@ -136,6 +137,33 @@ func TestToFileAbortsWhenHEADLiesAboutLength(t *testing.T) {
 	}
 	if leftovers := partials(t, dir); len(leftovers) != 0 {
 		t.Fatalf("partials %v", leftovers)
+	}
+}
+
+func TestToFileReportsCopiedBytes(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "model.gguf")
+	payload := []byte("fixture-weights")
+	sum := sha256.Sum256(payload)
+	pin := "sha256:" + hex.EncodeToString(sum[:])
+	lim := plentyLimits(int64(len(payload)))
+	var n int64
+	var d time.Duration
+	lim.Copied = func(got int64, elapsed time.Duration) {
+		n = got
+		d = elapsed
+	}
+	err := ToFileWith(context.Background(), dest, "https://huggingface.co/bartowski/x/resolve/main/model.gguf", pin,
+		func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(string(payload))), nil
+		},
+		lim,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != int64(len(payload)) || d < 0 {
+		t.Fatalf("copied %d duration %s", n, d)
 	}
 }
 

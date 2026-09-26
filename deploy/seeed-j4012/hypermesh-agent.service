@@ -10,6 +10,10 @@ User=root
 # Default weights file. agent.env overrides this when HYPERMESH_GGUF_PATH
 # is set. An empty or omitted variable uses the same path in the agent.
 Environment=HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf
+# Model cache budget. Unset here so agent.env can set
+# HYPERMESH_MODEL_CACHE_MAX_BYTES. hypermesh-deploy writes filesystem
+# size minus HYPERMESH_DISK_FLOOR_BYTES (default 2 GiB). An omitted
+# variable uses that formula in the agent.
 EnvironmentFile=-/etc/hypermesh/agent.env
 ExecStart=/usr/local/bin/hypermesh-agent
 Restart=on-failure

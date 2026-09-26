@@ -3,7 +3,6 @@ package metrics
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -23,7 +22,7 @@ func TestDefaultAddrIsLoopback(t *testing.T) {
 	if ip == nil || !ip.IsLoopback() || ip.IsUnspecified() {
 		t.Fatalf("default host %q is not a specific loopback address", host)
 	}
-	if err := AuthorizeBind(DefaultAddr, false); err != nil {
+	if err := AuthorizeBind(DefaultAddr, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,28 +109,17 @@ func TestServeDefaultHostMetrics(t *testing.T) {
 	}
 }
 
-func TestServeRefusesZeroAndWarnsOnOptIn(t *testing.T) {
+func TestServeRefusesPublicAndUnspecified(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := Serve(ctx, Config{Addr: "0.0.0.0:0"}); err == nil {
-		t.Fatal("0.0.0.0 without opt-in must not listen")
+	for _, addr := range []string{"0.0.0.0:9464", "[::]:9464", "8.8.8.8:9464", "1.1.1.1:9464"} {
+		ln, err := Serve(ctx, Config{Addr: addr, TunnelHost: "8.8.8.8"})
+		if err == nil {
+			cancel()
+			t.Fatalf("Serve(%s) bound %s", addr, ln)
+		}
+		if !strings.Contains(err.Error(), "refusing") {
+			t.Fatalf("Serve(%s): %v", addr, err)
+		}
 	}
-	var buf strings.Builder
-	log := slog.New(slog.NewTextHandler(&buf, nil))
-	bound, err := Serve(ctx, Config{
-		Addr:             "0.0.0.0:0",
-		AllowNonLoopback: true,
-		Log:              log,
-		Gather:           func() []byte { return []byte("# eof\n") },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cancel()
-	if !strings.Contains(buf.String(), "non-loopback") {
-		t.Fatalf("opt-in must warn, log %q", buf.String())
-	}
-	// Shut the opt-in listener down; do not leave 0.0.0.0 open.
-	time.Sleep(20 * time.Millisecond)
-	_ = bound
 }

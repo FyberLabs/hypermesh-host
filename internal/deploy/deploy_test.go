@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/FyberLabs/hypermesh-host/deploy/agx"
 	"github.com/FyberLabs/hypermesh-host/internal/agent"
+	"github.com/FyberLabs/hypermesh-host/internal/pull"
 )
 
 const (
@@ -278,7 +280,7 @@ func TestHeartbeatMustBeTheListedHost(t *testing.T) {
 }
 
 func TestRenderAgentEnvUsesTestPlane(t *testing.T) {
-	body, err := RenderAgentEnv("", testTenant, "tok", "", "/models/model.gguf", false)
+	body, err := RenderAgentEnv("", testTenant, "tok", "", "/models/model.gguf", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,18 +583,37 @@ func TestConfigureDefaultsModelPathAndDirectory(t *testing.T) {
 	if !strings.Contains(string(unit), "HYPERMESH_GGUF_PATH="+agent.DefaultModelPath) {
 		t.Fatal("unit missing default GGUF path")
 	}
+	if !strings.Contains(string(unit), "HYPERMESH_MODEL_CACHE_MAX_BYTES") {
+		t.Fatal("unit missing model cache budget")
+	}
+	cache := filepath.Join(models, "cache")
+	cfi, err := os.Stat(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfi.Mode().Perm() != 0o755 {
+		t.Fatalf("cache mode %o", cfi.Mode().Perm())
+	}
+	capBytes, err := pull.CapacityBytes(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBudget := "HYPERMESH_MODEL_CACHE_MAX_BYTES=" + strconv.FormatUint(uint64(capBytes)-pull.DefaultFloorBytes, 10) + "\n"
+	if !strings.Contains(string(env), wantBudget) {
+		t.Fatalf("env budget missing %s\n%s", wantBudget, env)
+	}
 }
 
 func TestRenderAgentEnvKeepsExplicitGGUFPath(t *testing.T) {
 	const cottage = "/home/chris/hypermesh/workload/model.gguf"
-	body, err := RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "/var/lib/hypermesh", cottage, false)
+	body, err := RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "/var/lib/hypermesh", cottage, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(body, "HYPERMESH_GGUF_PATH="+cottage+"\n") {
 		t.Fatalf("explicit path lost:\n%s", body)
 	}
-	body, err = RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "", "", false)
+	body, err = RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

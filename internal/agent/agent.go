@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,18 +25,21 @@ import (
 
 // Agent is the host process.
 type Agent struct {
-	cfg             Config
-	client          *api.Client
-	telem           telem.Source
-	pathb           pathb.Runner
-	runtime         *runtime.NVIDIA
-	hip             *runtime.HIP
-	metal           *runtime.Metal
-	tunnels         tunnel.Applier
-	log             *slog.Logger
-	state           State
-	lease           *runtime.Handle
-	applied         string // fingerprint of the host peer we last acked (not tunnel_id)
+	cfg     Config
+	client  *api.Client
+	telem   telem.Source
+	pathb   pathb.Runner
+	runtime *runtime.NVIDIA
+	hip     *runtime.HIP
+	metal   *runtime.Metal
+	tunnels tunnel.Applier
+	log     *slog.Logger
+	state   State
+	lease   *runtime.Handle
+	applied string // fingerprint of the host peer we last acked (not tunnel_id)
+	// bindMu guards bindIP. The metrics loop reads it while the job
+	// loop writes it from the tunnel session.
+	bindMu          sync.RWMutex
 	bindIP          string // last tunnel client address, used to publish completions
 	keyDir          string // host WireGuard private key lives here only
 	peerPosted      bool   // this process already POSTed postedPub (404 counts: the device key was saved)
@@ -65,10 +70,14 @@ type Agent struct {
 	// A false ok omits lease_container_count. Tests stub this.
 	countLeases func(ctx context.Context) (n int, ok bool)
 	// statFree is statfs Bavail*Bsize on the GGUF filesystem. Nil uses
-	// pull.FreeBytes. The same value is disk_free_bytes and the pull
-	// preflight. An error omits the heartbeat field and fails the pull
-	// closed. Tests stub this.
+	// pull.StatfsBytes. The same value is disk_free_bytes and the pull
+	// preflight. An error omits the heartbeat field and the disk gauges,
+	// and fails the pull closed. Tests stub this.
 	statFree func(path string) (int64, error)
+	// statSize is statfs Blocks*Bsize for the disk_size gauge. Nil uses
+	// pull.CapacityBytes when statFree is stubbed, or the same StatfsBytes
+	// call as free when statFree is nil. An error omits both gauges.
+	statSize func(path string) (int64, error)
 	// headLength is HTTP HEAD Content-Length for a download URL.
 	// Nil uses pull.HTTPHeadLength. Tests stub this so they do not dial.
 	headLength func(ctx context.Context, rawURL string) (int64, error)
@@ -79,24 +88,46 @@ type Agent struct {
 	// hbRand is in [0, 1) and drives backoff jitter. Nil uses math/rand.
 	hbRand func() float64
 	hbWake chan struct{}
+	// metricsWG returns the hypermesh address. Nil reads the interface,
+	// then the tunnel session. Tests set this.
+	metricsWG func() string
+	// ifaceAddr overrides the hypermesh interface lookup. Nil uses
+	// metrics.IfaceAddr. Tests set this so a race on bindIP is reached.
+	ifaceAddr func() string
+	// metricsFailEvery is the first delay before retrying a WireGuard
+	// listen that failed. Zero uses 2s. Later tries double until 30s.
+	metricsFailEvery time.Duration
+	// metricsEvery is how often the /metrics bind is reconciled.
+	// Zero uses two seconds.
+	metricsEvery time.Duration
+	// metricsServe binds /metrics. Nil uses metrics.Serve.
+	metricsServe func(ctx context.Context, addr, tunnelHost string) (string, error)
+	metricsWake  chan struct{}
 
 	leaseMu  sync.RWMutex
 	sellMu   sync.Mutex
+	cacheMu  sync.Mutex
 	healthMu sync.Mutex
 	hbStreak int
 	// hbHoldUntil is the end of the current failure backoff or
 	// Retry-After. An immediate beat waits until this instant.
-	hbHoldUntil time.Time
-	tunnelSeen  string
-	bindSeen    string
-	lastSyncAt  time.Time
-	haveSync    bool
-	syncClass   string
-	syncHTTP    int
-	hbOK        uint64
-	hbFail      map[string]uint64
-	syncOK      uint64
-	syncFail    map[string]uint64
+	hbHoldUntil    time.Time
+	tunnelSeen     string
+	bindSeen       string
+	lastSyncAt     time.Time
+	haveSync       bool
+	syncClass      string
+	syncHTTP       int
+	hbOK           uint64
+	hbFail         map[string]uint64
+	syncOK         uint64
+	syncFail       map[string]uint64
+	pullBytes      uint64
+	pullNanos      int64
+	started        time.Time
+	hbSuccessAt    time.Time
+	metricDiskFree *int64
+	metricDiskSize *int64
 }
 
 const certLeaseID = "cert-bench"
@@ -142,13 +173,15 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 			Endpoint:  cfg.CompletionsEndpoint(),
 			Store:     pathb.FileStore{Dir: cfg.StateDir},
 		},
-		runtime: runtime.NewNVIDIA(),
-		hip:     runtime.NewHIP(),
-		metal:   runtime.NewMetal(),
-		tunnels: wg,
-		keyDir:  keyDirFor(cfg),
-		log:     log,
-		hbWake:  make(chan struct{}, 1),
+		runtime:     runtime.NewNVIDIA(),
+		hip:         runtime.NewHIP(),
+		metal:       runtime.NewMetal(),
+		tunnels:     wg,
+		keyDir:      keyDirFor(cfg),
+		log:         log,
+		hbWake:      make(chan struct{}, 1),
+		metricsWake: make(chan struct{}, 1),
+		started:     time.Now().UTC(),
 	}, nil
 }
 
@@ -163,6 +196,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if err := ensureModelDir(a.cfg.GGUFHostPath()); err != nil {
 		a.log.Warn("model directory not created", "path", a.cfg.GGUFHostPath(), "err", err)
+	}
+	if err := a.reconcileModelCache(); err != nil {
+		a.log.Warn("model cache reconcile failed", "err", err)
 	}
 
 	// Heartbeat and jobs are separate loops. A lab_pull of a multi-gigabyte
@@ -492,8 +528,9 @@ func (a *Agent) tunnelGone(ctx context.Context) error {
 
 func (a *Agent) applyMatched(ctx context.Context, sess *api.TunnelSession, priv string) error {
 	a.loggedRevoked = false
-	a.bindIP = sess.ClientAddress
+	a.setBindIP(sess.ClientAddress)
 	a.observeBind(sess.ClientAddress)
+	a.pokeMetrics()
 	a.refreshCompletions()
 	ts := tunnel.Session{
 		TunnelID:        sess.TunnelID,
@@ -552,7 +589,7 @@ func (a *Agent) liveCompletionsURL() string {
 	if u := strings.TrimSpace(a.cfg.CompletionsURL); u != "" {
 		return u
 	}
-	host := runtime.TunnelBindHost(a.bindIP)
+	host := runtime.TunnelBindHost(a.currentBindIP())
 	if host == "" {
 		return a.cfg.CompletionsEndpoint()
 	}
@@ -710,7 +747,7 @@ func (a *Agent) ensureCertSample(ctx context.Context) func() {
 		ImageDigest:  digest,
 		Runtime:      "nvidia",
 		HostPort:     a.cfg.PublishPort(),
-		BindAddress:  a.bindIP,
+		BindAddress:  a.currentBindIP(),
 		GGUFPath:     gguf,
 		LlamaJinja:   a.cfg.LlamaJinja,
 		LlamaCtxSize: a.cfg.LlamaCtxSize,
@@ -811,6 +848,10 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 		return jobOutcome{Result: a.leaseStart(ctx, job)}
 	case api.KindLeaseStop:
 		return jobOutcome{Result: a.leaseStop(ctx, job)}
+	case api.KindLeaseCancel:
+		return jobOutcome{Result: a.leaseRelease(ctx, job, "lease_cancel")}
+	case api.KindLeaseExpiry:
+		return jobOutcome{Result: a.leaseRelease(ctx, job, "lease_expiry")}
 	case api.KindSellPause:
 		return a.sellPause(job)
 	case "":
@@ -832,6 +873,13 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	}
 	dest := a.cfg.GGUFHostPath()
 	if source := strings.TrimSpace(job.SourceRef); source != "" {
+		var err error
+		dest, err = a.cacheDest(pin)
+		if err != nil {
+			reason := labPullFailReason(err)
+			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: reason}
+		}
 		if err := a.doFetchWeights(ctx, dest, source, pin, job.SizeBytes); err != nil {
 			reason := labPullFailReason(err)
 			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
@@ -848,7 +896,26 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lab_pull refused", "reason", "artifact hash mismatch", "catalog_id", job.CatalogID)
 		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
+	if strings.TrimSpace(job.SourceRef) != "" {
+		if err := a.admitModel(pin, dest); err != nil {
+			a.log.Warn("model cache admit failed", "err", err)
+		} else if err := a.notePendingModel(job.CatalogID, pin); err != nil {
+			a.log.Warn("model cache pending not saved", "err", err)
+		} else {
+			a.log.Info("model cache load", "id", strings.ToLower(pin))
+		}
+	} else {
+		a.touchModelUse(hash)
+	}
 	return pathb.Result{Passed: true, ImageHash: hash}
+}
+
+func (a *Agent) cacheDest(pin string) (string, error) {
+	dir, err := modelCacheDir(a.cfg.GGUFHostPath())
+	if err != nil {
+		return "", err
+	}
+	return cacheFilePath(dir, pin)
 }
 
 func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string, size int64) error {
@@ -860,10 +927,31 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 		return err
 	}
 	lim := a.pullLimits(size)
+	resolved, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
+	if err != nil || resolved <= 0 {
+		free, statErr := lim.Stat(dest)
+		if statErr != nil || free < 0 {
+			return &pull.DiskError{StatErr: true}
+		}
+		return &pull.DiskError{Unknown: true, Free: free}
+	}
+	lim.Expected = resolved
+	lim, err = a.planModelEviction(dest, pin, lim)
+	if err != nil {
+		return err
+	}
 	// A test stub must still refuse before it writes. Production ToFileWith
-	// HEADs when size_bytes is absent, then preflights, then downloads.
+	// preflights again, evicts, then caps the copy at the approved size.
 	if a.fetchWeights != nil {
-		if err := a.preflightPull(ctx, dest, rawURL, lim); err != nil {
+		if err := pull.Preflight(dest, lim.Expected, lim); err != nil {
+			return err
+		}
+		if lim.BeforeWrite != nil {
+			if err := lim.BeforeWrite(); err != nil {
+				return err
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
 		return a.fetchWeights(ctx, dest, sourceRef, pin)
@@ -886,6 +974,9 @@ func (a *Agent) pullLimits(size int64) pull.Limits {
 		MarginSet: true,
 		Stat:      stat,
 		Head:      a.headLength,
+		Copied: func(n int64, elapsed time.Duration) {
+			a.recordPull(n, elapsed)
+		},
 	}
 }
 
@@ -956,7 +1047,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if _, err := runtime.ImageRef(job.ImageDigest); err != nil {
 		return pathb.Result{Passed: false, Reason: leaseStartFailReason(err)}
 	}
-	if runtime.TunnelBindHost(a.bindIP) == "" {
+	if runtime.TunnelBindHost(a.currentBindIP()) == "" {
 		a.log.Info("lease_start refused", "reason", "no tunnel address", "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: "no tunnel address"}
 	}
@@ -967,12 +1058,29 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		}
 		return a.leaseStartAlready(existing)
 	}
-	gguf := a.cfg.GGUFHostPath()
+	gguf := a.modelForLease()
+	if path, _, found, pendErr := a.pendingModelFile(job.CatalogID); found {
+		if pendErr != nil {
+			a.clearPendingModel(job.CatalogID)
+			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return pathb.Result{Passed: false, Reason: "pending model missing"}
+		}
+		gguf = path
+	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
 		reason := leaseStartFailReason(err)
 		a.log.Info("lease_start refused", "reason", reason, "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: reason}
+	}
+	expected, hasExpected := leaseExpectedHash(job)
+	if !hasExpected {
+		a.log.Info("lease_start refused", "reason", "missing expected hash", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+		return pathb.Result{Passed: false, Reason: "missing expected hash"}
+	}
+	if !strings.EqualFold(hash, expected) {
+		a.log.Info("lease_start refused", "reason", "artifact hash mismatch", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
@@ -981,7 +1089,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		ImageDigest:  job.ImageDigest,
 		Runtime:      job.Runtime,
 		HostPort:     a.cfg.PublishPort(),
-		BindAddress:  a.bindIP,
+		BindAddress:  a.currentBindIP(),
 		GGUFPath:     gguf,
 		Backend:      job.Backend,
 		LlamaJinja:   a.cfg.LlamaJinja,
@@ -994,6 +1102,8 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: reason}
 	}
 	h.FileHash = hash
+	a.clearPendingModel(job.CatalogID)
+	a.touchModelUse(hash)
 	if strings.TrimSpace(h.FileHash) == "" {
 		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: "no image_hash"}
@@ -1023,6 +1133,7 @@ func (a *Agent) leaseStartAlready(h *runtime.Handle) pathb.Result {
 			a.log.Warn("lease record not saved", "err", err)
 		}
 	}
+	a.touchModelUse(hash)
 	a.log.Info("lease_start already running", "lease_id", h.LeaseID)
 	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}
 }
@@ -1096,7 +1207,9 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	}
 	if h == nil {
 		// Soft no-op: already stopped / no local handle. Do not fail.
-		// Prefer an existing hash; do not invent one.
+		// Prefer an existing hash; do not invent one. A pin for a lease
+		// that never started is still released.
+		a.clearPendingForLease(job, nil)
 		a.log.Info("lease_stop", "lease_id", job.LeaseID, "reason", "no local handle")
 		snap, _ := a.telem.Collect(ctx)
 		return pathb.Result{Passed: true, ImageHash: a.preferredImageHash(nil, snap), Reason: "lease_stop"}
@@ -1114,12 +1227,43 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	if err := a.stopHandle(ctx, h); err != nil {
 		return pathb.Result{Passed: false, Reason: "runtime stop failed"}
 	}
+	a.clearPendingForLease(job, h)
 	a.setLease(nil)
 	_ = a.saveLease(nil)
 	// Host WireGuard peer stays up. Teardown only on GET revoked or 204.
 	a.log.Info("lease_stop", "lease_id", job.LeaseID)
 	snap, _ := a.telem.Collect(ctx)
 	return pathb.Result{Passed: true, ImageHash: a.preferredImageHash(h, snap), Reason: "lease_stop"}
+}
+
+// leaseRelease clears the catalog pin. A cancel or expiry for the
+// running lease also stops that container.
+func (a *Agent) leaseRelease(ctx context.Context, job api.Job, reason string) pathb.Result {
+	if h := a.localLease(); h != nil && strings.TrimSpace(job.LeaseID) != "" && strings.TrimSpace(h.LeaseID) == strings.TrimSpace(job.LeaseID) {
+		res := a.leaseStop(ctx, job)
+		if res.Passed {
+			res.Reason = reason
+		}
+		return res
+	}
+	a.clearPendingForLease(job, nil)
+	a.log.Info(reason, "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+	return pathb.Result{Passed: true, Reason: reason}
+}
+
+// leaseExpectedHash is the catalog sha the plane sent on lease_start.
+// Empty is missing. A present value that is not sha256:hex is returned
+// as-is so the mount check refuses it.
+func leaseExpectedHash(job api.Job) (string, bool) {
+	raw := strings.TrimSpace(job.FileHash)
+	if raw == "" {
+		return "", false
+	}
+	id, err := normalizeModelID(raw)
+	if err != nil {
+		return raw, true
+	}
+	return id, true
 }
 
 func (a *Agent) localLease() *runtime.Handle {

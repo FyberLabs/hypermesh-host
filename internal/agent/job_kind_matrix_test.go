@@ -160,7 +160,7 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			job: api.Job{
 				JobID: "m-start-ok", Kind: api.KindLeaseStart, DeviceID: testDevice,
 				LeaseID: "lease-ok", CatalogID: "llama-3.1-8b-q4",
-				ImageDigest: matrixDigest, Runtime: "nvidia",
+				ImageDigest: matrixDigest, FileHash: fixtureGGUFHash(), Runtime: "nvidia",
 			},
 			setup: func(t *testing.T, a *Agent) {
 				t.Helper()

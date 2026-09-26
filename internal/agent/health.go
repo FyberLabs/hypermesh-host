@@ -12,6 +12,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"github.com/FyberLabs/hypermesh-host/internal/metrics"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
 
@@ -58,6 +59,7 @@ func (a *Agent) recordHeartbeat(err error) {
 	}
 	if err == nil {
 		a.hbOK++
+		a.hbSuccessAt = a.clock()
 		return
 	}
 	a.hbFail[class]++
@@ -107,8 +109,21 @@ func (a *Agent) fillHealth(ctx context.Context, h *api.HostHealth) {
 	if n, ok := a.leaseCount(probe); ok {
 		h.LeaseContainerCount = &n
 	}
-	if n, ok := a.diskFreeBytes(); ok {
-		h.DiskFreeBytes = &n
+	free, size, diskOK := a.diskUsage()
+	a.healthMu.Lock()
+	if diskOK {
+		f, s := free, size
+		a.metricDiskFree = &f
+		a.metricDiskSize = &s
+		h.DiskFreeBytes = &f
+	} else {
+		a.metricDiskFree = nil
+		a.metricDiskSize = nil
+	}
+	a.healthMu.Unlock()
+	if used, evictable, ok := a.modelCacheUsage(); ok {
+		h.ModelCacheBytes = &used
+		h.ModelCacheEvictableBytes = &evictable
 	}
 }
 
@@ -211,20 +226,187 @@ func httpClass(code int) string {
 	}
 }
 
-// StartMetrics serves /metrics until ctx is cancelled. A refused address
+// StartMetrics serves /metrics until ctx is cancelled. The bind follows
+// the hypermesh address and falls back to 127.0.0.1. A refused address
 // or a failed listen is logged. The agent keeps heartbeating either way.
 func (a *Agent) StartMetrics(ctx context.Context) {
-	addr := strings.TrimSpace(a.cfg.MetricsAddr)
-	if addr == "" {
-		addr = metrics.DefaultAddr
+	if a.metricsWake == nil {
+		a.metricsWake = make(chan struct{}, 1)
 	}
-	if _, err := metrics.Serve(ctx, metrics.Config{
-		Addr:             addr,
-		AllowNonLoopback: a.cfg.MetricsAllowNonLoopback,
-		Log:              a.log,
-		Gather:           a.metricsText,
-	}); err != nil {
-		a.log.Error("metrics endpoint not started", "addr", addr, "err", err)
+	go a.metricsLoop(ctx)
+}
+
+func (a *Agent) metricsLoop(ctx context.Context) {
+	var stop context.CancelFunc
+	var cur string
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
+	every := a.metricsEvery
+	if every <= 0 {
+		every = 2 * time.Second
+	}
+	failEvery := a.metricsFailEvery
+	if failEvery <= 0 {
+		failEvery = 2 * time.Second
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	var failedAddr string
+	var retryAt time.Time
+	var backoff time.Duration
+	var logged string
+	logOnce := func(msg, addr string, err error) {
+		key := msg + "|" + addr
+		if err != nil {
+			key += "|" + err.Error()
+		}
+		if key == logged {
+			return
+		}
+		logged = key
+		if err != nil {
+			a.log.Error(msg, "addr", addr, "err", err)
+			return
+		}
+		a.log.Info(msg, "addr", addr)
+	}
+	// A failed listen must not stop the listener that is already up.
+	bind := func(addr, host string) bool {
+		mctx, cancel := context.WithCancel(ctx)
+		if _, err := a.serveMetrics(mctx, addr, host); err != nil {
+			cancel()
+			logOnce("metrics endpoint not started", addr, err)
+			return false
+		}
+		if stop != nil {
+			stop()
+		}
+		stop = cancel
+		cur = addr
+		return true
+	}
+	// The first pass tries immediately. A wake does too. The ticker does
+	// not retry an address that just failed; that wait backs off.
+	force := true
+	for {
+		host := a.tunnelMetricsHost()
+		want, refused := metrics.ResolveAddr(a.cfg.MetricsAddr, host)
+		waiting := !force && time.Now().Before(retryAt)
+		if waiting && failedAddr != "" && want == failedAddr {
+			want = metrics.DefaultAddr
+		}
+		force = false
+		// Loopback already failed in this window. Leave it until backoff.
+		if waiting && want == metrics.DefaultAddr && cur == "" {
+			want = cur
+		}
+		if want != cur {
+			ok := bind(want, host)
+			if !ok && want != metrics.DefaultAddr {
+				failedAddr = want
+				if backoff <= 0 {
+					backoff = failEvery
+				} else if backoff < 30*time.Second {
+					backoff *= 2
+					if backoff > 30*time.Second {
+						backoff = 30 * time.Second
+					}
+				}
+				retryAt = time.Now().Add(backoff)
+				if cur != metrics.DefaultAddr && bind(metrics.DefaultAddr, "") {
+					logOnce("metrics bound loopback after WireGuard listen failed", metrics.DefaultAddr, nil)
+				}
+			} else if ok && want != metrics.DefaultAddr {
+				failedAddr = ""
+				backoff = 0
+				retryAt = time.Time{}
+				if refused {
+					logOnce("metrics override refused; bound the WireGuard address or loopback", cur, nil)
+				}
+			} else if !ok {
+				if backoff <= 0 {
+					backoff = failEvery
+				} else if backoff < 30*time.Second {
+					backoff *= 2
+					if backoff > 30*time.Second {
+						backoff = 30 * time.Second
+					}
+				}
+				retryAt = time.Now().Add(backoff)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-a.metricsWake:
+			force = true
+		}
+	}
+}
+
+func (a *Agent) serveMetrics(ctx context.Context, addr, tunnelHost string) (string, error) {
+	if a.metricsServe != nil {
+		return a.metricsServe(ctx, addr, tunnelHost)
+	}
+	return metrics.Serve(ctx, metrics.Config{
+		Addr:       addr,
+		TunnelHost: tunnelHost,
+		Log:        a.log,
+		Gather:     a.metricsText,
+	})
+}
+
+func (a *Agent) tunnelMetricsHost() string {
+	if a.metricsWG != nil {
+		return a.metricsWG()
+	}
+	var ip string
+	if a.ifaceAddr != nil {
+		ip = a.ifaceAddr()
+	} else {
+		ip = metrics.IfaceAddr("hypermesh")
+	}
+	if ip != "" {
+		return ip
+	}
+	return runtime.TunnelBindHost(a.currentBindIP())
+}
+
+func (a *Agent) setBindIP(ip string) {
+	a.bindMu.Lock()
+	a.bindIP = ip
+	a.bindMu.Unlock()
+}
+
+func (a *Agent) currentBindIP() string {
+	a.bindMu.RLock()
+	defer a.bindMu.RUnlock()
+	return a.bindIP
+}
+
+func (a *Agent) pokeMetrics() {
+	if a.metricsWake == nil {
+		return
+	}
+	select {
+	case a.metricsWake <- struct{}{}:
+	default:
+	}
+}
+
+func (a *Agent) recordPull(n int64, d time.Duration) {
+	if n < 0 {
+		n = 0
+	}
+	a.healthMu.Lock()
+	defer a.healthMu.Unlock()
+	a.pullBytes += uint64(n)
+	if d > 0 {
+		a.pullNanos += d.Nanoseconds()
 	}
 }
 
@@ -252,7 +434,8 @@ func (a *Agent) metricsText() []byte {
 		sample.WGPID = h.WGPID
 		sample.WGPort = h.WGPort
 		sample.LeaseCount = h.LeaseContainerCount
-		sample.DiskFreeBytes = h.DiskFreeBytes
+		sample.ModelCacheBytes = h.ModelCacheBytes
+		sample.ModelCacheEvictableBytes = h.ModelCacheEvictableBytes
 		sample.LastHTTP = h.LastSyncHTTPStatus
 		sample.ErrClass = h.LastSyncErrorClass
 		if h.BuildCommit != "" {
@@ -263,5 +446,31 @@ func (a *Agent) metricsText() []byte {
 		sec := a.lastSyncAt.UTC().Unix()
 		sample.LastSyncUnix = &sec
 	}
+	sample.PullBytes = a.pullBytes
+	sample.PullSeconds = float64(a.pullNanos) / float64(time.Second)
+	sample.DiskFreeBytes = a.metricDiskFree
+	sample.DiskSizeBytes = a.metricDiskSize
+	if age, ok := a.heartbeatAgeSeconds(); ok {
+		sample.HeartbeatAgeSeconds = &age
+	}
 	return metrics.Render(sample)
+}
+
+// heartbeatAgeSeconds is the age of the last accepted heartbeat, measured
+// at scrape time. Before the first success it is the age of this process
+// (New), so a host that has never beaten still crosses the 180s alert.
+// ok is false only when process start was not recorded.
+func (a *Agent) heartbeatAgeSeconds() (float64, bool) {
+	base := a.hbSuccessAt
+	if base.IsZero() {
+		base = a.started
+	}
+	if base.IsZero() {
+		return 0, false
+	}
+	age := a.clock().Sub(base) / time.Second
+	if age < 0 {
+		age = 0
+	}
+	return float64(age), true
 }

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FyberLabs/hypermesh-host/internal/metrics"
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
@@ -67,6 +66,13 @@ type Config struct {
 	// DiskMargin is HYPERMESH_DISK_MARGIN_BYTES. Empty means 64 MiB on
 	// top of the object size. "0" adds no margin.
 	DiskMargin string
+	// ModelCacheMax is HYPERMESH_MODEL_CACHE_MAX_BYTES. Empty means
+	// the filesystem size minus DiskFloor. "0" is an empty budget.
+	ModelCacheMax string
+	// PendingTTL is HYPERMESH_MODEL_CACHE_PENDING_TTL. Empty means
+	// 30m. A pending catalog pin is not evictable until this duration
+	// passes, a lease_start consumes it, or a stop/cancel/expiry clears it.
+	PendingTTL string
 	// LlamaJinja, LlamaCtxSize, and LlamaTimeout are the lease container's
 	// llama-server settings (LLAMA_ARG_JINJA, LLAMA_ARG_CTX_SIZE,
 	// LLAMA_ARG_TIMEOUT). Empty uses the runtime defaults (1, 16384, 1800).
@@ -79,12 +85,14 @@ type Config struct {
 	// "1" / "userspace" forces that unit. "0" / "kernel" forces wg-quick.
 	// Empty stays on wg-quick (tests). The agent never spawns wireguard-go.
 	WGMode string
-	// MetricsAddr is the Prometheus text /metrics listener.
-	// Default 127.0.0.1:9464. Non-loopback is refused unless
-	// MetricsAllowNonLoopback is set. Never the tunnel address by default.
+	// MetricsAddr is an explicit /metrics bind (HYPERMESH_METRICS_ADDR).
+	// Empty derives the hypermesh interface address, or 127.0.0.1:9464
+	// when the tunnel is down. Only loopback and that WireGuard address
+	// are accepted. Public and unspecified addresses are refused.
 	MetricsAddr string
-	// MetricsAllowNonLoopback permits a non-loopback MetricsAddr.
-	// The process logs a warning when it binds one.
+	// MetricsAllowNonLoopback is retained so an old environment file
+	// still parses. It does not permit a public, unspecified, or
+	// non-WireGuard bind.
 	MetricsAllowNonLoopback bool
 	// HostType is "model" (default) or "supervisor". A supervisor host
 	// enrolls and heartbeats and refuses lease_start for a weight.
@@ -111,11 +119,13 @@ func FromEnv() Config {
 		GGUFPath:                envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
 		DiskFloor:               strings.TrimSpace(os.Getenv("HYPERMESH_DISK_FLOOR_BYTES")),
 		DiskMargin:              strings.TrimSpace(os.Getenv("HYPERMESH_DISK_MARGIN_BYTES")),
+		ModelCacheMax:           strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_MAX_BYTES")),
+		PendingTTL:              strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_PENDING_TTL")),
 		LlamaJinja:              envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
 		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
 		WGMode:                  wgModeFromEnv(),
-		MetricsAddr:             envOr("HYPERMESH_METRICS_ADDR", metrics.DefaultAddr),
+		MetricsAddr:             strings.TrimSpace(os.Getenv("HYPERMESH_METRICS_ADDR")),
 		MetricsAllowNonLoopback: envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
 		HostType:                strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
 		WGKeyDir:                strings.TrimSpace(os.Getenv("HYPERMESH_WG_KEY_DIR")),
@@ -185,7 +195,32 @@ func (c Config) Validate() error {
 	if _, err := c.DiskMarginBytes(); err != nil {
 		return err
 	}
+	if raw := strings.TrimSpace(c.ModelCacheMax); raw != "" {
+		if _, err := parseByteCount("HYPERMESH_MODEL_CACHE_MAX_BYTES", raw, 0); err != nil {
+			return err
+		}
+	}
+	if _, err := c.PendingModelTTL(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// defaultPendingTTL is how long a catalog pin survives when the plane
+// never starts, stops, cancels, or expires the lease.
+const defaultPendingTTL = 30 * time.Minute
+
+// PendingModelTTL is the pending-pin lifetime. Empty config means 30m.
+func (c Config) PendingModelTTL() (time.Duration, error) {
+	raw := strings.TrimSpace(c.PendingTTL)
+	if raw == "" {
+		return defaultPendingTTL, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("hypermesh: HYPERMESH_MODEL_CACHE_PENDING_TTL must be a positive duration")
+	}
+	return d, nil
 }
 
 // DiskFloorBytes is the free-space floor. Empty config means 2 GiB.

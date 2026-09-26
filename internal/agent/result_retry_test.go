@@ -29,6 +29,7 @@ func TestPostResultRetriesAfterLeaseStart(t *testing.T) {
 			LeaseID:     "lease-retry",
 			CatalogID:   "llama-3.1-8b-q4",
 			ImageDigest: ref,
+			FileHash:    fixtureGGUFHash(),
 			Runtime:     "nvidia",
 		})
 	})
@@ -100,6 +101,7 @@ func TestFailedPostResultDoesNotStartSecondContainer(t *testing.T) {
 			LeaseID:     "lease-stuck",
 			CatalogID:   "llama-3.1-8b-q4",
 			ImageDigest: ref,
+			FileHash:    fixtureGGUFHash(),
 			Runtime:     "nvidia",
 		})
 	})

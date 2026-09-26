@@ -8,8 +8,46 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func TestCapacityFromBlocksOverflow(t *testing.T) {
+	_, err := capacityFromBlocks(uint64(math.MaxInt64)/4096+1, 4096)
+	if err == nil || !strings.Contains(err.Error(), "overflow") {
+		t.Fatalf("overflow: %v", err)
+	}
+	dir := t.TempDir()
+	got, err := CapacityBytes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		t.Fatal(err)
+	}
+	want := int64(st.Blocks) * int64(st.Bsize)
+	if got != want {
+		t.Fatalf("CapacityBytes %d want %d", got, want)
+	}
+	var free, size int64
+	var gotFree int64
+	var matched bool
+	for i := 0; i < 20 && !matched; i++ {
+		free, size, err = StatfsBytes(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotFree, err = FreeBytes(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched = gotFree == free && size == want
+	}
+	if !matched {
+		t.Fatalf("FreeBytes %d statfs free %d size %d want %d", gotFree, free, size, want)
+	}
+}
 
 func TestPreflightRefusesBeforeAnyWrite(t *testing.T) {
 	dir := t.TempDir()
