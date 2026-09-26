@@ -80,20 +80,23 @@ type Agent struct {
 	hbRand func() float64
 	hbWake chan struct{}
 
-	leaseMu    sync.RWMutex
-	sellMu     sync.Mutex
-	healthMu   sync.Mutex
-	hbStreak   int
-	tunnelSeen string
-	bindSeen   string
-	lastSyncAt time.Time
-	haveSync   bool
-	syncClass  string
-	syncHTTP   int
-	hbOK       uint64
-	hbFail     map[string]uint64
-	syncOK     uint64
-	syncFail   map[string]uint64
+	leaseMu  sync.RWMutex
+	sellMu   sync.Mutex
+	healthMu sync.Mutex
+	hbStreak int
+	// hbHoldUntil is the end of the current failure backoff or
+	// Retry-After. An immediate beat waits until this instant.
+	hbHoldUntil time.Time
+	tunnelSeen  string
+	bindSeen    string
+	lastSyncAt  time.Time
+	haveSync    bool
+	syncClass   string
+	syncHTTP    int
+	hbOK        uint64
+	hbFail      map[string]uint64
+	syncOK      uint64
+	syncFail    map[string]uint64
 }
 
 const certLeaseID = "cert-bench"
@@ -182,9 +185,8 @@ func (a *Agent) Run(ctx context.Context) error {
 
 func (a *Agent) heartbeatLoop(ctx context.Context) {
 	// A failed beat retries with backoff. A success waits HeartbeatEvery.
-	// Reconnect (tunnel up, or a client address appearing) and a successful
-	// job-loop call to the plane interrupt only the failure wait, then the
-	// loop sends one beat and returns to cadence.
+	// Reconnect and a successful job-loop call can ask for a beat, but
+	// not before the backoff or Retry-After deadline.
 	fails := 0
 	for {
 		if ctx.Err() != nil {
@@ -198,13 +200,16 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			fails++
 			a.setHBStreak(fails)
 			a.log.Warn("heartbeat failed", "err", err)
-			if !a.waitHeartbeat(ctx, a.heartbeatBackoff(fails, err), true) {
+			delay := a.heartbeatBackoff(fails, err)
+			a.armHeartbeatHold(delay)
+			if !a.waitHeartbeat(ctx, delay, true) {
 				return
 			}
 			continue
 		}
 		fails = 0
 		a.setHBStreak(0)
+		a.clearHeartbeatHold()
 		a.drainHeartbeatWake()
 		if !a.waitHeartbeat(ctx, a.cfg.HeartbeatEvery, false) {
 			return

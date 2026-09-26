@@ -27,8 +27,10 @@ const (
 	// clamped into this range. That hint is not the grace window.
 	heartbeatBackoffCap = 25 * time.Second
 	// heartbeatJitterFrac is ±20% on exponential waits and 0–20% added
-	// to a Retry-After hint. Jitter is applied after the clamp so a
-	// wait that has reached the cap still spreads through [0.8*cap, cap].
+	// on top of a Retry-After hint. Exponential jitter is applied after
+	// the clamp, so a step at the cap still spreads through [0.8*cap, cap].
+	// Retry-After jitter only moves later than the hint, and never past
+	// the cap. A hint already at the cap waits exactly the cap.
 	heartbeatJitterFrac = 0.20
 )
 
@@ -53,10 +55,10 @@ func (a *Agent) heartbeatBackoff(fails int, err error) time.Duration {
 // heartbeatDelay is the wait before the next beat after a failure.
 // fails is 1 on the first failure and grows by one each consecutive miss.
 // hasHint selects the 503 Retry-After delay instead of the exponential base.
-// unit is in [0, 1]. The base is clamped to [floor, cap] first, then jitter
-// is applied inside that window so hosts do not pile up on the cap.
-// A Retry-After hint is never shortened by jitter. When the hint itself
-// is already the cap, hosts spread across [0.8*cap, cap].
+// unit is in [0, 1]. The base is clamped to [floor, cap] first.
+// Exponential jitter then spreads inside that window, including at the cap.
+// Retry-After jitter is only added on top of the clamped hint. It never
+// waits less than that hint, and a hint already at the cap stays there.
 func heartbeatDelay(fails int, hasHint bool, hint time.Duration, unit float64) time.Duration {
 	if unit < 0 {
 		unit = 0
@@ -94,9 +96,10 @@ func heartbeatDelay(fails int, hasHint bool, hint time.Duration, unit float64) t
 
 // heartbeatJitterBounds is the closed interval unit interpolates.
 // positive is the Retry-After path: add up to 20%, never earlier than
-// the clamped hint, never later than the cap. An exponential wait uses
-// ±20% clipped to [floor, cap]. A base that is already the cap uses
-// [0.8*cap, cap] on both paths.
+// the clamped hint, never later than the cap. When that clamps the high
+// side onto the hint, the wait is exactly the hint. An exponential wait
+// uses ±20% clipped to [floor, cap], so a base at the cap still spreads
+// through [0.8*cap, cap].
 func heartbeatJitterBounds(base time.Duration, positive bool) (lo, hi time.Duration) {
 	if positive {
 		lo = base
@@ -114,13 +117,30 @@ func heartbeatJitterBounds(base time.Duration, positive bool) (lo, hi time.Durat
 	if lo > hi {
 		lo = hi
 	}
-	if lo == hi && hi == heartbeatBackoffCap {
-		lo = time.Duration(float64(heartbeatBackoffCap) * (1 - heartbeatJitterFrac))
-		if lo < heartbeatBackoffFloor {
-			lo = heartbeatBackoffFloor
-		}
-	}
 	return lo, hi
+}
+
+func (a *Agent) armHeartbeatHold(d time.Duration) {
+	until := a.clock().Add(d)
+	a.healthMu.Lock()
+	a.hbHoldUntil = until
+	a.healthMu.Unlock()
+}
+
+func (a *Agent) clearHeartbeatHold() {
+	a.healthMu.Lock()
+	a.hbHoldUntil = time.Time{}
+	a.healthMu.Unlock()
+}
+
+func (a *Agent) heartbeatHoldActive() bool {
+	a.healthMu.Lock()
+	until := a.hbHoldUntil
+	a.healthMu.Unlock()
+	if until.IsZero() {
+		return false
+	}
+	return a.clock().Before(until)
 }
 
 // notePlaneReachable wakes a failing heartbeat after the job loop got a
@@ -160,6 +180,9 @@ func (a *Agent) waitHeartbeat(ctx context.Context, d time.Duration, interrupt bo
 }
 
 func (a *Agent) pokeHeartbeat() {
+	if a.heartbeatHoldActive() {
+		return
+	}
 	if a.hbWake == nil {
 		return
 	}

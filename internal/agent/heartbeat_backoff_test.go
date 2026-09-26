@@ -71,11 +71,17 @@ func TestHeartbeatRetryAfterHonoredAndClamped(t *testing.T) {
 	if got := heartbeatDelay(4, true, 10*time.Second, 1); got != 12*time.Second {
 		t.Fatalf("10s hint +20%% %s", got)
 	}
-	// 35s is the grace window, past the heartbeat cap. Hosts spread under the cap.
+	// A hint at or above the cap waits the cap. Jitter must not start earlier.
 	overLo := heartbeatDelay(4, true, 35*time.Second, 0)
 	overHi := heartbeatDelay(4, true, 35*time.Second, 1)
-	if overLo >= overHi || overHi != heartbeatBackoffCap || overLo < heartbeatBackoffFloor {
-		t.Fatalf("over-cap hint spread %s %s", overLo, overHi)
+	if overLo != heartbeatBackoffCap || overHi != heartbeatBackoffCap {
+		t.Fatalf("hint at or above the cap must wait the cap, got %s %s", overLo, overHi)
+	}
+	if got := heartbeatDelay(4, true, 22*time.Second, 0); got != 22*time.Second {
+		t.Fatalf("22s hint must not be shortened: %s", got)
+	}
+	if got := heartbeatDelay(4, true, 22*time.Second, 1); got != heartbeatBackoffCap {
+		t.Fatalf("22s hint +20%% capped at %s", got)
 	}
 	if got := heartbeatDelay(1, true, 100*time.Millisecond, 0); got != heartbeatBackoffFloor {
 		t.Fatalf("short hint %s", got)
@@ -238,10 +244,9 @@ func TestHeartbeatImmediateBeatOnRecovery(t *testing.T) {
 	}
 }
 
-func TestHeartbeatImmediateBeatOnReconnect(t *testing.T) {
+func TestReconnectDoesNotBeatDuringRetryAfter(t *testing.T) {
 	var mu sync.Mutex
 	var calls int
-	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		calls++
@@ -273,7 +278,6 @@ func TestHeartbeatImmediateBeatOnReconnect(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	entered := make(chan struct{})
 	var waits []time.Duration
 	a.hbWait = func(waitCtx context.Context, d time.Duration, interrupt bool) bool {
 		mu.Lock()
@@ -283,36 +287,18 @@ func TestHeartbeatImmediateBeatOnReconnect(t *testing.T) {
 			cancel()
 			return false
 		}
-		close(entered)
+		a.observeTunnel(tunnel.StateDown)
+		a.observeBind("")
+		a.observeTunnel(tunnel.StateUp)
+		a.observeBind("10.77.0.2/32")
 		select {
-		case <-waitCtx.Done():
-			return false
 		case <-a.hbWake:
-			return true
-		case <-release:
-			t.Error("backoff was not interrupted")
-			return false
+			t.Error("reconnect beat during Retry-After")
+		default:
 		}
+		return waitCtx.Err() == nil
 	}
-	done := make(chan struct{})
-	go func() {
-		a.heartbeatLoop(ctx)
-		close(done)
-	}()
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("heartbeat did not reach the failure wait")
-	}
-	a.observeTunnel(tunnel.StateDown)
-	a.observeBind("")
-	a.observeTunnel(tunnel.StateUp)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		close(release)
-		t.Fatal("reconnect did not beat immediately")
-	}
+	a.heartbeatLoop(ctx)
 	mu.Lock()
 	defer mu.Unlock()
 	if calls < 2 {
@@ -325,11 +311,11 @@ func TestHeartbeatImmediateBeatOnReconnect(t *testing.T) {
 		t.Fatalf("Retry-After 600s clamped to %s, want %s", waits[0], heartbeatBackoffCap)
 	}
 	if waits[1] != a.cfg.HeartbeatEvery {
-		t.Fatalf("cadence after reconnect %s", waits[1])
+		t.Fatalf("cadence after the deadline %s", waits[1])
 	}
 }
 
-func TestHeartbeatImmediateBeatAfterPlaneCall(t *testing.T) {
+func TestPlaneCallDoesNotBeatDuringRetryAfter(t *testing.T) {
 	t.Run("job pull", func(t *testing.T) {
 		wakeFromPlane(t, func(a *Agent) error {
 			return a.pullAndRun(context.Background())
@@ -379,13 +365,13 @@ func TestFailedJobPullDoesNotWakeHeartbeat(t *testing.T) {
 	}
 }
 
-// wakeFromPlane fails one heartbeat, then calls the job loop while that
-// failure wait is in progress. A successful plane call must interrupt it.
+// wakeFromPlane fails one heartbeat with Retry-After, then makes a
+// successful job-loop call during that wait. The call must not beat
+// before the deadline. The loop sends the next beat when the wait ends.
 func wakeFromPlane(t *testing.T, call func(*Agent) error, routes func(*http.ServeMux)) {
 	t.Helper()
 	var mu sync.Mutex
 	var calls int
-	release := make(chan struct{})
 	mux := http.NewServeMux()
 	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -420,7 +406,7 @@ func wakeFromPlane(t *testing.T, call func(*Agent) error, routes func(*http.Serv
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	entered := make(chan struct{})
+	var duringWait bool
 	a.hbWait = func(waitCtx context.Context, d time.Duration, interrupt bool) bool {
 		if !interrupt {
 			cancel()
@@ -429,40 +415,52 @@ func wakeFromPlane(t *testing.T, call func(*Agent) error, routes func(*http.Serv
 		if d > heartbeatBackoffCap || d < heartbeatBackoffFloor {
 			t.Errorf("wait %s outside [%s, %s]", d, heartbeatBackoffFloor, heartbeatBackoffCap)
 		}
-		close(entered)
-		select {
-		case <-waitCtx.Done():
-			return false
-		case <-a.hbWake:
-			return true
-		case <-release:
-			t.Error("backoff was not interrupted")
-			return false
+		duringWait = true
+		if err := call(a); err != nil {
+			t.Error(err)
 		}
+		select {
+		case <-a.hbWake:
+			t.Error("plane call beat during Retry-After")
+		default:
+		}
+		return waitCtx.Err() == nil
 	}
-	done := make(chan struct{})
-	go func() {
-		a.heartbeatLoop(ctx)
-		close(done)
-	}()
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
+	a.heartbeatLoop(ctx)
+	if !duringWait {
 		t.Fatal("heartbeat did not reach the failure wait")
-	}
-	if err := call(a); err != nil {
-		close(release)
-		t.Fatal(err)
-	}
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		close(release)
-		t.Fatal("plane call did not beat immediately")
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if calls < 2 {
 		t.Fatalf("calls %d", calls)
+	}
+}
+
+func TestImmediateBeatAfterBackoffWindow(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("10.0 1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	cur := time.Date(2026, 9, 26, 19, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return cur }
+	a.setHBStreak(2)
+	a.armHeartbeatHold(20 * time.Second)
+	a.notePlaneReachable()
+	a.observeTunnel(tunnel.StateDown)
+	a.observeTunnel(tunnel.StateUp)
+	select {
+	case <-a.hbWake:
+		t.Fatal("beat before the backoff deadline")
+	default:
+	}
+	cur = cur.Add(20 * time.Second)
+	a.notePlaneReachable()
+	select {
+	case <-a.hbWake:
+	default:
+		t.Fatal("beat did not run once the backoff window had elapsed")
 	}
 }
