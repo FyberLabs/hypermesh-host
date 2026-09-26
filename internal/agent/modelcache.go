@@ -49,10 +49,16 @@ type cachePending struct {
 	Expires   time.Time `json:"expires"`
 }
 
+// cacheModel is one GGUF in the cache. CatalogIDs is the catalogs
+// lab_pull admitted this file for. It is stored in index.json so a
+// restart still knows which catalog the file belongs to. A later pull
+// for one of those catalogs moves that id onto the new file. Eviction
+// drops the whole entry, catalogs included. LastUsed is the LRU key.
 type cacheModel struct {
-	ID       string    `json:"id"`
-	Bytes    int64     `json:"bytes"`
-	LastUsed time.Time `json:"last_used"`
+	ID         string    `json:"id"`
+	Bytes      int64     `json:"bytes"`
+	LastUsed   time.Time `json:"last_used"`
+	CatalogIDs []string  `json:"catalog_ids,omitempty"`
 }
 
 type evictionPlan struct {
@@ -276,11 +282,13 @@ func reconcileIndex(dir string, idx cacheIndex, now time.Time) (cacheIndex, bool
 			continue
 		}
 		seen[id] = struct{}{}
-		if m.Bytes != info.Size() || m.ID != id {
+		cats, catsChanged := normalizeCatalogs(m.CatalogIDs)
+		if catsChanged || m.Bytes != info.Size() || m.ID != id {
 			changed = true
 		}
 		m.ID = id
 		m.Bytes = info.Size()
+		m.CatalogIDs = cats
 		kept = append(kept, m)
 	}
 	for id, info := range onDisk {
@@ -650,7 +658,7 @@ func (a *Agent) applyEvict(dir string, victims []string) error {
 	return writeCacheIndex(dir, idx)
 }
 
-func (a *Agent) admitModel(pin, path string) error {
+func (a *Agent) admitModel(catalog, pin, path string) error {
 	id, err := normalizeModelID(pin)
 	if err != nil {
 		return err
@@ -672,18 +680,28 @@ func (a *Agent) admitModel(pin, path string) error {
 		}
 	}
 	now := a.clock().UTC()
+	cat := strings.TrimSpace(catalog)
 	found := false
 	for i := range idx.Models {
-		if idx.Models[i].ID != id {
+		if idx.Models[i].ID == id {
+			idx.Models[i].Bytes = info.Size()
+			idx.Models[i].LastUsed = now
+			if cat != "" {
+				idx.Models[i].CatalogIDs = addCatalog(idx.Models[i].CatalogIDs, cat)
+			}
+			found = true
 			continue
 		}
-		idx.Models[i].Bytes = info.Size()
-		idx.Models[i].LastUsed = now
-		found = true
-		break
+		if cat != "" {
+			idx.Models[i].CatalogIDs = removeCatalog(idx.Models[i].CatalogIDs, cat)
+		}
 	}
 	if !found {
-		idx.Models = append(idx.Models, cacheModel{ID: id, Bytes: info.Size(), LastUsed: now})
+		var cats []string
+		if cat != "" {
+			cats = []string{cat}
+		}
+		idx.Models = append(idx.Models, cacheModel{ID: id, Bytes: info.Size(), LastUsed: now, CatalogIDs: cats})
 	}
 	idx.Loaded = id
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -871,6 +889,122 @@ func (a *Agent) touchModelUse(pin string) {
 	if err := writeCacheIndex(dir, idx); err != nil {
 		a.log.Warn("model cache last-used not saved", "err", err)
 	}
+}
+
+func normalizeCatalogs(in []string) ([]string, bool) {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, raw := range in {
+		c := strings.TrimSpace(raw)
+		if c == "" {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		out = nil
+	}
+	return out, !sameStrings(in, out)
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func addCatalog(ids []string, catalog string) []string {
+	catalog = strings.TrimSpace(catalog)
+	if catalog == "" || modelHasCatalog(cacheModel{CatalogIDs: ids}, catalog) {
+		out, _ := normalizeCatalogs(ids)
+		return out
+	}
+	out, _ := normalizeCatalogs(append(append([]string{}, ids...), catalog))
+	return out
+}
+
+func removeCatalog(ids []string, catalog string) []string {
+	catalog = strings.TrimSpace(catalog)
+	var kept []string
+	for _, id := range ids {
+		if strings.TrimSpace(id) == catalog {
+			continue
+		}
+		kept = append(kept, id)
+	}
+	out, _ := normalizeCatalogs(kept)
+	return out
+}
+
+func modelHasCatalog(m cacheModel, catalog string) bool {
+	catalog = strings.TrimSpace(catalog)
+	if catalog == "" {
+		return false
+	}
+	for _, id := range m.CatalogIDs {
+		if id == catalog {
+			return true
+		}
+	}
+	return false
+}
+
+// cachedModelForCatalog is the loaded cache file when lab_pull admitted
+// it for catalog. empty is true when the cache has no models, so
+// lease_start may fall back to HYPERMESH_GGUF_PATH. found is false when
+// the cache holds models but the loaded file is not recorded for catalog,
+// including when a later pull replaced the loaded model.
+func (a *Agent) cachedModelForCatalog(catalog string) (path string, found, empty bool) {
+	dir, err := modelCacheDir(a.cfg.GGUFHostPath())
+	if err != nil {
+		// No cache directory can be named. The caller falls back to
+		// HYPERMESH_GGUF_PATH, which fails closed when that path is unset.
+		return "", false, true
+	}
+	a.cacheMu.Lock()
+	defer a.cacheMu.Unlock()
+	idx, err := a.reconcileCacheDirLocked(dir)
+	if err != nil {
+		return "", false, false
+	}
+	if len(idx.Models) == 0 {
+		return "", false, true
+	}
+	loaded, _ := normalizeOptionalID(idx.Loaded)
+	if loaded == "" {
+		return "", false, false
+	}
+	var match *cacheModel
+	for i := range idx.Models {
+		if idx.Models[i].ID != loaded || !modelHasCatalog(idx.Models[i], catalog) {
+			continue
+		}
+		match = &idx.Models[i]
+		break
+	}
+	if match == nil {
+		return "", false, false
+	}
+	file, err := cacheFilePath(dir, match.ID)
+	if err != nil {
+		return "", false, false
+	}
+	info, err := os.Stat(file)
+	if err != nil || info.IsDir() {
+		return "", false, false
+	}
+	return file, true, false
 }
 
 func (a *Agent) loadedModelFile() (string, bool) {

@@ -897,7 +897,7 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: "artifact hash mismatch"}
 	}
 	if strings.TrimSpace(job.SourceRef) != "" {
-		if err := a.admitModel(pin, dest); err != nil {
+		if err := a.admitModel(job.CatalogID, pin, dest); err != nil {
 			a.log.Warn("model cache admit failed", "err", err)
 		} else if err := a.notePendingModel(job.CatalogID, pin); err != nil {
 			a.log.Warn("model cache pending not saved", "err", err)
@@ -1058,18 +1058,9 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		}
 		return a.leaseStartAlready(existing)
 	}
-	gguf := a.modelForLease()
-	pinID := ""
-	havePin := false
-	if path, pin, found, pendErr := a.pendingModelFile(job.CatalogID); found {
-		if pendErr != nil {
-			a.clearPendingModel(job.CatalogID)
-			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
-			return pathb.Result{Passed: false, Reason: "pending model missing"}
-		}
-		gguf = path
-		pinID = pin
-		havePin = true
+	gguf, pinID, havePin, refuse := a.leaseModelPath(job)
+	if refuse.Reason != "" {
+		return refuse
 	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
@@ -1249,12 +1240,42 @@ func (a *Agent) leaseRelease(ctx context.Context, job api.Job, reason string) pa
 	return pathb.Result{Passed: true, Reason: reason}
 }
 
+// leaseModelPath picks the GGUF lease_start will mount.
+// A pending pin wins. A non-empty file_hash keeps the previous mount:
+// the loaded cache file, or HYPERMESH_GGUF_PATH when nothing is loaded.
+// With no pin and no file_hash, a cached file is mounted only when
+// index.json records it for this catalog. An empty cache falls back to
+// HYPERMESH_GGUF_PATH. Any other cache file is refused.
+func (a *Agent) leaseModelPath(job api.Job) (gguf, pinID string, havePin bool, refuse pathb.Result) {
+	if path, pin, found, pendErr := a.pendingModelFile(job.CatalogID); found {
+		if pendErr != nil {
+			a.clearPendingModel(job.CatalogID)
+			a.log.Info("lease_start refused", "reason", "pending model missing", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+			return "", "", false, pathb.Result{Passed: false, Reason: "pending model missing"}
+		}
+		return path, pin, true, pathb.Result{}
+	}
+	if _, hasExpected := leaseExpectedHash(job); hasExpected {
+		return a.modelForLease(), "", false, pathb.Result{}
+	}
+	path, ok, empty := a.cachedModelForCatalog(job.CatalogID)
+	if empty {
+		return a.cfg.GGUFHostPath(), "", false, pathb.Result{}
+	}
+	if !ok {
+		a.log.Info("lease_start refused", "reason", "model not verified for catalog", "lease_id", job.LeaseID, "catalog_id", job.CatalogID)
+		return "", "", false, pathb.Result{Passed: false, Reason: "model not verified for catalog"}
+	}
+	return path, "", false, pathb.Result{}
+}
+
 // leaseHashCheck compares the mounted file to the hash the plane sent.
 // A non-empty file_hash is always checked. An empty file_hash with a
 // pending pin is checked against that pin's sha256. An empty file_hash
-// with no pin is the transition path: the plane does not send file_hash
-// yet, so the start proceeds and a warning is logged. A later change
-// will require file_hash once the plane sends it.
+// with no pin reaches here only after the catalog check: the file is
+// the one admitted for this catalog, or HYPERMESH_GGUF_PATH because the
+// cache is empty. The start proceeds and a warning is logged. A later
+// change will require file_hash once the plane sends it.
 func (a *Agent) leaseHashCheck(job api.Job, hash, pinID string, havePin bool) (pathb.Result, bool) {
 	expected, hasExpected := leaseExpectedHash(job)
 	if hasExpected {

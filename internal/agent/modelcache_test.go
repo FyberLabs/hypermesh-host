@@ -66,6 +66,12 @@ func TestModelCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	if got := findModel(idx, pin).LastUsed; !got.Equal(now) {
 		t.Fatalf("last_used %s", got)
 	}
+	if !modelHasCatalog(*findModel(idx, pin), "cache-model") {
+		t.Fatalf("admitted catalog dropped: %+v", findModel(idx, pin))
+	}
+	if b := findModel(idx, idB); b == nil || len(b.CatalogIDs) != 0 {
+		t.Fatalf("survivor catalog changed: %+v", b)
+	}
 	used, evictable, ok := a.modelCacheUsage()
 	if !ok || used != 200 || evictable != 100 {
 		t.Fatalf("usage used=%d evictable=%d ok=%v", used, evictable, ok)
@@ -741,6 +747,144 @@ func TestLeaseStartEmptyFileHashVerifiesPendingPin(t *testing.T) {
 	})
 	if !okStart.Passed || okStart.ImageHash != pin || runs != 1 {
 		t.Fatalf("empty file_hash with pin %+v runs=%d", okStart, runs)
+	}
+}
+
+func TestLeaseStartRefusesOtherCatalogWithoutFileHash(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.cfg.ModelCacheMax = "100000"
+	a.bindIP = "10.77.0.2/32"
+	bodyA := bytes.Repeat([]byte{'a'}, 40)
+	bodyB := bytes.Repeat([]byte{'b'}, 40)
+	pinA, pinB := shaPin(bodyA), shaPin(bodyB)
+	bodies := map[string][]byte{pinA: bodyA, pinB: bodyB}
+	a.fetchWeights = func(_ context.Context, dest, _, pin string) error {
+		return os.WriteFile(dest, bodies[pin], 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-a", pinA, 40); !res.Passed {
+		t.Fatalf("pull A: %+v", res.Result)
+	}
+	stopA := a.runJob(context.Background(), api.Job{
+		JobID: "stop-a", Kind: api.KindLeaseStop, DeviceID: testDevice, CatalogID: "cat-a",
+	})
+	if !stopA.Passed || pendingCatalog(readIndex(t, cache), "cat-a") {
+		t.Fatalf("stop A %+v", stopA)
+	}
+	if res := pullCatalog(t, a, "cat-b", pinB, 40); !res.Passed {
+		t.Fatalf("pull B: %+v", res.Result)
+	}
+	stopB := a.runJob(context.Background(), api.Job{
+		JobID: "stop-b", Kind: api.KindLeaseStop, DeviceID: testDevice, CatalogID: "cat-b",
+	})
+	if !stopB.Passed || pendingCatalog(readIndex(t, cache), "cat-b") {
+		t.Fatalf("stop B %+v", stopB)
+	}
+	idx := readIndex(t, cache)
+	if !modelHasCatalog(*findModel(idx, pinA), "cat-a") || modelHasCatalog(*findModel(idx, pinA), "cat-b") {
+		t.Fatalf("A catalogs %+v", findModel(idx, pinA))
+	}
+	if !modelHasCatalog(*findModel(idx, pinB), "cat-b") || modelHasCatalog(*findModel(idx, pinB), "cat-a") {
+		t.Fatalf("B catalogs %+v", findModel(idx, pinB))
+	}
+	var runs int
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+		}
+		return []byte("cid\n"), nil
+	}}
+	oci := "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('a', 64)
+	started := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-a", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-a", CatalogID: "cat-a", ImageDigest: oci, Runtime: "nvidia",
+	})
+	if started.Passed || started.Reason != "model not verified for catalog" || runs != 0 {
+		t.Fatalf("cross-catalog start %+v runs=%d", started, runs)
+	}
+}
+
+func TestLeaseStartEmptyFileHashUsesSameCatalogCache(t *testing.T) {
+	a, _ := newCacheAgent(t)
+	a.cfg.ModelCacheMax = "100000"
+	a.bindIP = "10.77.0.2/32"
+	body := bytes.Repeat([]byte{'s'}, 40)
+	pin := shaPin(body)
+	a.fetchWeights = func(_ context.Context, dest, _, _ string) error {
+		return os.WriteFile(dest, body, 0o600)
+	}
+	if res := pullCatalog(t, a, "cat-s", pin, 40); !res.Passed {
+		t.Fatalf("pull: %+v", res.Result)
+	}
+	stop := a.runJob(context.Background(), api.Job{
+		JobID: "stop-s", Kind: api.KindLeaseStop, DeviceID: testDevice, CatalogID: "cat-s",
+	})
+	if !stop.Passed {
+		t.Fatalf("stop %+v", stop)
+	}
+	var mounted string
+	var runs int
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+			for i, arg := range args {
+				if arg == "-v" && i+1 < len(args) && strings.Contains(args[i+1], "/models/model.gguf:ro") {
+					mounted = args[i+1]
+				}
+			}
+		}
+		return []byte("cid\n"), nil
+	}}
+	oci := "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('b', 64)
+	started := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-s", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-s", CatalogID: "cat-s", ImageDigest: oci, Runtime: "nvidia",
+	})
+	if !started.Passed || started.ImageHash != pin || runs != 1 {
+		t.Fatalf("same catalog %+v runs=%d", started, runs)
+	}
+	if !strings.Contains(mounted, fileName(pin)) {
+		t.Fatalf("mounted %q", mounted)
+	}
+}
+
+func TestLeaseStartEmptyCacheFallsBackToGGUFPath(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	a.bindIP = "10.77.0.2/32"
+	body := bytes.Repeat([]byte{'g'}, 40)
+	pin := shaPin(body)
+	gguf := a.cfg.GGUFHostPath()
+	if err := os.MkdirAll(filepath.Dir(gguf), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gguf, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("cache exists before a pull: %v", err)
+	}
+	var mounted string
+	var runs int
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+			for i, arg := range args {
+				if arg == "-v" && i+1 < len(args) && strings.Contains(args[i+1], "/models/model.gguf:ro") {
+					mounted = args[i+1]
+				}
+			}
+		}
+		return []byte("cid\n"), nil
+	}}
+	oci := "example.invalid/hypermesh/workload@sha256:" + stringsRepeat('c', 64)
+	started := a.leaseStart(context.Background(), api.Job{
+		JobID: "lease-g", Kind: api.KindLeaseStart, DeviceID: testDevice,
+		LeaseID: "lease-g", CatalogID: "cat-g", ImageDigest: oci, Runtime: "nvidia",
+	})
+	if !started.Passed || started.ImageHash != pin || runs != 1 {
+		t.Fatalf("empty cache %+v runs=%d", started, runs)
+	}
+	if mounted != gguf+":/models/model.gguf:ro" {
+		t.Fatalf("mounted %q want %q", mounted, gguf+":/models/model.gguf:ro")
 	}
 }
 
