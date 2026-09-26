@@ -30,53 +30,54 @@ func TestHeartbeatBackoffGrowthAndJitter(t *testing.T) {
 			t.Fatalf("fails %d shrank lo %s→%s hi %s→%s", fails, prevLo, lo, prevHi, hi)
 		}
 		prevLo, prevHi = lo, hi
-		// Every unit in [0, 1] stays inside the ±20% band, then the clamp.
-		shift := fails - 1
-		if shift > 16 {
-			shift = 16
-		}
-		base := heartbeatBackoffFloor << shift
+		// Jitter is applied after the clamp, so a step that has reached
+		// the cap still has a spread. Units stay ordered and inside the cap.
+		var prev time.Duration
 		for i := 0; i <= 20; i++ {
 			unit := float64(i) / 20
 			got := heartbeatDelay(fails, false, 0, unit)
-			raw := time.Duration(float64(base) * (1 + ((unit*2 - 1) * heartbeatJitterFrac)))
-			want := raw
-			if want < heartbeatBackoffFloor {
-				want = heartbeatBackoffFloor
+			if got < prev {
+				t.Fatalf("fails %d unit %v went backwards %s → %s", fails, unit, prev, got)
 			}
-			if want > heartbeatBackoffCap {
-				want = heartbeatBackoffCap
-			}
-			if got != want {
-				t.Fatalf("fails %d unit %v got %s want %s", fails, unit, got, want)
-			}
+			prev = got
 			if got < heartbeatBackoffFloor || got > heartbeatBackoffCap {
 				t.Fatalf("fails %d unit %v %s", fails, unit, got)
 			}
 		}
-	}
-	if heartbeatDelay(1, false, 0, 0.5) != time.Second {
-		t.Fatalf("first base %s", heartbeatDelay(1, false, 0, 0.5))
+		if fails >= 6 && lo >= hi {
+			t.Fatalf("fails %d jitter collapsed at the cap: lo %s hi %s", fails, lo, hi)
+		}
 	}
 	if heartbeatDelay(2, false, 0, 0.5) != 2*time.Second {
 		t.Fatalf("second base %s", heartbeatDelay(2, false, 0, 0.5))
 	}
-	if heartbeatDelay(6, false, 0, 0.5) != 32*time.Second {
-		t.Fatalf("sixth base %s", heartbeatDelay(6, false, 0, 0.5))
+	if heartbeatDelay(3, false, 0, 0.5) != 4*time.Second {
+		t.Fatalf("third base %s", heartbeatDelay(3, false, 0, 0.5))
 	}
-	if heartbeatDelay(7, false, 0, 0.5) != heartbeatBackoffCap {
-		t.Fatalf("seventh base %s", heartbeatDelay(7, false, 0, 0.5))
+	if heartbeatDelay(5, false, 0, 0.5) != 16*time.Second {
+		t.Fatalf("fifth base %s", heartbeatDelay(5, false, 0, 0.5))
+	}
+	cappedLo := heartbeatDelay(8, false, 0, 0)
+	cappedHi := heartbeatDelay(8, false, 0, 1)
+	if cappedLo >= cappedHi || cappedHi != heartbeatBackoffCap {
+		t.Fatalf("cap spread lo %s hi %s", cappedLo, cappedHi)
 	}
 }
 
 func TestHeartbeatRetryAfterHonoredAndClamped(t *testing.T) {
-	if got := heartbeatDelay(4, true, 35*time.Second, 0); got != 35*time.Second {
-		t.Fatalf("35s hint %s", got)
+	if got := heartbeatDelay(4, true, 10*time.Second, 0); got != 10*time.Second {
+		t.Fatalf("hint must not be earlier than itself: %s", got)
 	}
-	if got := heartbeatDelay(4, true, 35*time.Second, 1); got != 35*time.Second {
-		t.Fatalf("hint must not jitter: %s", got)
+	if got := heartbeatDelay(4, true, 10*time.Second, 1); got != 12*time.Second {
+		t.Fatalf("10s hint +20%% %s", got)
 	}
-	if got := heartbeatDelay(1, true, 100*time.Millisecond, 0.5); got != heartbeatBackoffFloor {
+	// 35s is the grace window, past the heartbeat cap. Hosts spread under the cap.
+	overLo := heartbeatDelay(4, true, 35*time.Second, 0)
+	overHi := heartbeatDelay(4, true, 35*time.Second, 1)
+	if overLo >= overHi || overHi != heartbeatBackoffCap || overLo < heartbeatBackoffFloor {
+		t.Fatalf("over-cap hint spread %s %s", overLo, overHi)
+	}
+	if got := heartbeatDelay(1, true, 100*time.Millisecond, 0); got != heartbeatBackoffFloor {
 		t.Fatalf("short hint %s", got)
 	}
 	if got := heartbeatDelay(1, true, 0, 0); got != heartbeatBackoffFloor {
@@ -99,10 +100,37 @@ func TestHeartbeatRetryAfterHonoredAndClamped(t *testing.T) {
 	got = a.heartbeatBackoff(3, &api.StatusError{
 		StatusCode:    http.StatusServiceUnavailable,
 		HasRetryAfter: true,
-		RetryAfter:    35 * time.Second,
+		RetryAfter:    10 * time.Second,
 	})
-	if got != 35*time.Second {
+	if got != 11*time.Second {
 		t.Fatalf("503 hint %s", got)
+	}
+}
+
+func TestHeartbeatRetryAfterSpreadsHosts(t *testing.T) {
+	const hint = 10 * time.Second
+	seen := map[time.Duration]struct{}{}
+	var prev time.Duration
+	for i := 0; i <= 10; i++ {
+		unit := float64(i) / 10
+		got := heartbeatDelay(3, true, hint, unit)
+		if got < hint {
+			t.Fatalf("unit %v %s is earlier than the hint", unit, got)
+		}
+		if got > hint+time.Duration(float64(hint)*heartbeatJitterFrac) {
+			t.Fatalf("unit %v %s is more than +20%%", unit, got)
+		}
+		if got > heartbeatBackoffCap {
+			t.Fatalf("unit %v %s over the cap", unit, got)
+		}
+		if i > 0 && got < prev {
+			t.Fatalf("unit %v went backwards %s → %s", unit, prev, got)
+		}
+		seen[got] = struct{}{}
+		prev = got
+	}
+	if len(seen) < 5 {
+		t.Fatalf("same hint did not spread: %d distinct waits", len(seen))
 	}
 }
 
@@ -202,7 +230,7 @@ func TestHeartbeatImmediateBeatOnRecovery(t *testing.T) {
 	if len(waits) != 3 {
 		t.Fatalf("waits %v", waits)
 	}
-	if waits[0] != time.Second || waits[1] != 2*time.Second {
+	if waits[0] != time.Second+100*time.Millisecond || waits[1] != 2*time.Second {
 		t.Fatalf("backoff %v", waits[:2])
 	}
 	if waits[2] != a.cfg.HeartbeatEvery {
@@ -241,6 +269,7 @@ func TestHeartbeatImmediateBeatOnReconnect(t *testing.T) {
 	a.state.DeviceID = testDevice
 	a.client.DeviceSecret = testSecret
 	a.cfg.HeartbeatEvery = 30 * time.Second
+	a.hbRand = func() float64 { return 1 }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -297,5 +326,143 @@ func TestHeartbeatImmediateBeatOnReconnect(t *testing.T) {
 	}
 	if waits[1] != a.cfg.HeartbeatEvery {
 		t.Fatalf("cadence after reconnect %s", waits[1])
+	}
+}
+
+func TestHeartbeatImmediateBeatAfterPlaneCall(t *testing.T) {
+	t.Run("job pull", func(t *testing.T) {
+		wakeFromPlane(t, func(a *Agent) error {
+			return a.pullAndRun(context.Background())
+		}, func(mux *http.ServeMux) {
+			mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+		})
+	})
+	t.Run("tunnel sync", func(t *testing.T) {
+		wakeFromPlane(t, func(a *Agent) error {
+			a.tunnels = &fakeTunnel{}
+			a.syncAndRecord(context.Background())
+			return nil
+		}, func(mux *http.ServeMux) {
+			mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+		})
+	})
+}
+
+func TestFailedJobPullDoesNotWakeHeartbeat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("10.0 1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, srv.URL, dir, uptime, "", "")
+	a.state.DeviceID = testDevice
+	a.client.DeviceSecret = testSecret
+	a.setHBStreak(2)
+	if err := a.pullAndRun(context.Background()); err == nil {
+		t.Fatal("expected pull error")
+	}
+	select {
+	case <-a.hbWake:
+		t.Fatal("failed pull woke the heartbeat")
+	default:
+	}
+}
+
+// wakeFromPlane fails one heartbeat, then calls the job loop while that
+// failure wait is in progress. A successful plane call must interrupt it.
+func wakeFromPlane(t *testing.T, call func(*Agent) error, routes func(*http.ServeMux)) {
+	t.Helper()
+	var mu sync.Mutex
+	var calls int
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 {
+			w.Header().Set("Retry-After", "600")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{
+			DeviceID:   testDevice,
+			PathBState: api.PathBGreen,
+			AcceptedAt: time.Now().UTC(),
+		})
+	})
+	routes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("10.0 1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, srv.URL, dir, uptime, "", "")
+	a.state.DeviceID = testDevice
+	a.client.DeviceSecret = testSecret
+	a.cfg.HeartbeatEvery = 30 * time.Second
+	a.hbRand = func() float64 { return 1 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{})
+	a.hbWait = func(waitCtx context.Context, d time.Duration, interrupt bool) bool {
+		if !interrupt {
+			cancel()
+			return false
+		}
+		if d > heartbeatBackoffCap || d < heartbeatBackoffFloor {
+			t.Errorf("wait %s outside [%s, %s]", d, heartbeatBackoffFloor, heartbeatBackoffCap)
+		}
+		close(entered)
+		select {
+		case <-waitCtx.Done():
+			return false
+		case <-a.hbWake:
+			return true
+		case <-release:
+			t.Error("backoff was not interrupted")
+			return false
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		a.heartbeatLoop(ctx)
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("heartbeat did not reach the failure wait")
+	}
+	if err := call(a); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("plane call did not beat immediately")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls < 2 {
+		t.Fatalf("calls %d", calls)
 	}
 }

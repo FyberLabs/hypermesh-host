@@ -24,7 +24,9 @@ func (a *Agent) syncAndRecord(ctx context.Context) {
 	a.recordSync(err)
 	if err != nil {
 		a.log.Warn("tunnel sync failed", "err", err)
+		return
 	}
+	a.notePlaneReachable()
 }
 
 func (a *Agent) recordSync(err error) {

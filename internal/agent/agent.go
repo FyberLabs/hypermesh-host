@@ -182,8 +182,9 @@ func (a *Agent) Run(ctx context.Context) error {
 
 func (a *Agent) heartbeatLoop(ctx context.Context) {
 	// A failed beat retries with backoff. A success waits HeartbeatEvery.
-	// Reconnect (tunnel up, or a client address appearing) interrupts only
-	// the failure wait, then the loop sends one beat and returns to cadence.
+	// Reconnect (tunnel up, or a client address appearing) and a successful
+	// job-loop call to the plane interrupt only the failure wait, then the
+	// loop sends one beat and returns to cadence.
 	fails := 0
 	for {
 		if ctx.Err() != nil {
@@ -563,6 +564,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.notePlaneReachable()
 	if job == nil {
 		return nil
 	}

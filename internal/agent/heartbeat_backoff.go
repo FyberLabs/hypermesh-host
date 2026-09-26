@@ -17,12 +17,18 @@ const (
 	// A 503 Retry-After of 0, or jitter on the first step, cannot spin.
 	heartbeatBackoffFloor = time.Second
 	// heartbeatBackoffCap is the longest wait after a failed beat.
-	// The plane drops a host whose heartbeat is older than 180s and
-	// allows about one interval (~35s) of grace on a 503. 45s honors
-	// that Retry-After and still leaves three waits inside the window.
-	heartbeatBackoffCap = 45 * time.Second
-	// heartbeatJitterFrac is the ± fraction applied to exponential waits.
-	// Retry-After is not jittered; it is only clamped.
+	// It sits under HeartbeatEvery (30s) and inside the plane's ~35s
+	// grace (HYPERMESH_HEARTBEAT_GRACE_WAIT_S) so a beat still lands
+	// before placement treats the host as stale. The plane drops a
+	// host whose heartbeat is older than 180s.
+	// Panopticon #256's 503 Retry-After is for placement, lease_start,
+	// and chat callers after a restart. It is not sent on heartbeat.
+	// A proxy 503 on POST /agent/heartbeat is still honored, then
+	// clamped into this range. That hint is not the grace window.
+	heartbeatBackoffCap = 25 * time.Second
+	// heartbeatJitterFrac is ±20% on exponential waits and 0–20% added
+	// to a Retry-After hint. Jitter is applied after the clamp so a
+	// wait that has reached the cap still spreads through [0.8*cap, cap].
 	heartbeatJitterFrac = 0.20
 )
 
@@ -47,7 +53,10 @@ func (a *Agent) heartbeatBackoff(fails int, err error) time.Duration {
 // heartbeatDelay is the wait before the next beat after a failure.
 // fails is 1 on the first failure and grows by one each consecutive miss.
 // hasHint selects the 503 Retry-After delay instead of the exponential base.
-// unit is in [0, 1] and only affects the exponential path.
+// unit is in [0, 1]. The base is clamped to [floor, cap] first, then jitter
+// is applied inside that window so hosts do not pile up on the cap.
+// A Retry-After hint is never shortened by jitter. When the hint itself
+// is already the cap, hosts spread across [0.8*cap, cap].
 func heartbeatDelay(fails int, hasHint bool, hint time.Duration, unit float64) time.Duration {
 	if unit < 0 {
 		unit = 0
@@ -69,16 +78,62 @@ func heartbeatDelay(fails int, hasHint bool, hint time.Duration, unit float64) t
 			shift = 16
 		}
 		base = heartbeatBackoffFloor << shift
-		factor := 1 + ((unit*2 - 1) * heartbeatJitterFrac)
-		base = time.Duration(float64(base) * factor)
 	}
 	if base < heartbeatBackoffFloor {
-		return heartbeatBackoffFloor
+		base = heartbeatBackoffFloor
 	}
 	if base > heartbeatBackoffCap {
-		return heartbeatBackoffCap
+		base = heartbeatBackoffCap
 	}
-	return base
+	lo, hi := heartbeatJitterBounds(base, hasHint)
+	if hi <= lo {
+		return lo
+	}
+	return lo + time.Duration(float64(hi-lo)*unit)
+}
+
+// heartbeatJitterBounds is the closed interval unit interpolates.
+// positive is the Retry-After path: add up to 20%, never earlier than
+// the clamped hint, never later than the cap. An exponential wait uses
+// ±20% clipped to [floor, cap]. A base that is already the cap uses
+// [0.8*cap, cap] on both paths.
+func heartbeatJitterBounds(base time.Duration, positive bool) (lo, hi time.Duration) {
+	if positive {
+		lo = base
+		hi = time.Duration(float64(base) * (1 + heartbeatJitterFrac))
+	} else {
+		lo = time.Duration(float64(base) * (1 - heartbeatJitterFrac))
+		hi = time.Duration(float64(base) * (1 + heartbeatJitterFrac))
+	}
+	if lo < heartbeatBackoffFloor {
+		lo = heartbeatBackoffFloor
+	}
+	if hi > heartbeatBackoffCap {
+		hi = heartbeatBackoffCap
+	}
+	if lo > hi {
+		lo = hi
+	}
+	if lo == hi && hi == heartbeatBackoffCap {
+		lo = time.Duration(float64(heartbeatBackoffCap) * (1 - heartbeatJitterFrac))
+		if lo < heartbeatBackoffFloor {
+			lo = heartbeatBackoffFloor
+		}
+	}
+	return lo, hi
+}
+
+// notePlaneReachable wakes a failing heartbeat after the job loop got a
+// response from the plane. observeTunnel runs inside a heartbeat attempt,
+// so a plane that returns while the tunnel stays up would otherwise sit
+// through the whole backoff.
+func (a *Agent) notePlaneReachable() {
+	a.healthMu.Lock()
+	failing := a.hbStreak > 0
+	a.healthMu.Unlock()
+	if failing {
+		a.pokeHeartbeat()
+	}
 }
 
 func (a *Agent) waitHeartbeat(ctx context.Context, d time.Duration, interrupt bool) bool {
