@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -101,6 +103,153 @@ func TestPublicFromPrivateRejectsJunk(t *testing.T) {
 	if _, err := PublicFromPrivate("not-a-key"); err == nil {
 		t.Fatal("expected error")
 	}
+}
+
+func TestGenerateKeypairClampsPrivateKey(t *testing.T) {
+	// A random scalar is already clamped about 1/32 of the time. Several
+	// draws make a missing clamp fail instead of flaking.
+	for i := 0; i < 32; i++ {
+		priv, pub, err := GenerateKeypair()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := base64.StdEncoding.DecodeString(priv)
+		if err != nil || len(raw) != 32 {
+			t.Fatal("generated private key is not 32-byte standard base64")
+		}
+		if raw[0]&7 != 0 || raw[31]&128 != 0 || raw[31]&64 == 0 {
+			t.Fatal("generated private key is not clamped")
+		}
+		got, err := PublicFromPrivate(priv)
+		if err != nil || got != pub {
+			t.Fatal("public key does not match the clamped private key")
+		}
+	}
+}
+
+func TestLoadOrCreateLeavesUnclampedKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	raw := forcedUnclampedScalar(t)
+	stored := base64.StdEncoding.EncodeToString(raw)
+	path := filepath.Join(dir, hostKeyFile)
+	body := stored + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, pub, err := LoadOrCreatePrivateKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if priv != stored {
+		t.Fatal("unclamped key was replaced")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("existing key file was rewritten")
+	}
+	clamped := append([]byte(nil), raw...)
+	clampX25519(clamped)
+	want, err := PublicFromPrivate(base64.StdEncoding.EncodeToString(clamped))
+	if err != nil || want == "" || want != pub {
+		t.Fatal("unclamped file and its clamped form diverged")
+	}
+	again, _, err := LoadOrCreatePrivateKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != stored {
+		t.Fatal("second load rewrote the unclamped key")
+	}
+}
+
+func TestSameWGPrivateKeyClamp(t *testing.T) {
+	raw := forcedUnclampedScalar(t)
+	clamped := append([]byte(nil), raw...)
+	clampX25519(clamped)
+	stored := base64.StdEncoding.EncodeToString(raw)
+	live := base64.StdEncoding.EncodeToString(clamped)
+	if stored == live {
+		t.Fatal("fixture encodings did not differ")
+	}
+	if !sameWGPrivateKey(stored, live) || !sameWGPrivateKey(live, stored) {
+		t.Fatal("unclamped stored key and clamped live key must match")
+	}
+	if !sameWGPrivateKey(base64.RawStdEncoding.EncodeToString(raw), live) {
+		t.Fatal("unclamped and clamped private keys must match across base64 forms")
+	}
+	// Public keys are not scalars. The raw compare must still see this difference.
+	if sameWGKey(stored, live) {
+		t.Fatal("public key compare must not ignore clamp bits")
+	}
+
+	other := append([]byte(nil), raw...)
+	other[1] ^= 0x01
+	otherKey := base64.StdEncoding.EncodeToString(other)
+	if sameWGPrivateKey(stored, otherKey) || sameWGPrivateKey(live, otherKey) {
+		t.Fatal("different private keys must not match")
+	}
+	a, _, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameWGPrivateKey(a, b) || sameWGPrivateKey(stored, a) {
+		t.Fatal("different private keys must not match")
+	}
+
+	good := live
+	malformed := []struct {
+		name string
+		key  string
+	}{
+		{"empty", ""},
+		{"blank", "   "},
+		{"none", "(none)"},
+		{"text", "not-a-key"},
+		{"short", base64.StdEncoding.EncodeToString(make([]byte, 16))},
+		{"len31", base64.StdEncoding.EncodeToString(make([]byte, 31))},
+		{"len33", base64.StdEncoding.EncodeToString(make([]byte, 33))},
+	}
+	for _, bad := range malformed {
+		if sameWGPrivateKey(bad.key, good) || sameWGPrivateKey(good, bad.key) {
+			t.Fatalf("malformed key %s matched a private key", bad.name)
+		}
+	}
+	if sameWGPrivateKey("not-a-key", "also-not-a-key") {
+		t.Fatal("different malformed keys matched")
+	}
+	// The same junk on both sides is still not a key, so the agent applies.
+	if sameWGPrivateKey("not-a-key", "not-a-key") || sameWGKey("not-a-key", "not-a-key") {
+		t.Fatal("identical malformed keys must not match")
+	}
+	short := base64.StdEncoding.EncodeToString(make([]byte, 31))
+	if sameWGPrivateKey(short, short) || sameWGKey(short, short) {
+		t.Fatal("identical short keys must not match")
+	}
+}
+
+// forcedUnclampedScalar is 32 random bytes with the bits the X25519 clamp
+// clears set, so its encoding differs from the form WireGuard reports.
+func forcedUnclampedScalar(t *testing.T) []byte {
+	t.Helper()
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	raw[0] |= 0x07
+	raw[31] |= 0x80
+	raw[31] &^= 0x40
+	return raw
 }
 
 func assertMode(t *testing.T, path string, want os.FileMode) {

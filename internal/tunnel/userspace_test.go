@@ -164,7 +164,7 @@ func TestUserspaceConfigChangeApplies(t *testing.T) {
 
 func TestUserspaceMatchingHandshakeDoesNotReset(t *testing.T) {
 	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
-	sess := allocated()
+	sess := withRealKeys(t, allocated())
 	link := newScriptedLink(sess, now)
 	r := newUserspaceRunner(t, link, now)
 	if err := r.Apply(context.Background(), sess); err != nil {
@@ -268,6 +268,70 @@ func TestUserspaceRestartIdenticalConfigDoesNotSync(t *testing.T) {
 	}
 }
 
+// TestUserspaceRestartUnclampedKeySkipsSync is the AGX restart: the key file
+// holds the unclamped scalar and `wg show` prints the clamped form. Peer
+// count, public key, endpoint, AllowedIPs, keepalive, and address match.
+func TestUserspaceRestartUnclampedKeySkipsSync(t *testing.T) {
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	raw := forcedUnclampedScalar(t)
+	clamped := append([]byte(nil), raw...)
+	clampX25519(clamped)
+	_, serverPub, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := allocated()
+	sess.PeerPrivateKey = base64.StdEncoding.EncodeToString(raw)
+	sess.ServerPublicKey = serverPub
+	link := newScriptedLink(sess, now)
+	link.priv = base64.StdEncoding.EncodeToString(clamped)
+	r := newUserspaceRunner(t, link, now)
+	if err := r.Apply(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	link.mu.Lock()
+	defer link.mu.Unlock()
+	if link.synced || link.saw("syncconf") {
+		t.Fatal("clamped live private key must skip syncconf")
+	}
+	if r.ApplyOutcome() != "skip" {
+		t.Fatalf("outcome %q", r.ApplyOutcome())
+	}
+}
+
+func TestUserspaceRestartDifferentPrivateKeySyncs(t *testing.T) {
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	priv, _, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverPub, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := allocated()
+	sess.PeerPrivateKey = priv
+	sess.ServerPublicKey = serverPub
+	link := newScriptedLink(sess, now)
+	link.priv = other
+	r := newUserspaceRunner(t, link, now)
+	if err := r.Apply(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	link.mu.Lock()
+	defer link.mu.Unlock()
+	if !link.synced || !link.saw("syncconf") {
+		t.Fatal("different private key must syncconf")
+	}
+	if r.ApplyOutcome() != "syncconf" {
+		t.Fatalf("outcome %q", r.ApplyOutcome())
+	}
+}
+
 func TestUserspaceAllowedIPsChangeUpdatesRoutes(t *testing.T) {
 	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
 	sess := allocated()
@@ -311,7 +375,7 @@ func TestUserspaceAllowedIPsChangeUpdatesRoutes(t *testing.T) {
 // and the current AllowedIPs prefix is installed.
 func TestUserspaceReconcileKeepsKernelAndLinkLocal(t *testing.T) {
 	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
-	sess := allocated()
+	sess := withRealKeys(t, allocated())
 	sess.AllowedIPs = "10.88.0.0/24"
 	sess.ClientAddress = "10.77.0.3/24"
 	link := newScriptedLink(sess, now)
@@ -450,6 +514,23 @@ func hasCIDR(list []string, cidr string) bool {
 		}
 	}
 	return false
+}
+
+// withRealKeys replaces the placeholder key strings. A non-key does not
+// compare equal, even to itself, so a skip test has to use real scalars.
+func withRealKeys(t *testing.T, sess Session) Session {
+	t.Helper()
+	priv, _, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pub, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.PeerPrivateKey = priv
+	sess.ServerPublicKey = pub
+	return sess
 }
 
 func stripPad(t *testing.T, std string) string {
