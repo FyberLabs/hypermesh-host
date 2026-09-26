@@ -37,7 +37,7 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	startJob := api.Job{
 		JobID: "syn-start", Kind: api.KindLeaseStart, DeviceID: testDevice,
 		LeaseID: "lease-syn", CatalogID: "llama-3.1-8b-q4",
-		ImageDigest: synthDigest, Runtime: "nvidia",
+		ImageDigest: synthDigest, FileHash: fixtureGGUFHash(), Runtime: "nvidia",
 	}
 	stopJob := api.Job{JobID: "syn-stop", Kind: api.KindLeaseStop, DeviceID: testDevice, LeaseID: "lease-syn"}
 	issued := map[string]bool{}

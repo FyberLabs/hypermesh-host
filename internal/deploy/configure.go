@@ -8,8 +8,11 @@ import (
 	"regexp"
 	"strings"
 
+	"strconv"
+
 	"github.com/FyberLabs/hypermesh-host/deploy/agx"
 	"github.com/FyberLabs/hypermesh-host/internal/agent"
+	"github.com/FyberLabs/hypermesh-host/internal/pull"
 )
 
 const (
@@ -26,7 +29,7 @@ var uuidRE = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // RenderAgentEnv is the env file the existing enroll path reads.
 // The device secret is not written here. enrolled means device.json
 // already has a device id and secret, so a fresh enroll token is optional.
-func RenderAgentEnv(controlPlane, tenant, token, stateDir, gguf string, enrolled bool) (string, error) {
+func RenderAgentEnv(controlPlane, tenant, token, stateDir, gguf, cacheMax string, enrolled bool) (string, error) {
 	controlPlane = strings.TrimSpace(controlPlane)
 	if controlPlane == "" {
 		controlPlane = defaultControlPlane
@@ -65,8 +68,29 @@ func RenderAgentEnv(controlPlane, tenant, token, stateDir, gguf string, enrolled
 	}
 	fmt.Fprintf(&b, "HYPERMESH_STATE_DIR=%s\n", stateDir)
 	fmt.Fprintf(&b, "HYPERMESH_GGUF_PATH=%s\n", gguf)
+	b.WriteString(cacheBudgetLine(gguf, cacheMax))
 	b.WriteString("HYPERMESH_WG_USERSPACE=1\n")
 	return b.String(), nil
+}
+
+// cacheBudgetLine is the durable model-cache budget. An explicit value is
+// written as given. Otherwise this measures the filesystem that holds the
+// GGUF path and writes size minus the default 2 GiB floor. The agent uses
+// the same formula when the variable is omitted.
+func cacheBudgetLine(gguf, explicit string) string {
+	explicit = strings.TrimSpace(explicit)
+	if explicit != "" {
+		return "HYPERMESH_MODEL_CACHE_MAX_BYTES=" + explicit + "\n"
+	}
+	path := strings.TrimSpace(gguf)
+	if path == "" {
+		path = agent.DefaultModelPath
+	}
+	capBytes, err := pull.CapacityBytes(path)
+	if err != nil || capBytes < 0 || uint64(capBytes) < pull.DefaultFloorBytes {
+		return "# HYPERMESH_MODEL_CACHE_MAX_BYTES is computed by the agent when unset: filesystem size minus HYPERMESH_DISK_FLOOR_BYTES.\n"
+	}
+	return "HYPERMESH_MODEL_CACHE_MAX_BYTES=" + strconv.FormatUint(uint64(capBytes)-pull.DefaultFloorBytes, 10) + "\n"
 }
 
 func writeAgentEnv(root, envFile, body string) (string, error) {

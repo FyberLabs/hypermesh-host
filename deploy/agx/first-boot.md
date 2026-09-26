@@ -164,4 +164,4 @@ sudo find / -maxdepth 1 -name 'lab-pull-*.gguf' -print
 sudo find / -maxdepth 1 -name 'lab-pull-*.gguf' -delete
 ```
 
-On AGX64-1 none were present at 2026-09-26 12:52 ET. `lease_start` refuses until a `lab_pull` succeeds into `/var/lib/hypermesh/models` (the new default file is `model.gguf` there).
+On AGX64-1 none were present at 2026-09-26 12:52 ET. `lease_start` bind-mounts the loaded file in `/var/lib/hypermesh/models/cache` after a `lab_pull`. With no loaded cache file it still requires `/var/lib/hypermesh/models/model.gguf`. The cache budget is `HYPERMESH_MODEL_CACHE_MAX_BYTES` (filesystem size minus the disk floor when unset). `hypermesh-deploy` writes that measured value.

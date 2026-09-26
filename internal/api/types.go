@@ -87,7 +87,13 @@ type HostHealth struct {
 	WGPort              *int   `json:"wg_port,omitempty"`
 	LeaseContainerCount *int   `json:"lease_container_count,omitempty"`
 	DiskFreeBytes       *int64 `json:"disk_free_bytes,omitempty"`
-	BuildCommit         string `json:"build_commit,omitempty"`
+	// ModelCacheBytes is the sum of GGUF files in the model cache.
+	// ModelCacheEvictableBytes excludes the loaded model and any model
+	// backing an active lease. Both are omitted when the cache cannot
+	// be read. Zero is sent when the cache is empty.
+	ModelCacheBytes          *int64 `json:"model_cache_bytes,omitempty"`
+	ModelCacheEvictableBytes *int64 `json:"model_cache_evictable_bytes,omitempty"`
+	BuildCommit              string `json:"build_commit,omitempty"`
 	// HostType is model or supervisor. The agent always sets it so a
 	// supervisor is not offered as a normal device.
 	HostType string `json:"host_type,omitempty"`
@@ -132,6 +138,8 @@ const (
 	KindInstanceCheck JobKind = "instance_check"
 	KindLeaseStart    JobKind = "lease_start"
 	KindLeaseStop     JobKind = "lease_stop"
+	KindLeaseCancel   JobKind = "lease_cancel"
+	KindLeaseExpiry   JobKind = "lease_expiry"
 	KindSellPause     JobKind = "sell_pause"
 )
 
@@ -155,11 +163,15 @@ type Job struct {
 	// SizeBytes is the expected artifact size for lab_pull when the plane
 	// sends it. Zero means this box learns the size from HTTP HEAD
 	// Content-Length before downloading. Older planes omit the field.
-	SizeBytes int64  `json:"size_bytes,omitempty"`
-	Runtime   string `json:"runtime,omitempty"`
-	Backend   string `json:"backend,omitempty"`
-	SuiteID   string `json:"suite_id,omitempty"`
-	Until     string `json:"until,omitempty"`
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+	// FileHash is the catalog-approved GGUF sha256 (sha256: plus 64 hex).
+	// lease_start refuses when it is missing or does not match the file
+	// it is about to mount. Distinct from ImageDigest (OCI repo@digest).
+	FileHash string `json:"file_hash,omitempty"`
+	Runtime  string `json:"runtime,omitempty"`
+	Backend  string `json:"backend,omitempty"`
+	SuiteID  string `json:"suite_id,omitempty"`
+	Until    string `json:"until,omitempty"`
 }
 
 // ScorecardReport is POST /agent/scorecard.

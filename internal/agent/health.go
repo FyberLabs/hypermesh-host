@@ -121,6 +121,10 @@ func (a *Agent) fillHealth(ctx context.Context, h *api.HostHealth) {
 		a.metricDiskSize = nil
 	}
 	a.healthMu.Unlock()
+	if used, evictable, ok := a.modelCacheUsage(); ok {
+		h.ModelCacheBytes = &used
+		h.ModelCacheEvictableBytes = &evictable
+	}
 }
 
 func (a *Agent) syncFacts() (at time.Time, ok bool, class string, status int) {
@@ -325,6 +329,11 @@ func (a *Agent) metricsLoop(ctx context.Context) {
 			} else if !ok {
 				if backoff <= 0 {
 					backoff = failEvery
+				} else if backoff < 30*time.Second {
+					backoff *= 2
+					if backoff > 30*time.Second {
+						backoff = 30 * time.Second
+					}
 				}
 				retryAt = time.Now().Add(backoff)
 			}
@@ -425,6 +434,8 @@ func (a *Agent) metricsText() []byte {
 		sample.WGPID = h.WGPID
 		sample.WGPort = h.WGPort
 		sample.LeaseCount = h.LeaseContainerCount
+		sample.ModelCacheBytes = h.ModelCacheBytes
+		sample.ModelCacheEvictableBytes = h.ModelCacheEvictableBytes
 		sample.LastHTTP = h.LastSyncHTTPStatus
 		sample.ErrClass = h.LastSyncErrorClass
 		if h.BuildCommit != "" {

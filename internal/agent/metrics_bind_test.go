@@ -210,6 +210,46 @@ func TestMetricsListenFailureFallsBackWithoutSpin(t *testing.T) {
 	})
 }
 
+func TestMetricsLoopbackFailureBacksOff(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("10.0 1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.cfg.MetricsAddr = ""
+	a.metricsWG = func() string { return "" }
+	a.metricsEvery = 10 * time.Millisecond
+	a.metricsFailEvery = 80 * time.Millisecond
+	var mu sync.Mutex
+	var calls int
+	a.metricsServe = func(context.Context, string, string) (string, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return "", errors.New("bind: cannot assign requested address")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.StartMetrics(ctx)
+
+	time.Sleep(40 * time.Millisecond)
+	mu.Lock()
+	n := calls
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("after 40ms calls %d want 1", n)
+	}
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	n = calls
+	mu.Unlock()
+	if n < 2 || n > 5 {
+		t.Fatalf("after another 300ms calls %d want 2..5", n)
+	}
+}
+
 func TestBindIPReadByMetricsIsRaceFree(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")

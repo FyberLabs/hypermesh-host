@@ -158,6 +158,11 @@ func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, li
 	if err := Preflight(dest, size, lim); err != nil {
 		return err
 	}
+	if lim.BeforeWrite != nil {
+		if err := lim.BeforeWrite(); err != nil {
+			return err
+		}
+	}
 	if fetch == nil {
 		fetch = HTTPGet(nil)
 	}

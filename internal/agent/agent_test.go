@@ -1227,6 +1227,7 @@ func TestLeaseStartWithDigestUsesNVIDIA(t *testing.T) {
 			LeaseID:     "lease-2",
 			CatalogID:   "llama-3.1-8b-q4",
 			ImageDigest: ref,
+			FileHash:    fixtureGGUFHash(),
 			Runtime:     "nvidia",
 		})
 	})
@@ -1395,7 +1396,7 @@ func TestLeaseStartBackends(t *testing.T) {
 				dockerCalls = append(dockerCalls, append([]string{}, args...))
 				return []byte("cid\n"), nil
 			}}
-			got := a.runJob(context.Background(), api.Job{
+			job := api.Job{
 				JobID:       "j-backend",
 				Kind:        api.KindLeaseStart,
 				DeviceID:    testDevice,
@@ -1404,7 +1405,11 @@ func TestLeaseStartBackends(t *testing.T) {
 				ImageDigest: ref,
 				Runtime:     "nvidia",
 				Backend:     tc.backend,
-			})
+			}
+			if tc.wantPass {
+				job.FileHash = fixtureGGUFHash()
+			}
+			got := a.runJob(context.Background(), job)
 			if got.Passed != tc.wantPass || got.Reason != tc.wantReason {
 				t.Fatalf("result %+v want pass=%v reason=%q", got, tc.wantPass, tc.wantReason)
 			}
@@ -1735,7 +1740,7 @@ func TestLeaseStopThenStartFreesExitedName(t *testing.T) {
 	startJob := api.Job{
 		JobID: "j-start-1", Kind: api.KindLeaseStart, DeviceID: testDevice,
 		LeaseID: leaseID, CatalogID: "llama-3.1-8b-q4",
-		ImageDigest: digest, Runtime: "nvidia",
+		ImageDigest: digest, FileHash: ggufHash, Runtime: "nvidia",
 	}
 	first := a.runJob(context.Background(), startJob)
 	if !first.Passed {
@@ -1810,6 +1815,7 @@ func TestLeaseStartRequiresCatalogAlias(t *testing.T) {
 		DeviceID:    testDevice,
 		LeaseID:     "lease-noalias",
 		ImageDigest: ref,
+		FileHash:    fixtureGGUFHash(),
 		Runtime:     "nvidia",
 		Backend:     "cuda-jetson",
 	})
@@ -1877,6 +1883,7 @@ func TestLeaseStartDockerErrorAppearsInReason(t *testing.T) {
 		LeaseID:     "lease-cdi",
 		CatalogID:   "llama-3.1-8b-q4",
 		ImageDigest: ref,
+		FileHash:    fixtureGGUFHash(),
 		Runtime:     "nvidia",
 	})
 	if got.Passed {
@@ -1937,6 +1944,7 @@ func TestLeaseStartLocalImageAfterPullUnauthorized(t *testing.T) {
 		LeaseID:     "lease-local",
 		CatalogID:   "llama-3.1-8b-q4",
 		ImageDigest: ref,
+		FileHash:    wantHash,
 		Runtime:     "nvidia",
 	})
 	if !got.Passed || got.Reason != "lease_start" {
@@ -2128,6 +2136,7 @@ func TestLeaseStartResultImageHashIsGGUF(t *testing.T) {
 		LeaseID:     "lease-hash",
 		CatalogID:   "llama-3.1-8b-q4",
 		ImageDigest: ref,
+		FileHash:    wantHash,
 		Runtime:     "nvidia",
 	})
 	if !got.Passed || got.ImageHash != wantHash {
@@ -2480,6 +2489,11 @@ func TestDeviceIDWithoutSecretErrors(t *testing.T) {
 	}
 }
 
+func fixtureGGUFHash() string {
+	sum := sha256.Sum256([]byte("fixture-gguf-weights"))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func writeTestGGUF(t *testing.T, dir string) (path, hash string) {
 	t.Helper()
 	path = filepath.Join(dir, "model.gguf")
@@ -2487,8 +2501,7 @@ func writeTestGGUF(t *testing.T, dir string) (path, hash string) {
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(body)
-	return path, "sha256:" + hex.EncodeToString(sum[:])
+	return path, fixtureGGUFHash()
 }
 
 func readyLeaseStart(t *testing.T, a *Agent) string {

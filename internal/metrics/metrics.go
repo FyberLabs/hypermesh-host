@@ -111,24 +111,26 @@ func handler(gather func() []byte) http.Handler {
 // Sample is the host health series. Maps may be nil.
 // Empty ErrClass is the none bucket. TunnelState empty omits that gauge.
 type Sample struct {
-	HeartbeatSuccess    uint64
-	HeartbeatFailure    map[string]uint64
-	SyncSuccess         uint64
-	SyncFailure         map[string]uint64
-	TunnelState         string
-	HandshakeAgeS       *int
-	WGPID               *int
-	WGPort              *int
-	LeaseCount          *int
-	DiskFreeBytes       *int64
-	DiskSizeBytes       *int64
-	HeartbeatAgeSeconds *float64
-	PullBytes           uint64
-	PullSeconds         float64
-	LastSyncUnix        *int64
-	LastHTTP            int
-	ErrClass            string
-	Commit              string
+	HeartbeatSuccess         uint64
+	HeartbeatFailure         map[string]uint64
+	SyncSuccess              uint64
+	SyncFailure              map[string]uint64
+	TunnelState              string
+	HandshakeAgeS            *int
+	WGPID                    *int
+	WGPort                   *int
+	LeaseCount               *int
+	DiskFreeBytes            *int64
+	DiskSizeBytes            *int64
+	HeartbeatAgeSeconds      *float64
+	PullBytes                uint64
+	PullSeconds              float64
+	ModelCacheBytes          *int64
+	ModelCacheEvictableBytes *int64
+	LastSyncUnix             *int64
+	LastHTTP                 int
+	ErrClass                 string
+	Commit                   string
 }
 
 // Render writes Prometheus text for Sample. No keys, tokens, or names.
@@ -168,6 +170,12 @@ func Render(s Sample) []byte {
 	if s.DiskFreeBytes != nil && s.DiskSizeBytes != nil {
 		gauge(&b, "hypermesh_disk_free_bytes", "Free bytes for non-root users on the filesystem holding the GGUF path (statfs Bavail*Bsize).", nil, strconv.FormatInt(*s.DiskFreeBytes, 10))
 		gauge(&b, "hypermesh_disk_size_bytes", "Total size in bytes of the filesystem holding the GGUF path (statfs Blocks*Bsize). Same labels as hypermesh_disk_free_bytes.", nil, strconv.FormatInt(*s.DiskSizeBytes, 10))
+	}
+	if s.ModelCacheBytes != nil {
+		gauge(&b, "hypermesh_model_cache_bytes", "Bytes of GGUF files in the model cache.", nil, strconv.FormatInt(*s.ModelCacheBytes, 10))
+	}
+	if s.ModelCacheEvictableBytes != nil {
+		gauge(&b, "hypermesh_model_cache_evictable_bytes", "Model cache bytes that are not the loaded model and not backing an active lease.", nil, strconv.FormatInt(*s.ModelCacheEvictableBytes, 10))
 	}
 	counter(&b, "hypermesh_pull_bytes_total", "Bytes copied for model pulls.", nil, s.PullBytes)
 	counterFloat(&b, "hypermesh_pull_duration_seconds_total", "Seconds spent copying model pulls.", s.PullSeconds)

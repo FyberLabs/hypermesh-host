@@ -36,6 +36,7 @@ func TestLeaseStartLlamaCppCPUMetal(t *testing.T) {
 		LeaseID:     "lease-metal",
 		CatalogID:   "llama-3.1-8b-q4",
 		ImageDigest: ref,
+		FileHash:    wantHash,
 		Runtime:     "nvidia",
 		Backend:     "llama-cpp-cpu",
 	})

@@ -66,6 +66,13 @@ type Config struct {
 	// DiskMargin is HYPERMESH_DISK_MARGIN_BYTES. Empty means 64 MiB on
 	// top of the object size. "0" adds no margin.
 	DiskMargin string
+	// ModelCacheMax is HYPERMESH_MODEL_CACHE_MAX_BYTES. Empty means
+	// the filesystem size minus DiskFloor. "0" is an empty budget.
+	ModelCacheMax string
+	// PendingTTL is HYPERMESH_MODEL_CACHE_PENDING_TTL. Empty means
+	// 30m. A pending catalog pin is not evictable until this duration
+	// passes, a lease_start consumes it, or a stop/cancel/expiry clears it.
+	PendingTTL string
 	// LlamaJinja, LlamaCtxSize, and LlamaTimeout are the lease container's
 	// llama-server settings (LLAMA_ARG_JINJA, LLAMA_ARG_CTX_SIZE,
 	// LLAMA_ARG_TIMEOUT). Empty uses the runtime defaults (1, 16384, 1800).
@@ -112,6 +119,8 @@ func FromEnv() Config {
 		GGUFPath:                envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
 		DiskFloor:               strings.TrimSpace(os.Getenv("HYPERMESH_DISK_FLOOR_BYTES")),
 		DiskMargin:              strings.TrimSpace(os.Getenv("HYPERMESH_DISK_MARGIN_BYTES")),
+		ModelCacheMax:           strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_MAX_BYTES")),
+		PendingTTL:              strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_PENDING_TTL")),
 		LlamaJinja:              envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
 		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
@@ -186,7 +195,32 @@ func (c Config) Validate() error {
 	if _, err := c.DiskMarginBytes(); err != nil {
 		return err
 	}
+	if raw := strings.TrimSpace(c.ModelCacheMax); raw != "" {
+		if _, err := parseByteCount("HYPERMESH_MODEL_CACHE_MAX_BYTES", raw, 0); err != nil {
+			return err
+		}
+	}
+	if _, err := c.PendingModelTTL(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// defaultPendingTTL is how long a catalog pin survives when the plane
+// never starts, stops, cancels, or expires the lease.
+const defaultPendingTTL = 30 * time.Minute
+
+// PendingModelTTL is the pending-pin lifetime. Empty config means 30m.
+func (c Config) PendingModelTTL() (time.Duration, error) {
+	raw := strings.TrimSpace(c.PendingTTL)
+	if raw == "" {
+		return defaultPendingTTL, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("hypermesh: HYPERMESH_MODEL_CACHE_PENDING_TTL must be a positive duration")
+	}
+	return d, nil
 }
 
 // DiskFloorBytes is the free-space floor. Empty config means 2 GiB.

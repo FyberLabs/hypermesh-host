@@ -191,7 +191,7 @@ func TestLabPullRefusesWhenDiskIsShort(t *testing.T) {
 		t.Fatal(err)
 	}
 	need := uint64(size) + floor + margin
-	want := "insufficient_disk: need " + strconv.FormatUint(need, 10) + ", free " + strconv.FormatInt(free, 10)
+	want := "insufficient_disk: need " + strconv.FormatUint(need, 10) + ", free " + strconv.FormatInt(free, 10) + ", evictable 0"
 	if res.Reason != want {
 		t.Fatalf("reason %q want %q", res.Reason, want)
 	}
