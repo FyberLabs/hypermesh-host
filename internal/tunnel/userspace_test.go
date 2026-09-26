@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -601,9 +602,16 @@ func (s *scriptedLink) run(_ context.Context, name string, args ...string) ([]by
 
 func (s *scriptedLink) dump() string {
 	var b strings.Builder
+	// Same columns as `wg show <iface> dump` on wireguard-go: fwmark "off",
+	// preshared "(none)", and keepalive "off" when unset. tx bytes sit
+	// before keepalive so a short split would read the wrong field.
 	fmt.Fprintf(&b, "%s\tifacepub\t%d\toff\n", s.priv, s.port)
 	if s.peers > 0 {
-		fmt.Fprintf(&b, "%s\t(none)\t%s\t%s\t%d\t0\t0\t%d\n", s.pub, s.endpoint, s.allowed, s.hs, s.ka)
+		ka := strconv.Itoa(s.ka)
+		if s.ka == 0 {
+			ka = "off"
+		}
+		fmt.Fprintf(&b, "%s\t(none)\t%s\t%s\t%d\t0\t148\t%s\n", s.pub, s.endpoint, s.allowed, s.hs, ka)
 	}
 	return b.String()
 }

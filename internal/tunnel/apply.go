@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,6 +36,8 @@ var (
 
 // Session is the allocated host peer. PeerPrivateKey is local, never from GET.
 // TunnelID and LeaseID are tickets on the host peer, not a new peer.
+// ListenPort is the local UDP port. Zero means the plane did not send one
+// (GET /agent/tunnel has no listen_port); the bound port is kept.
 type Session struct {
 	TunnelID        string
 	LeaseID         string
@@ -44,6 +47,7 @@ type Session struct {
 	PeerPrivateKey  string
 	AllowedIPs      string
 	ClientAddress   string
+	ListenPort      int
 }
 
 // Applier installs or tears down the local WireGuard interface.
@@ -74,6 +78,15 @@ type Runner struct {
 	// LookupHost resolves a peer endpoint hostname. wg show dump prints the
 	// numeric address, not the name from the control plane. Nil uses net.LookupHost.
 	LookupHost func(ctx context.Context, host string) ([]string, error)
+	// ExtraLookup is tried when LookupHost (or the Go resolver) does not
+	// return the address wg stored. Nil uses getent, which is the glibc
+	// resolver wg syncconf uses. A CGO_ENABLED=0 agent otherwise misses
+	// systemd-resolved and treats an unchanged hostname endpoint as new.
+	ExtraLookup func(ctx context.Context, host string) ([]string, error)
+	// RunGetent overrides `getent ahosts -- <host>`. Nil runs getent.
+	// Output is not logged. The host is a validated DNS name; arguments
+	// that start with "-" are not passed.
+	RunGetent func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// InstallDefaultRoute installs 0.0.0.0/0 and ::/0 when they appear in
 	// AllowedIPs. Off by default: those routes would replace the LAN default
 	// route this host uses to reach the control plane and the WireGuard
@@ -141,6 +154,12 @@ func PeerFingerprint(s Session) string {
 	b.WriteString(strings.TrimSpace(s.ClientAddress))
 	b.WriteByte(0)
 	b.WriteString(strings.TrimSpace(s.AllowedIPs))
+	// A zero or out-of-range listen port is "unspecified" and must not
+	// change the hash. Existing applied markers were written without this field.
+	if port := validListenPort(s.ListenPort); port != 0 {
+		b.WriteByte(0)
+		b.WriteString(strconv.Itoa(port))
+	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
