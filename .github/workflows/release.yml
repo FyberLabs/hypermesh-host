@@ -48,6 +48,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The flag checker validates commands against azure-cli 2.90.0.
+      # An older CLI on this runner is a different flag set.
+      - name: Require azure-cli 2.90.0
+        run: |
+          set -euo pipefail
+          ver=$(az version | python3 -c 'import json,sys; print(json.load(sys.stdin)["azure-cli"])')
+          AZ_VER="$ver" python3 -c 'import os,sys; p=[int(x) for x in os.environ["AZ_VER"].split(".")[:3]]; p += [0]*(3-len(p)); sys.exit(0 if tuple(p)>=(2,90,0) else 1)' || {
+            echo "hypermesh release: az ${ver} is older than 2.90.0" >&2
+            exit 1
+          }
+
       # test only for refs/heads/main. prod only for refs/tags/v* whose
       # commit is an ancestor of origin/main. workflow_dispatch from
       # any other ref fails here, before login.

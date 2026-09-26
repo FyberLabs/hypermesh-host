@@ -163,7 +163,19 @@ def invocations(lines: list[str], wrappers: dict[str, tuple[list[str], list[str]
     return found
 
 
-def help_text(cmd: tuple[str, ...]) -> str:
+FLAG_TOKEN = re.compile(r"(?<![\w-])(--[A-Za-z0-9][A-Za-z0-9-]*|-[A-Za-z])(?![\w-])")
+
+# az storage blob tag set comes from storage-blob-preview. Prod does
+# not install that extension. Core mode is the prod CLI. Preview mode
+# is the test CLI.
+EXTENSION_CMDS = {("storage", "blob", "tag", "set")}
+
+
+def flag_tokens(text: str) -> set[str]:
+    return set(FLAG_TOKEN.findall(text))
+
+
+def run_help(cmd: tuple[str, ...]) -> tuple[int, str]:
     proc = subprocess.run(
         ["az", *cmd, "--help"],
         check=False,
@@ -171,13 +183,61 @@ def help_text(cmd: tuple[str, ...]) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    if proc.returncode != 0:
-        sys.stderr.write(f"az {' '.join(cmd)} --help failed:\n{proc.stdout}\n")
+    return proc.returncode, proc.stdout
+
+
+def help_text(cmd: tuple[str, ...]) -> str:
+    code, text = run_help(cmd)
+    if code != 0:
+        sys.stderr.write(f"az {' '.join(cmd)} --help failed:\n{text}\n")
         sys.exit(1)
-    return proc.stdout
+    return text
+
+
+def preview_installed() -> bool:
+    proc = subprocess.run(
+        ["az", "extension", "show", "--name", "storage-blob-preview", "--query", "version", "-o", "tsv"],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.returncode == 0 and bool(proc.stdout.strip())
+
+
+def self_test() -> None:
+    """Reject substring matches. --nam is not --name. --blob is not --blob-name."""
+    sample = """
+    --name -n           : The blob name.
+    --blob-name -b      : The blob.
+    --output -o         : Output format.
+    --query             : JMESPath query string.
+    """
+    accepted = flag_tokens(sample)
+    for flag in ("--name", "-n", "--blob-name", "-b", "--output", "-o", "--query"):
+        if flag not in accepted:
+            sys.stderr.write(f"self-test: {flag} was not accepted\n")
+            sys.exit(1)
+    for flag in ("--nam", "--blob", "--bogus", "--n"):
+        if flag in accepted:
+            sys.stderr.write(f"self-test: {flag} was accepted\n")
+            sys.exit(1)
+    # The old matcher treated help text as a substring haystack.
+    # --name contains --nam, and --blob-name contains --blob.
+    if "--nam" not in sample or "--blob" not in sample:
+        sys.stderr.write("self-test: fixture no longer hides a short flag inside a longer one\n")
+        sys.exit(1)
+    print("az flag self-test ok")
 
 
 def main() -> None:
+    mode = os.environ.get("AZ_FLAG_CHECK", "preview")
+    if mode not in {"core", "preview"}:
+        sys.stderr.write(f"AZ_FLAG_CHECK must be core or preview, got {mode}\n")
+        sys.exit(1)
+    if mode == "preview" and not preview_installed():
+        sys.stderr.write("storage-blob-preview is not installed\n")
+        sys.exit(1)
     grouped: dict[tuple[str, ...], set[str]] = {}
     wrappers = {name: (list(prefix), []) for name, (prefix, _) in WRAPPERS.items()}
     parsed = []
@@ -198,15 +258,20 @@ def main() -> None:
         ("storage", "blob", "upload"): {"--auth-mode", "--name", "--file"},
         ("storage", "blob", "exists"): {"--name", "--query"},
         ("storage", "blob", "list"): {"--prefix", "--query"},
-        ("storage", "blob", "tag", "set"): {"--name", "--tags"},
         ("storage", "blob", "lease", "acquire"): {"--blob-name", "--lease-duration"},
         ("storage", "blob", "lease", "renew"): {"--blob-name", "--lease-id"},
         ("storage", "blob", "lease", "release"): {"--blob-name", "--lease-id"},
         ("extension", "add"): {"--name", "--version"},
         ("config", "set"): set(),
         ("logout",): set(),
+        ("version",): set(),
     }
+    if mode == "preview":
+        required[("storage", "blob", "tag", "set")] = {"--name", "--tags"}
     failed = False
+    if ("storage", "blob", "tag", "set") not in grouped:
+        sys.stderr.write("did not find az storage blob tag set\n")
+        failed = True
     for cmd, need in required.items():
         have = grouped.get(cmd)
         if have is None:
@@ -217,17 +282,30 @@ def main() -> None:
         if missing:
             sys.stderr.write(f"az {' '.join(cmd)} parser missed {', '.join(sorted(missing))}\n")
             failed = True
-    global_help = help_text(())
+    global_flags = flag_tokens(help_text(()))
     for cmd in sorted(grouped):
-        text = help_text(cmd)
+        if cmd in EXTENSION_CMDS:
+            code, text = run_help(cmd)
+            if mode == "core":
+                if code == 0:
+                    sys.stderr.write(f"az {' '.join(cmd)} is available without storage-blob-preview\n")
+                    failed = True
+                continue
+            if code != 0:
+                sys.stderr.write(f"az {' '.join(cmd)} --help failed:\n{text}\n")
+                failed = True
+                continue
+            known = flag_tokens(text) | global_flags
+        else:
+            known = flag_tokens(help_text(cmd)) | global_flags
         for flag in sorted(grouped[cmd]):
-            if flag in text or flag in global_help:
+            if flag in known:
                 continue
             sys.stderr.write(f"az {' '.join(cmd)} does not accept {flag}\n")
             failed = True
     # The bug this script exists to catch.
     kv = help_text(("keyvault", "secret", "show"))
-    if "--auth-mode" in kv:
+    if "--auth-mode" in flag_tokens(kv):
         sys.stderr.write("keyvault secret show gained --auth-mode; revisit the publisher\n")
         sys.exit(1)
     if ("keyvault", "secret", "show") in grouped and "--auth-mode" in grouped[("keyvault", "secret", "show")]:
@@ -235,9 +313,12 @@ def main() -> None:
         failed = True
     if failed:
         sys.exit(1)
-    print(f"az flags ok ({len(grouped)} commands)")
+    print(f"az flags ok ({mode}, {len(grouped)} commands)")
 
 
 if __name__ == "__main__":
     os.environ.setdefault("AZURE_EXTENSION_USE_DYNAMIC_INSTALL", "no")
-    main()
+    if "--self-test" in sys.argv:
+        self_test()
+    else:
+        main()

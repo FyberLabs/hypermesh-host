@@ -63,7 +63,13 @@ jobs:
           # keyvault secret show. The stubbed tests cannot see that.
           # pip --target avoids python3-venv. A PATH wrapper is what
           # check-az-flags.py executes; a shell function would not.
-          # storage-blob-preview 1.0.0b3 provides az storage blob tag set.
+          # AZURE_CONFIG_DIR is private to this job. Installing
+          # storage-blob-preview must not change the runner's ~/.azure,
+          # which later infra jobs use for az storage blob.
+          # Core is the prod CLI (no preview extension). Preview is the
+          # test CLI, which tags superseded=true.
+          export AZURE_CONFIG_DIR="$RUNNER_TEMP/az-flag-check"
+          mkdir -p "$AZURE_CONFIG_DIR"
           lib="$RUNNER_TEMP/azure-cli-2.90.0"
           python3 -m pip install --target "$lib" 'azure-cli==2.90.0'
           bindir="$RUNNER_TEMP/az-bin"
@@ -79,5 +85,7 @@ jobs:
           export AZ_CLI_LIB="$lib"
           export PATH="$bindir:$PATH"
           export AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no
+          python3 packaging/release/check-az-flags.py --self-test
+          AZ_FLAG_CHECK=core python3 packaging/release/check-az-flags.py
           az extension add --name storage-blob-preview --version 1.0.0b3 --yes
-          python3 packaging/release/check-az-flags.py
+          AZ_FLAG_CHECK=preview python3 packaging/release/check-az-flags.py

@@ -649,10 +649,14 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	if job.Kind == api.KindCompactCert {
 		a.reportScorecard(ctx, *job, res.Result)
 		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
+			// The retry budget is spent. Staying busy would block a
+			// self-update until this process restarts.
+			a.pendingResult.Store(false)
 			return err
 		}
 	} else {
 		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
+			a.pendingResult.Store(false)
 			return err
 		}
 		a.reportScorecard(ctx, *job, res.Result)

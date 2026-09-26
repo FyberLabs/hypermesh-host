@@ -289,6 +289,47 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		}
 	})
 
+	t.Run("busy after install does not restart", func(t *testing.T) {
+		var calls int
+		var installed, restarted, rolled bool
+		plan, err := Tick(context.Background(), base, Hooks{
+			Source: src,
+			Verify: func(_, _, _ []byte) error { return nil },
+			StillBusy: func() bool {
+				calls++
+				return calls > 1
+			},
+			Install: func(dest string, payload []byte, previous string) (string, error) {
+				installed = true
+				if dest != base.BinaryPath {
+					t.Fatalf("dest %s", dest)
+				}
+				return dest + ".pre-test", nil
+			},
+			Rollback: func(dest, backup string) error {
+				rolled = true
+				if dest != base.BinaryPath || backup != dest+".pre-test" {
+					t.Fatalf("rollback %s %s", dest, backup)
+				}
+				return nil
+			},
+			Restart: func(context.Context) error {
+				restarted = true
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls != 2 || plan.Action != ActionDefer || plan.Reason != "busy" || !installed || !rolled || restarted {
+			t.Fatalf("calls %d plan %+v installed %v rolled %v restarted %v", calls, plan, installed, rolled, restarted)
+		}
+		m, err := ReadMarker(base.MarkerPath)
+		if err != nil || m != nil {
+			t.Fatalf("marker %v %v", m, err)
+		}
+	})
+
 	t.Run("busy before restart defers", func(t *testing.T) {
 		var installed, restarted bool
 		plan, err := Tick(context.Background(), base, Hooks{
@@ -833,6 +874,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"storage-blob-preview",
 		"1.0.0b3",
 		"extension.use_dynamic_install=no",
+		"older than 2.90.0",
+		"az version",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release.yml missing %s", want)
@@ -898,6 +941,10 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"storage-blob-preview",
 		"1.0.0b3",
 		"packaging/release/check-az-flags.py",
+		"--self-test",
+		"AZ_FLAG_CHECK=core",
+		"AZ_FLAG_CHECK=preview",
+		`AZURE_CONFIG_DIR="$RUNNER_TEMP/az-flag-check"`,
 	} {
 		if !strings.Contains(ciText, want) {
 			t.Fatalf("ci.yml missing %s", want)
@@ -939,7 +986,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
 		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",
 		"prod_pointer_relation",
-		"test_build_behind",
+		"prod_publish_gate",
+		"confirm_publish_lease",
 		"classify_github_asset",
 		"github_asset_digest",
 		"skip_pointer",
@@ -961,9 +1009,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(text, "keyvault secret show --auth-mode") {
 		t.Fatal("publish script passes --auth-mode to keyvault secret show")
 	}
-	behind := strings.Index(text, "test_build_behind")
-	if behind < 0 || !strings.Contains(text[behind:behind+500], "bump the version") {
-		t.Fatal("a reused build that is not ahead of test does not fail with bump the version")
+	skipAt := strings.Index(text, `if [ "$skip_pointer" != 1 ]`)
+	gateAt := strings.Index(text, "prod_publish_gate")
+	manifestCall := strings.Index(text, `upload_channel_manifest "channels/${channel}.json"`)
+	leaseAt := strings.LastIndex(text[:manifestCall], "confirm_publish_lease")
+	if skipAt < 0 || gateAt < skipAt || leaseAt < gateAt || manifestCall < leaseAt {
+		t.Fatalf("pointer write order skip=%d gate=%d lease=%d manifest=%d", skipAt, gateAt, leaseAt, manifestCall)
 	}
 	layoutBody, err := os.ReadFile(filepath.Join(root, "packaging", "release", "layout.sh"))
 	if err != nil {
@@ -991,6 +1042,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"locks/release-publish",
 		"prod_pointer_relation",
 		"test_build_behind",
+		"prod_publish_gate",
+		"confirm_publish_lease",
 		"classify_github_asset",
 		"github_asset_digest",
 		`az keyvault secret show --vault-name "$vault" --name "$key_secret" --query value -o tsv`,
@@ -2167,6 +2220,82 @@ fi
 			t.Fatal(out)
 		}
 	})
+	t.Run("pointer already set repairs a partial upload", func(t *testing.T) {
+		// Blobs and channels/prod.json were written. The GitHub Release
+		// upload stopped part way, and a test publish has since moved
+		// ahead. The re-run must not fail with bump the version.
+		script := `
+set -euo pipefail
+source "$1"
+doc=$2
+az_blob() {
+  local cmd=$1
+  shift
+  local name="" file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name=$2; shift 2 ;;
+      --file) file=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$cmd" in
+    exists)
+      if [ "$name" = channels/test.json ] && [ -n "$doc" ]; then printf '%s\n' true; else printf '%s\n' false; fi
+      ;;
+    download) printf '%s\n' "$doc" >"$file" ;;
+    *) echo "unexpected $cmd" >&2; return 1 ;;
+  esac
+}
+if ! prod_publish_gate 1 1 9; then
+  echo "repair blocked" >&2
+  exit 1
+fi
+if prod_publish_gate 0 1 9; then
+  echo "pointer write allowed" >&2
+  exit 1
+fi
+`
+		cmd := exec.Command("bash", "-c", script, "bash", layout, `{"build":20}`)
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.Contains(string(out), "repair blocked") || strings.Contains(string(out), "pointer write allowed") || !strings.Contains(string(out), "bump the version") {
+			t.Fatalf("partial re-run: %v\n%s", err, out)
+		}
+	})
+	t.Run("lease must still be held before the pointer write", func(t *testing.T) {
+		out := run(t, `
+set -euo pipefail
+source "$1"
+az_lease() { return 0; }
+confirm_publish_lease lease-1
+az_lease() { echo renew-failed >&2; return 1; }
+if confirm_publish_lease lease-1; then
+  echo lost-lease-accepted >&2
+  exit 1
+fi
+if confirm_publish_lease ""; then
+  echo empty-lease-accepted >&2
+  exit 1
+fi
+`)
+		if strings.Contains(out, "accepted") {
+			t.Fatal(out)
+		}
+		if !strings.Contains(out, "lease was lost") || !strings.Contains(out, "lease is not held") {
+			t.Fatalf("lease errors:\n%s", out)
+		}
+	})
+}
+
+func TestAzFlagSelfTest(t *testing.T) {
+	script := filepath.Join("..", "..", "packaging", "release", "check-az-flags.py")
+	out, err := exec.Command("python3", script, "--self-test").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "az flag self-test ok") {
+		t.Fatalf("self-test output:\n%s", out)
+	}
 }
 
 func checksumNamed(files map[string][]byte) []byte {

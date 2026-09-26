@@ -36,12 +36,14 @@ type Config struct {
 // Hooks replace the plane, gpg, install, and restart in tests.
 // A nil Source is an error. Nil verify, install, and restart use the
 // production implementations. StillBusy, when set, is called immediately
-// before install and restart.
+// before install and again after install, before restart. Rollback
+// restores the previous binary when the second check is busy.
 type Hooks struct {
 	Source    UpdateSource
 	Verify    func(checksums, sig, pubkey []byte) error
 	Install   func(dest string, payload []byte, previous string) (string, error)
 	Restart   func(ctx context.Context) error
+	Rollback  func(dest, backup string) error
 	ReadFile  func(path string) ([]byte, error)
 	StillBusy func() bool
 }
@@ -188,6 +190,19 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	backup, err := install(cfg.BinaryPath, bin, previous)
 	if err != nil {
 		return Plan{}, err
+	}
+	// A lease can arrive while the binary is replaced. Do not restart
+	// over that job. Put the previous binary back and leave this
+	// process running.
+	if h.StillBusy != nil && h.StillBusy() {
+		rb := h.Rollback
+		if rb == nil {
+			rb = RollbackFile
+		}
+		if err := rb(cfg.BinaryPath, backup); err != nil {
+			return Plan{}, err
+		}
+		return Plan{Action: ActionDefer, Version: plan.Version, Commit: plan.Commit, Reason: "busy"}, nil
 	}
 	if err := WriteMarker(cfg.MarkerPath, Marker{
 		Binary:    cfg.BinaryPath,

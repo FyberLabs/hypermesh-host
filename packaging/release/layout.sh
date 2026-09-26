@@ -366,6 +366,32 @@ test_build_behind() {
   return 0
 }
 
+# prod_publish_gate SKIP REUSE BUILD
+# SKIP 1 means channels/prod.json already names this release. A re-run
+# may repair a GitHub Release that only partly uploaded, even when
+# channels/test.json has caught up. The "bump the version" check runs
+# only when the pointer will be written (SKIP 0) and the signed build
+# is being reused (REUSE 1).
+prod_publish_gate() {
+  local skip=$1 reuse=$2 build=$3 rc
+  if [ "$skip" = 1 ]; then
+    return 0
+  fi
+  if [ "$reuse" != 1 ]; then
+    return 0
+  fi
+  if test_build_behind "$build"; then
+    return 0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 1 ]; then
+    echo "hypermesh release: bump the version" >&2
+    return 1
+  fi
+  return "$rc"
+}
+
 # classify_github_asset LOCAL_SHA EXISTING_SHA
 # EXISTING_SHA empty means the release has no asset with this name.
 # Prints upload or skip. A different sha fails with bump the version.
@@ -617,6 +643,21 @@ release_publish_lease() {
     return 0
   fi
   az_lease release --blob-name "locks/release-publish" --lease-id "$id" || true
+}
+
+# confirm_publish_lease LEASE_ID
+# Renews locks/release-publish immediately before the channel pointer
+# is written. A failed renew means this publisher lost the lease.
+confirm_publish_lease() {
+  local id=$1
+  if [ -z "$id" ]; then
+    echo "hypermesh release: locks/release-publish lease is not held" >&2
+    return 1
+  fi
+  if ! az_lease renew --blob-name "locks/release-publish" --lease-id "$id"; then
+    echo "hypermesh release: locks/release-publish lease was lost" >&2
+    return 1
+  fi
 }
 
 # gpg_signature_ok

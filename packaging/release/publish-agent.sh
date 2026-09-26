@@ -54,11 +54,14 @@
 # It uploads only missing artifacts whose sha256 matches the signed
 # checksums. A local file that differs fails with "bump the version".
 # If channels/prod.json already names this release_id, build, and
-# commit, the pointer is not written again. The same release_id and
-# build with a different commit fails with "bump the version". If a
-# later test publish has caught the reused build, so it is no longer
-# greater than channels/test.json, the re-run fails with "bump the
-# version".
+# commit, the pointer is not written again. That re-run still repairs
+# a GitHub Release whose upload stopped part way. The same release_id
+# and build with a different commit fails with "bump the version".
+# If a later test publish has caught the reused build, so it is no
+# longer greater than channels/test.json, the re-run fails with
+# "bump the version" only when the pointer will actually be written.
+# The lease on locks/release-publish is renewed immediately before
+# that write. A lost lease does not move the pointer.
 #
 # A GitHub Release is also created so a person can download the same
 # bytes. Hosts do not read GitHub. They ask the control plane. Prod
@@ -472,25 +475,20 @@ if [ "$channel" = test ]; then
   fi
   tag_superseded_test "$release_id" "$pointer_rid"
 fi
-# A reused prod build that a later test publish has caught up to cannot
-# be republished. The signed bytes stay. The operator bumps the version.
-if [ "$reuse" = 1 ]; then
-  if test_build_behind "$build"; then
-    :
-  else
-    rc=$?
-    if [ "$rc" -eq 1 ]; then
-      echo "hypermesh release: bump the version" >&2
-      exit 1
-    fi
+if [ "$skip_pointer" != 1 ]; then
+  # A reused build that test has caught up to cannot move the pointer.
+  # A pointer that already names this release skips this check so a
+  # partial GitHub upload can be repaired.
+  if ! prod_publish_gate "$skip_pointer" "$reuse" "$build"; then
     exit 1
   fi
-fi
-if [ "$skip_pointer" != 1 ]; then
   # The pointer moves only when this build is still ahead of both
   # channels. A failed re-read does not publish.
   require_builds_ahead "$build" || exit 1
   # publish-order: channel-manifest
+  if ! confirm_publish_lease "$lease_id"; then
+    exit 1
+  fi
   upload_channel_manifest "channels/${channel}.json" "${dist}/channel.json"
 fi
 

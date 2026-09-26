@@ -87,6 +87,52 @@ func TestPostResultRetriesAfterLeaseStart(t *testing.T) {
 	}
 }
 
+func TestFailedPostClearsBusy(t *testing.T) {
+	var posts int
+	var sawBusy bool
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, api.Job{
+			JobID:    testJob,
+			Kind:     "not-a-kind",
+			DeviceID: testDevice,
+		})
+	})
+	var agent *Agent
+	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+testJob+"/result", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		if agent != nil && agent.Busy() {
+			sawBusy = true
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent = newTestAgent(t, srv.URL, dir, uptime, "", "")
+	agent.state.DeviceID = testDevice
+	agent.client.DeviceSecret = testSecret
+	agent.resultTries = 3
+	agent.resultRetryWait = time.Millisecond
+	agent.sleep = func(time.Duration) {}
+	if err := agent.pullAndRun(context.Background()); err == nil {
+		t.Fatal("exhausted result posts must fail")
+	}
+	if posts != 3 {
+		t.Fatalf("posts %d want 3", posts)
+	}
+	if !sawBusy {
+		t.Fatal("host was not busy while the result post was retrying")
+	}
+	if agent.Busy() {
+		t.Fatal("exhausted result posts left the host busy")
+	}
+}
+
 func TestFailedPostResultDoesNotStartSecondContainer(t *testing.T) {
 	const ref = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	var mu sync.Mutex
