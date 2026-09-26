@@ -35,13 +35,15 @@ type Config struct {
 
 // Hooks replace the plane, gpg, install, and restart in tests.
 // A nil Source is an error. Nil verify, install, and restart use the
-// production implementations.
+// production implementations. StillBusy, when set, is called immediately
+// before install and restart.
 type Hooks struct {
-	Source   UpdateSource
-	Verify   func(checksums, sig, pubkey []byte) error
-	Install  func(dest string, payload []byte, previous string) (string, error)
-	Restart  func(ctx context.Context) error
-	ReadFile func(path string) ([]byte, error)
+	Source    UpdateSource
+	Verify    func(checksums, sig, pubkey []byte) error
+	Install   func(dest string, payload []byte, previous string) (string, error)
+	Restart   func(ctx context.Context) error
+	ReadFile  func(path string) ([]byte, error)
+	StillBusy func() bool
 }
 
 // Tick checks the channel. A verification failure returns a reject
@@ -167,6 +169,13 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	}
 	if err := CheckHash(sums, binName, bin); err != nil {
 		return Plan{Action: ActionReject, Version: plan.Version, Commit: plan.Commit, Reason: "binary checksum rejected"}, nil
+	}
+	// Recheck immediately before install and restart. Decide already
+	// saw Busy at the start of the check. A lease can arrive on the
+	// owner socket while the artifacts download, and that must not
+	// replace the binary or restart the agent.
+	if h.StillBusy != nil && h.StillBusy() {
+		return Plan{Action: ActionDefer, Version: plan.Version, Commit: plan.Commit, Reason: "busy"}, nil
 	}
 	install := h.Install
 	if install == nil {

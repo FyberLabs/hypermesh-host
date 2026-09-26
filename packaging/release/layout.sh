@@ -319,6 +319,95 @@ prod_pointer_ok() {
   fi
 }
 
+# prod_pointer_relation FILE RELEASE_ID BUILD COMMIT
+# Prints match when the file already names this release_id, build, and
+# commit. Prints mismatch when the release_id and build match but the
+# commit does not. Prints other for every other document.
+prod_pointer_relation() {
+  python3 -c '
+import json, sys
+path, rid, build, commit = sys.argv[1:5]
+try:
+    d = json.load(open(path))
+except Exception:
+    print("other")
+    raise SystemExit
+b = d.get("build")
+if isinstance(b, bool) or not isinstance(b, int):
+    print("other")
+    raise SystemExit
+if str(d.get("release_id") or "") != rid or str(b) != str(build):
+    print("other")
+    raise SystemExit
+got = str(d.get("commit") or "").lower()
+print("match" if got == commit.lower() else "mismatch")
+' "$1" "$2" "$3" "$4"
+}
+
+# test_build_behind BUILD
+# 0 when channels/test.json is missing or names a strictly smaller
+# build. 1 when that build is greater or equal. 2 when the read failed.
+test_build_behind() {
+  local build=$1 n
+  if ! [[ "$build" =~ ^[1-9][0-9]*$ ]]; then
+    echo "hypermesh release: build number must be a positive integer" >&2
+    return 2
+  fi
+  if ! n=$(read_index_build test); then
+    return 2
+  fi
+  n=${n//$'\n'/}
+  if [ -z "$n" ]; then
+    return 0
+  fi
+  if [ "$((10#$build))" -le "$((10#$n))" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# classify_github_asset LOCAL_SHA EXISTING_SHA
+# EXISTING_SHA empty means the release has no asset with this name.
+# Prints upload or skip. A different sha fails with bump the version.
+classify_github_asset() {
+  local local_sha=$1 existing=${2:-}
+  local_sha=$(printf '%s' "$local_sha" | tr 'A-F' 'a-f')
+  if [ -z "$existing" ]; then
+    printf 'upload\n'
+    return 0
+  fi
+  existing=$(printf '%s' "$existing" | tr 'A-F' 'a-f')
+  existing=${existing#sha256:}
+  if [ "$local_sha" = "$existing" ]; then
+    printf 'skip\n'
+    return 0
+  fi
+  echo "hypermesh release: bump the version" >&2
+  return 1
+}
+
+# github_asset_digest JSON NAME
+# Prints "sha <hex>", "id <asset id>" when the asset has no sha256
+# digest, or "absent".
+github_asset_digest() {
+  python3 -c '
+import json, sys
+doc = json.load(open(sys.argv[1]))
+name = sys.argv[2]
+assets = doc if isinstance(doc, list) else []
+for item in assets:
+    if item.get("name") != name:
+        continue
+    digest = str(item.get("digest") or "")
+    if digest.startswith("sha256:") and len(digest) > len("sha256:"):
+        print("sha", digest.split(":", 1)[1])
+        raise SystemExit
+    print("id", item.get("id") if item.get("id") is not None else "")
+    raise SystemExit
+print("absent")
+' "$1" "$2"
+}
+
 # release_id_prod VERSION
 # VERSION is X.Y.Z with no leading v. That string is the prod directory name.
 release_id_prod() {
@@ -684,12 +773,14 @@ for line in open(sys.argv[1]):
   printf 'keep %s\n' checksums.txt.sig
 }
 
-# tag_superseded_test CURRENT_RELEASE_ID
+# tag_superseded_test CURRENT_RELEASE_ID [POINTER_RELEASE_ID]
 # Sets blob index tag superseded=true on test/ objects from releases
-# older than the newest 20. Never tags CURRENT_RELEASE_ID, prod/, or
-# channels/. A failed list fails the publish.
+# older than the newest 20. Never tags CURRENT_RELEASE_ID, the release
+# channels/test.json still names, prod/, or channels/. Call this before
+# the channel pointer is written, so a tag failure leaves that pointer
+# where it is. A failed list or tag fails the publish.
 tag_superseded_test() {
-  local current=$1 names tagged name
+  local current=$1 also=${2:-} names tagged name
   if ! names=$(az_blob list --prefix "test/" --query "[].name" --num-results "*" --output tsv --only-show-errors); then
     echo "hypermesh release: listing test/ failed" >&2
     return 1
@@ -715,8 +806,11 @@ for name in names:
     groups.setdefault(rid, int(build))
 ordered = sorted(groups.items(), key=lambda item: item[1], reverse=True)
 keep = {rid for rid, _build in ordered[:20]}
+also = sys.argv[2] if len(sys.argv) > 2 else ""
 if current:
     keep.add(current)
+if also:
+    keep.add(also)
 seen = set()
 for name in names:
     parts = name.split("/")
@@ -729,7 +823,7 @@ for name in names:
         continue
     seen.add(name)
     print(name)
-' "$current"); then
+' "$current" "$also"); then
     return 1
   fi
   while IFS= read -r name; do
@@ -779,7 +873,8 @@ load_signing_material() {
   fi
   key_file="${home}/key.asc"
   pass_file="${home}/pass"
-  if ! az keyvault secret show --auth-mode login --vault-name "$vault" --name "$key_secret" --query value -o tsv > "$key_file"; then
+  # keyvault secret show has no --auth-mode. azure-cli 2.90 rejects it.
+  if ! az keyvault secret show --vault-name "$vault" --name "$key_secret" --query value -o tsv > "$key_file"; then
     echo "hypermesh release: reading the signing key from Key Vault failed" >&2
     return 1
   fi
@@ -788,7 +883,7 @@ load_signing_material() {
     echo "hypermesh release: signing key secret is empty" >&2
     return 1
   fi
-  if ! az keyvault secret show --auth-mode login --vault-name "$vault" --name "$pass_secret" --query value -o tsv > "$pass_file"; then
+  if ! az keyvault secret show --vault-name "$vault" --name "$pass_secret" --query value -o tsv > "$pass_file"; then
     echo "hypermesh release: reading the signing passphrase from Key Vault failed" >&2
     return 1
   fi

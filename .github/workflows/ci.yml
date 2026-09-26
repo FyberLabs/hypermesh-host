@@ -59,3 +59,25 @@ jobs:
           fi
           "$tmp/actionlint" -shellcheck="$(command -v shellcheck)" -color
           shellcheck -x packaging/release/publish-agent.sh packaging/release/layout.sh
+          # azure-cli 2.90.0 is the CLI that rejects --auth-mode on
+          # keyvault secret show. The stubbed tests cannot see that.
+          # pip --target avoids python3-venv. A PATH wrapper is what
+          # check-az-flags.py executes; a shell function would not.
+          # storage-blob-preview 1.0.0b3 provides az storage blob tag set.
+          lib="$RUNNER_TEMP/azure-cli-2.90.0"
+          python3 -m pip install --target "$lib" 'azure-cli==2.90.0'
+          bindir="$RUNNER_TEMP/az-bin"
+          mkdir -p "$bindir"
+          # The single quotes are the wrapper's text. They must not expand here.
+          # shellcheck disable=SC2016
+          {
+            printf '%s\n' '#!/bin/sh'
+            printf '%s\n' 'export PYTHONPATH="${AZ_CLI_LIB}${PYTHONPATH:+:$PYTHONPATH}"'
+            printf '%s\n' 'exec python3 -m azure.cli "$@"'
+          } > "$bindir/az"
+          chmod +x "$bindir/az"
+          export AZ_CLI_LIB="$lib"
+          export PATH="$bindir:$PATH"
+          export AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no
+          az extension add --name storage-blob-preview --version 1.0.0b3 --yes
+          python3 packaging/release/check-az-flags.py

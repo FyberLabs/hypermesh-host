@@ -25,8 +25,10 @@
 #
 # There is no age rule on test/. Infra deletes a test/ block blob only
 # after this script sets the blob index tag superseded=true, and only
-# for releases older than the newest 20. The release named by
-# channels/test.json is never tagged. prod/ and channels/ are not
+# for releases older than the newest 20. Tagging runs before the
+# channel pointer is written. The release being published and the
+# release channels/test.json still names are never tagged. A tag
+# failure leaves the pointer where it is. prod/ and channels/ are not
 # tagged. Previous versions under test/ are a separate 90-day rule.
 #
 # Account and container names come from AZURE_STORAGE_ACCOUNT and
@@ -51,13 +53,24 @@
 # verifies that signature and reuses the file. It does not sign again.
 # It uploads only missing artifacts whose sha256 matches the signed
 # checksums. A local file that differs fails with "bump the version".
+# If channels/prod.json already names this release_id, build, and
+# commit, the pointer is not written again. The same release_id and
+# build with a different commit fails with "bump the version". If a
+# later test publish has caught the reused build, so it is no longer
+# greater than channels/test.json, the re-run fails with "bump the
+# version".
 #
 # A GitHub Release is also created so a person can download the same
-# bytes. Hosts do not read GitHub. They ask the control plane.
+# bytes. Hosts do not read GitHub. They ask the control plane. Prod
+# reuses the release for the tag and skips an asset whose name and
+# sha256 already match. A different sha256 fails with "bump the
+# version". Test deletes the rolling release and creates it again.
 #
 # Signing reads the private key and passphrase from Key Vault after
-# azure/login. The vault is kv-fyber-hmhost in rg-fyber. The secrets
-# are hypermesh-host-release-gpg-private-key and
+# azure/login. The command is az keyvault secret show --vault-name
+# kv-fyber-hmhost --name <secret> --query value -o tsv. That command
+# has no --auth-mode. The vault is kv-fyber-hmhost in rg-fyber. The
+# secrets are hypermesh-host-release-gpg-private-key and
 # hypermesh-host-release-gpg-passphrase. Repository variables of the
 # same names override those defaults. The script refuses to upload
 # when the key secret is empty. The passphrase may be empty when the
@@ -395,6 +408,9 @@ upload_channel_manifest() {
 
 # Read channels/prod.json before any pointer write. A missing blob is
 # the first prod publish. build and semver both have to move forward.
+# A re-run whose pointer already names this release_id, build, and
+# commit does not write the pointer again.
+skip_pointer=0
 if [ "$channel" = prod ]; then
   # publish-order: prod-pointer
   cur_ver=""
@@ -402,7 +418,21 @@ if [ "$channel" = prod ]; then
   if blob_exists "channels/prod.json"; then
     cur_file=$(mktemp)
     az_blob download --name "channels/prod.json" --file "$cur_file" --overwrite true --only-show-errors
-    read -r cur_ver cur_build < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("version") or "", d.get("build") if d.get("build") is not None else "")' "$cur_file")
+    relation=$(prod_pointer_relation "$cur_file" "$release_id" "$build" "$GITHUB_SHA")
+    case "$relation" in
+      match)
+        skip_pointer=1
+        ;;
+      mismatch)
+        rm -f "$cur_file"
+        echo "hypermesh release: bump the version" >&2
+        exit 1
+        ;;
+      *)
+        read -r cur_ver cur_build < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("version") or "", d.get("build") if d.get("build") is not None else "")' "$cur_file")
+        prod_pointer_ok "$version" "$build" "$cur_ver" "$cur_build"
+        ;;
+    esac
     rm -f "$cur_file"
   else
     rc=$?
@@ -410,7 +440,6 @@ if [ "$channel" = prod ]; then
       exit 1
     fi
   fi
-  prod_pointer_ok "$version" "$build" "$cur_ver" "$cur_build"
 fi
 
 # publish-order: artifacts
@@ -425,14 +454,44 @@ for name in "${artifact_names[@]}"; do
   verify_uploaded "${channel}/${release_id}/${name}" "${dist}/${name}"
 done
 write_channel_manifest
-# The pointer moves only when this build is still ahead of both
-# channels. A failed re-read does not publish.
-require_builds_ahead "$build" || exit 1
-# publish-order: channel-manifest
-upload_channel_manifest "channels/${channel}.json" "${dist}/channel.json"
-
+# Tag older test releases before the pointer moves. The release the
+# pointer still names stays untagged. A tag failure does not publish.
 if [ "$channel" = test ]; then
-  tag_superseded_test "$release_id"
+  # publish-order: superseded-tag
+  pointer_rid=""
+  if blob_exists "channels/test.json"; then
+    pointer_file=$(mktemp)
+    az_blob download --name "channels/test.json" --file "$pointer_file" --overwrite true --only-show-errors
+    pointer_rid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("release_id") or "")' "$pointer_file")
+    rm -f "$pointer_file"
+  else
+    rc=$?
+    if [ "$rc" -ne 1 ]; then
+      exit 1
+    fi
+  fi
+  tag_superseded_test "$release_id" "$pointer_rid"
+fi
+# A reused prod build that a later test publish has caught up to cannot
+# be republished. The signed bytes stay. The operator bumps the version.
+if [ "$reuse" = 1 ]; then
+  if test_build_behind "$build"; then
+    :
+  else
+    rc=$?
+    if [ "$rc" -eq 1 ]; then
+      echo "hypermesh release: bump the version" >&2
+      exit 1
+    fi
+    exit 1
+  fi
+fi
+if [ "$skip_pointer" != 1 ]; then
+  # The pointer moves only when this build is still ahead of both
+  # channels. A failed re-read does not publish.
+  require_builds_ahead "$build" || exit 1
+  # publish-order: channel-manifest
+  upload_channel_manifest "channels/${channel}.json" "${dist}/channel.json"
 fi
 
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
@@ -452,16 +511,6 @@ notes="Signed hypermesh-agent ${release_id} (${GITHUB_SHA}). Hosts install from 
 if [ "$channel" = test ]; then
   notes="Test build ${release_id} of ${GITHUB_SHA}. Not a prod release. Hosts install from the control plane."
 fi
-payload=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":sys.argv[2],"body":sys.argv[3],"target_commitish":sys.argv[4],"draft":False,"prerelease":sys.argv[5]=="true"}))' \
-  "$tag" "$release_id" "$notes" "$GITHUB_SHA" "$prerelease")
-code=$(curl -sS -o "${dist}/created.json" -w '%{http_code}' "${auth[@]}" \
-  -H "Content-Type: application/json" \
-  -X POST --data "$payload" "${api}/releases")
-if [ "$code" != 201 ]; then
-  echo "hypermesh release: create ${tag} failed with HTTP ${code}" >&2
-  exit 1
-fi
-gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/created.json")
 
 upload_github() {
   name=$1
@@ -478,6 +527,41 @@ upload_github() {
   fi
 }
 
+# Prod reuses the GitHub Release for this tag. An asset whose sha256
+# already matches is left in place. A different sha256 is bump the version.
+# Test deletes the rolling release and creates it again.
+gh_rel=""
+assets_json=""
+if [ "$channel" = prod ]; then
+  code=$(curl -sS -o "${dist}/existing.json" -w '%{http_code}' "${auth[@]}" \
+    "${api}/releases/tags/${tag}" || true)
+  if [ "$code" = 200 ]; then
+    gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/existing.json")
+    code=$(curl -sS -o "${dist}/assets.json" -w '%{http_code}' "${auth[@]}" \
+      "${api}/releases/${gh_rel}/assets?per_page=100" || true)
+    if [ "$code" != 200 ]; then
+      echo "hypermesh release: list ${tag} assets failed with HTTP ${code}" >&2
+      exit 1
+    fi
+    assets_json="${dist}/assets.json"
+  elif [ "$code" != 404 ]; then
+    echo "hypermesh release: look up ${tag} failed with HTTP ${code}" >&2
+    exit 1
+  fi
+fi
+if [ -z "$gh_rel" ]; then
+  payload=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":sys.argv[2],"body":sys.argv[3],"target_commitish":sys.argv[4],"draft":False,"prerelease":sys.argv[5]=="true"}))' \
+    "$tag" "$release_id" "$notes" "$GITHUB_SHA" "$prerelease")
+  code=$(curl -sS -o "${dist}/created.json" -w '%{http_code}' "${auth[@]}" \
+    -H "Content-Type: application/json" \
+    -X POST --data "$payload" "${api}/releases")
+  if [ "$code" != 201 ]; then
+    echo "hypermesh release: create ${tag} failed with HTTP ${code}" >&2
+    exit 1
+  fi
+  gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/created.json")
+fi
+
 for name in \
   "hypermesh-agent_${version}_linux_arm64" \
   "hypermesh-agent_${version}_linux_amd64" \
@@ -493,6 +577,43 @@ do
     fi
     echo "hypermesh release: ${name} was not produced" >&2
     exit 1
+  fi
+  existing_sha=""
+  if [ -n "$assets_json" ]; then
+    digest_line=$(github_asset_digest "$assets_json" "$name")
+    case "$digest_line" in
+      "sha "*)
+        existing_sha=${digest_line#sha }
+        ;;
+      "id "*)
+        asset_id=${digest_line#id }
+        if [ -z "$asset_id" ]; then
+          echo "hypermesh release: ${name} on ${tag} has no sha256" >&2
+          exit 1
+        fi
+        asset_file=$(mktemp)
+        code=$(curl -sS -o "$asset_file" -w '%{http_code}' "${auth[@]}" \
+          -H "Accept: application/octet-stream" \
+          "${api}/releases/assets/${asset_id}" || true)
+        if [ "$code" != 200 ]; then
+          rm -f "$asset_file"
+          echo "hypermesh release: download ${name} from ${tag} failed with HTTP ${code}" >&2
+          exit 1
+        fi
+        existing_sha=$(sha256sum "$asset_file" | awk '{print $1}')
+        rm -f "$asset_file"
+        ;;
+      absent) ;;
+      *)
+        echo "hypermesh release: ${name} asset digest was not understood" >&2
+        exit 1
+        ;;
+    esac
+    local_sha=$(sha256sum "${dist}/${name}" | awk '{print $1}')
+    action=$(classify_github_asset "$local_sha" "$existing_sha")
+    if [ "$action" = skip ]; then
+      continue
+    fi
   fi
   upload_github "$name" "${dist}/${name}"
 done

@@ -18,9 +18,11 @@ import (
 var _ update.IdleGate = (*Agent)(nil)
 
 // Busy is true when a restart would drop a lease or an unacked job.
-// The job loop is the caller. Heartbeat does not call it.
+// The job loop calls it at the start of a check and again before
+// install and restart. Heartbeat does not call it.
 func (a *Agent) Busy() bool {
-	if a.lease != nil && strings.TrimSpace(a.lease.LeaseID) != "" {
+	h := a.currentLease()
+	if h != nil && strings.TrimSpace(h.LeaseID) != "" {
 		return true
 	}
 	return a.pendingResult.Load()
@@ -123,7 +125,10 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 		MarkerPath:     marker,
 		Busy:           busy,
 		RollbackWindow: a.cfg.UpdateRollback,
-	}, update.Hooks{Source: a.updateSource()})
+	}, update.Hooks{
+		Source:    a.updateSource(),
+		StillBusy: a.Busy,
+	})
 	if err != nil {
 		return err
 	}

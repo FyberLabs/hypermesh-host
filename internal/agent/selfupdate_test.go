@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,51 @@ func TestBusyLeaseAndUnacked(t *testing.T) {
 	if a.Busy() {
 		t.Fatal("acked job is still busy")
 	}
+}
+
+func TestUpdateLoops(t *testing.T) {
+	body, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	heart := funcBody(t, text, "func (a *Agent) heartbeatLoop")
+	jobs := funcBody(t, text, "func (a *Agent) jobLoop")
+	watch := strings.Index(heart, "startUpdateWatch")
+	beat := strings.Index(heart, "a.heartbeat(")
+	if watch < 0 || beat < watch {
+		t.Fatal("rollback watch is not started before the first heartbeat")
+	}
+	if strings.Contains(heart, "maybeSelfUpdate") {
+		t.Fatal("heartbeat loop runs the self-update check")
+	}
+	if strings.Index(jobs, "maybeSelfUpdate") < 0 {
+		t.Fatal("job loop does not check for a self-update")
+	}
+	if strings.Contains(jobs, "startUpdateWatch") {
+		t.Fatal("job loop owns the rollback watch")
+	}
+	self, err := os.ReadFile("selfupdate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(self), "StillBusy: a.Busy") {
+		t.Fatal("install does not recheck Busy")
+	}
+}
+
+func funcBody(t *testing.T, text, sig string) string {
+	t.Helper()
+	start := strings.Index(text, sig)
+	if start < 0 {
+		t.Fatalf("missing %s", sig)
+	}
+	rest := text[start+len(sig):]
+	next := strings.Index(rest, "\nfunc ")
+	if next < 0 {
+		return rest
+	}
+	return rest[:next]
 }
 
 func TestMaybeSelfUpdatePassesBusy(t *testing.T) {

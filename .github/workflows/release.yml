@@ -97,6 +97,16 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           allow-no-subscriptions: true
 
+      # az storage blob tag set is not in azure-cli. Pin the preview
+      # extension before the test publisher tags superseded=true.
+      # Dynamic install is off so a missing pin fails instead of prompting.
+      - name: Install storage blob tag extension
+        if: env.channel == 'test'
+        run: |
+          set -euo pipefail
+          az extension add --name storage-blob-preview --version 1.0.0b3 --yes
+          az config set extension.use_dynamic_install=no
+
       - name: Publish signed agent
         env:
           channel: ${{ env.channel }}

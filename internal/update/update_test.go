@@ -289,6 +289,26 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		}
 	})
 
+	t.Run("busy before restart defers", func(t *testing.T) {
+		var installed, restarted bool
+		plan, err := Tick(context.Background(), base, Hooks{
+			Source:    src,
+			Verify:    func(_, _, _ []byte) error { return nil },
+			StillBusy: func() bool { return true },
+			Install: func(string, []byte, string) (string, error) {
+				installed = true
+				return "", nil
+			},
+			Restart: func(context.Context) error { restarted = true; return nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Action != ActionDefer || plan.Reason != "busy" || installed || restarted {
+			t.Fatalf("plan %+v installed %v restarted %v", plan, installed, restarted)
+		}
+	})
+
 	t.Run("busy defers", func(t *testing.T) {
 		cfg := base
 		cfg.Busy = true
@@ -810,6 +830,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"kv-fyber-hmhost",
 		"hypermesh-host-release-gpg-private-key",
 		"hypermesh-host-release-gpg-passphrase",
+		"storage-blob-preview",
+		"1.0.0b3",
+		"extension.use_dynamic_install=no",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release.yml missing %s", want)
@@ -849,6 +872,11 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
 		t.Fatal("release.yml has a storage key, a hardcoded account, or restarts wireguard")
 	}
+	extAt := strings.Index(text, "storage-blob-preview")
+	publishAt := strings.Index(text, "Publish signed agent")
+	if extAt < 0 || publishAt < extAt {
+		t.Fatal("storage-blob-preview is not installed before publish")
+	}
 	if strings.Contains(text, "next_build") || strings.Contains(text, "group: release-test") || strings.Contains(text, "group: release-prod") {
 		t.Fatal("build max+1 or a per-channel group escaped the release-publish lock")
 	}
@@ -866,6 +894,10 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"914e7df21a07ef503a81201c76d2b11c789d3fca",
 		"-shellcheck=",
 		"shellcheck -x packaging/release/publish-agent.sh",
+		"azure-cli==2.90.0",
+		"storage-blob-preview",
+		"1.0.0b3",
+		"packaging/release/check-az-flags.py",
 	} {
 		if !strings.Contains(ciText, want) {
 			t.Fatalf("ci.yml missing %s", want)
@@ -906,6 +938,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"HYPERMESH_RELEASE_KV_NAME",
 		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
 		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",
+		"prod_pointer_relation",
+		"test_build_behind",
+		"classify_github_asset",
+		"github_asset_digest",
+		"skip_pointer",
+		`if [ "$skip_pointer" != 1 ]`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("publish script missing %s", want)
@@ -919,6 +957,13 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	if strings.Contains(text, "HYPERMESH_RELEASE_GPG_PRIVATE_KEY") || strings.Contains(text, "set -x") || strings.Contains(text, "GitHub Environment") {
 		t.Fatal("publish script still takes a GitHub signing secret or enables xtrace")
+	}
+	if strings.Contains(text, "keyvault secret show --auth-mode") {
+		t.Fatal("publish script passes --auth-mode to keyvault secret show")
+	}
+	behind := strings.Index(text, "test_build_behind")
+	if behind < 0 || !strings.Contains(text[behind:behind+500], "bump the version") {
+		t.Fatal("a reused build that is not ahead of test does not fail with bump the version")
 	}
 	layoutBody, err := os.ReadFile(filepath.Join(root, "packaging", "release", "layout.sh"))
 	if err != nil {
@@ -944,10 +989,20 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"publish_blob_allowed",
 		"publish_list_allowed",
 		"locks/release-publish",
-		"--auth-mode login",
+		"prod_pointer_relation",
+		"test_build_behind",
+		"classify_github_asset",
+		"github_asset_digest",
+		`az keyvault secret show --vault-name "$vault" --name "$key_secret" --query value -o tsv`,
 	} {
 		if !strings.Contains(layoutText, want) {
 			t.Fatalf("layout.sh missing %s", want)
+		}
+	}
+	for _, line := range strings.Split(layoutText, "\n") {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.Contains(code, "--auth-mode") {
+			t.Fatalf("layout.sh passes --auth-mode: %s", strings.TrimSpace(line))
 		}
 	}
 	if strings.Contains(strings.ReplaceAll(layoutText, "locks/release-publish", ""), "locks/publish") {
@@ -996,6 +1051,25 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	for _, want := range []string{"binary", "backup", "deadline"} {
 		if !strings.Contains(rtext, want) {
 			t.Fatalf("rollback script missing %s", want)
+		}
+	}
+	runbook, err := os.ReadFile(filepath.Join(root, "deploy", "agx", "update.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runbookText := string(runbook)
+	if strings.Contains(runbookText, "keyvault secret show --auth-mode") {
+		t.Fatal("update.md still passes --auth-mode to keyvault secret show")
+	}
+	for _, want := range []string{
+		"az keyvault secret show --vault-name kv-fyber-hmhost --name hypermesh-host-release-gpg-private-key --query value -o tsv",
+		"storage-blob-preview",
+		"1.0.0b3",
+		"before it writes `channels/test.json`",
+		"infra #143 applied",
+	} {
+		if !strings.Contains(runbookText, want) {
+			t.Fatalf("update.md missing %s", want)
 		}
 	}
 }
@@ -1453,9 +1527,10 @@ func TestReleaseIDAndManifestOrder(t *testing.T) {
 	pointerAt := strings.Index(text, "# publish-order: prod-pointer")
 	artifacts := strings.Index(text, "# publish-order: artifacts")
 	verify := strings.Index(text, "# publish-order: verify")
+	tagged := strings.Index(text, "# publish-order: superseded-tag")
 	manifest := strings.Index(text, "# publish-order: channel-manifest")
-	if pointerAt < 0 || artifacts < pointerAt || verify < artifacts || manifest < verify {
-		t.Fatalf("publish order pointer=%d artifacts=%d verify=%d manifest=%d", pointerAt, artifacts, verify, manifest)
+	if pointerAt < 0 || artifacts < pointerAt || verify < artifacts || tagged < verify || manifest < tagged {
+		t.Fatalf("publish order pointer=%d artifacts=%d verify=%d tag=%d manifest=%d", pointerAt, artifacts, verify, tagged, manifest)
 	}
 	if !strings.Contains(text, "prod_pointer_ok") || !strings.Contains(text, "channels/prod.json") {
 		t.Fatal("prod pointer check is missing")
@@ -1893,6 +1968,203 @@ classify_prod_reuse 1.2.3 "$dist"
 		out, err = cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "bump the version") {
 			t.Fatalf("differing artifact: %v %s", err, out)
+		}
+	})
+	t.Run("prod pointer relation", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "prod.json")
+		body := `{"release_id":"1.2.3","build":9,"commit":"ABC"}` + "\n"
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rel := func(rid, build, commit string) string {
+			t.Helper()
+			out, err := exec.Command("bash", "-c", `source "$1"; prod_pointer_relation "$2" "$3" "$4" "$5"`, "bash", layout, path, rid, build, commit).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v %s", err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		if got := rel("1.2.3", "9", "abc"); got != "match" {
+			t.Fatalf("match: %q", got)
+		}
+		if got := rel("1.2.3", "9", "def"); got != "mismatch" {
+			t.Fatalf("mismatch: %q", got)
+		}
+		if got := rel("1.2.4", "10", "abc"); got != "other" {
+			t.Fatalf("other: %q", got)
+		}
+	})
+	t.Run("reused build behind test", func(t *testing.T) {
+		call := func(index string) (string, int) {
+			t.Helper()
+			script := `
+set -euo pipefail
+source "$1"
+doc=$2
+az_blob() {
+  local cmd=$1
+  shift
+  local name="" file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name=$2; shift 2 ;;
+      --file) file=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$cmd" in
+    exists)
+      if [ "$name" = channels/test.json ] && [ -n "$doc" ]; then printf '%s\n' true; else printf '%s\n' false; fi
+      ;;
+    download) printf '%s\n' "$doc" >"$file" ;;
+    *) echo "unexpected $cmd" >&2; return 1 ;;
+  esac
+}
+if test_build_behind 9; then
+  echo ahead
+  exit 0
+else
+  rc=$?
+  if [ "$rc" -eq 1 ]; then
+    echo "hypermesh release: bump the version"
+    exit 1
+  fi
+  echo "read-failed $rc"
+  exit "$rc"
+fi
+`
+			cmd := exec.Command("bash", "-c", script, "bash", layout, index)
+			out, err := cmd.CombinedOutput()
+			code := 0
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					code = exitErr.ExitCode()
+				} else {
+					t.Fatal(err)
+				}
+			}
+			return string(out), code
+		}
+		if out, code := call(""); code != 0 || !strings.Contains(out, "ahead") {
+			t.Fatalf("missing test index: %d %s", code, out)
+		}
+		if out, code := call(`{"build":8}`); code != 0 || !strings.Contains(out, "ahead") {
+			t.Fatalf("smaller test build: %d %s", code, out)
+		}
+		if out, code := call(`{"build":9}`); code != 1 || !strings.Contains(out, "bump the version") {
+			t.Fatalf("equal test build: %d %s", code, out)
+		}
+		if out, code := call(`{"build":10}`); code != 1 || !strings.Contains(out, "bump the version") {
+			t.Fatalf("greater test build: %d %s", code, out)
+		}
+		if out, code := call(`not-json`); code != 2 || strings.Contains(out, "bump the version") {
+			t.Fatalf("bad index: %d %s", code, out)
+		}
+	})
+	t.Run("github asset reuse", func(t *testing.T) {
+		dir := t.TempDir()
+		assets := filepath.Join(dir, "assets.json")
+		raw := `[
+{"name":"release.json","digest":"sha256:abc"},
+{"name":"checksums.txt","id":42},
+{"name":"other","digest":""}
+]`
+		if err := os.WriteFile(assets, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := func(name string) string {
+			t.Helper()
+			out, err := exec.Command("bash", "-c", `source "$1"; github_asset_digest "$2" "$3"`, "bash", layout, assets, name).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s: %v %s", name, err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		if got := digest("release.json"); got != "sha abc" {
+			t.Fatalf("sha: %q", got)
+		}
+		if got := digest("checksums.txt"); got != "id 42" {
+			t.Fatalf("id: %q", got)
+		}
+		if got := digest("missing"); got != "absent" {
+			t.Fatalf("absent: %q", got)
+		}
+		class := func(local, existing string) (string, int) {
+			t.Helper()
+			cmd := exec.Command("bash", "-c", `source "$1"; classify_github_asset "$2" "$3"`, "bash", layout, local, existing)
+			out, err := cmd.CombinedOutput()
+			code := 0
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					code = exitErr.ExitCode()
+				} else {
+					t.Fatal(err)
+				}
+			}
+			return strings.TrimSpace(string(out)), code
+		}
+		if got, code := class("abc", ""); code != 0 || got != "upload" {
+			t.Fatalf("upload: %d %q", code, got)
+		}
+		if got, code := class("ABC", "sha256:abc"); code != 0 || got != "skip" {
+			t.Fatalf("skip: %d %q", code, got)
+		}
+		got, code := class("abc", "def")
+		if code != 1 || !strings.Contains(got, "bump the version") {
+			t.Fatalf("mismatch: %d %q", code, got)
+		}
+	})
+	t.Run("superseded tag keeps the pointer", func(t *testing.T) {
+		out := run(t, `
+set -euo pipefail
+source "$1"
+taglog=$(mktemp)
+az_blob() {
+  local cmd=$1
+  shift
+  if [ "$cmd" = list ]; then
+    local i
+    for i in $(seq 1 25); do
+      printf 'test/%s-aaaaaaaaaaaa/agent\n' "$i"
+    done
+    return 0
+  fi
+  if [ "$cmd" = tag ]; then
+    printf '%s\n' "$*" >>"$taglog"
+    return 0
+  fi
+  echo "bad $cmd" >&2
+  return 1
+}
+tag_superseded_test "25-aaaaaaaaaaaa" "5-aaaaaaaaaaaa"
+if grep -q 'test/5-aaaaaaaaaaaa/' "$taglog"; then
+  echo tagged-pointer >&2
+  exit 1
+fi
+if ! grep -q 'test/4-aaaaaaaaaaaa/agent' "$taglog"; then
+  echo missing-older >&2
+  cat "$taglog" >&2
+  exit 1
+fi
+az_blob() {
+  if [ "$1" = list ]; then
+    local i
+    for i in $(seq 1 25); do
+      printf 'test/%s-aaaaaaaaaaaa/agent\n' "$i"
+    done
+    return 0
+  fi
+  echo tag-failed >&2
+  return 1
+}
+if tag_superseded_test "25-aaaaaaaaaaaa" "5-aaaaaaaaaaaa"; then
+  echo tag-failure-ignored >&2
+  exit 1
+fi
+`)
+		if strings.Contains(out, "tagged-pointer") || strings.Contains(out, "missing-older") || strings.Contains(out, "tag-failure") {
+			t.Fatal(out)
 		}
 	})
 }
