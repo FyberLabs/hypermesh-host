@@ -370,20 +370,29 @@ func TestHeartbeatDiskFreeBytes(t *testing.T) {
 
 func TestStatfsFreeIsBavailTimesBsize(t *testing.T) {
 	dir := t.TempDir()
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
-		t.Fatal(err)
+	// Free space moves while other tests run. Sample before and after
+	// FreeBytes so a single Bavail change still matches one of the readings.
+	var got int64
+	var matched bool
+	for i := 0; i < 20 && !matched; i++ {
+		var before, after syscall.Statfs_t
+		if err := syscall.Statfs(dir, &before); err != nil {
+			t.Fatal(err)
+		}
+		n, err := pull.FreeBytes(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Statfs(dir, &after); err != nil {
+			t.Fatal(err)
+		}
+		got = n
+		b := int64(before.Bavail) * int64(before.Bsize)
+		a := int64(after.Bavail) * int64(after.Bsize)
+		matched = got == b || got == a
 	}
-	got, err := pull.FreeBytes(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := int64(st.Bavail) * int64(st.Bsize)
-	if got != want {
-		t.Fatalf("FreeBytes %d want Bavail*Bsize %d", got, want)
-	}
-	if got < 0 {
-		t.Fatalf("free bytes %d", got)
+	if !matched || got < 0 {
+		t.Fatalf("FreeBytes %d did not match Bavail*Bsize around the call", got)
 	}
 }
 
