@@ -18,9 +18,9 @@ The channel pointer is a different object, outside `test/` and `prod/`:
 - `channels/test.json`
 - `channels/prod.json`
 
-Each one is exactly `channel`, `version`, `commit`, `release_id`, `build`, and `artifacts` of `name`, `sha256`, and `size`. It has no `url` and no `path`. The plane builds each blob URL as `<channel>/<release_id>/<name>` (`release_id` defaults to `version` only when the index omits it; this publisher always sets it). The publisher writes the index only after every object under `<channel>/<release-id>/` (both binaries, `release.json`, `checksums.txt`, both signature files, and the pubkey) has been uploaded and downloaded back for a SHA-256 match. The upload is one Put Blob of a few hundred bytes, so a reader sees the previous document or the whole new one. A crash before that write leaves the channel on the last complete build. An existing object in a release-id directory is left in place; if its bytes differ, the check fails and the channel manifest is not moved. `channels/*.json` stays outside `test/`, so the 20-day lifecycle rule cannot delete the pointer. A missing `channels/<channel>.json` is an empty channel: the plane returns 204 and the host skips.
+Each one is exactly `channel`, `version`, `commit`, `release_id`, `build`, and `artifacts` of `name`, `sha256`, and `size`. It has no `url` and no `path`. The plane builds each blob URL as `<channel>/<release_id>/<name>` (`release_id` defaults to `version` only when the index omits it; this publisher always sets it). The publisher writes the index only after every object under `<channel>/<release-id>/` (both binaries, `release.json`, `checksums.txt`, both signature files, and the pubkey) has been uploaded and downloaded back for a SHA-256 match. The upload is one Put Blob of a few hundred bytes, so a reader sees the previous document or the whole new one. A crash before that write leaves the channel on the last complete build. An existing object in a release-id directory is left in place; if its bytes differ, the check fails and the channel manifest is not moved. `channels/*.json` stays outside `test/`, so the test-channel cleanup rule cannot delete the pointer. A missing `channels/<channel>.json` is an empty channel: the plane returns 204 and the host skips.
 
-Infra deletes blobs under `test/` 20 days after they were last modified. `channels/test.json`, `channels/prod.json`, and `prod/` are outside that rule. If the test manifest still names a directory that rule has removed, the host's download fails, nothing is installed, and the next check tries again.
+Infra does not delete `test/` blobs by age. Rule `expireTestChannelArtifacts` deletes a block blob under `test/` only when that blob's index tag is `superseded=true`. This publisher sets that tag on releases older than the newest 20 and never on the release `channels/test.json` names. `channels/` and `prod/` are outside the prefix and are not tagged. Set Blob Tags does not change Last-Modified, and the rule's day count runs from last modification, so a tag on an already-old blob is eligible at the next lifecycle run. `expireTestArtifactVersions` deletes previous versions and snapshots under `test/` after 90 days and does not delete the current blob. If a download 404s, nothing is installed, and the next check tries again.
 
 Objects in `<channel>/<release-id>/`:
 
@@ -33,7 +33,9 @@ Objects in `<channel>/<release-id>/`:
 
 `build` is one sequence across channels. While the `release-publish` group is held, the publisher sets it to `max(build in channels/test.json, build in channels/prod.json, GITHUB_RUN_NUMBER) + 1`. A missing index is left out of the max. That number is written into signed `release.json`, the binary ldflags, and the channel index. A host switching channel only moves to a strictly newer build: test build 57 accepts prod build 58 and refuses a replayed build of 57 or 3. ldflags set `buildinfo.Commit`, `buildinfo.Version`, and `buildinfo.Build` to the same number. A development binary has build 0.
 
-The host refuses a candidate whose signed `build` is less than or equal to its own, including an equal number, on whichever channel it is checking. Build 0 on a candidate is not newer than a running build of 0, so it is refused. A development binary can install the first positive build. Before replacing `channels/prod.json`, the publisher reads the current `build` and `version` and fails when the new build is not greater or the new semver is not strictly greater. A missing `channels/prod.json` is the first prod publish. A later re-run of an older tag gets a higher run number; the semver check still refuses that pointer move.
+The host refuses a candidate whose signed `build` is less than its own, on whichever channel it is checking. An equal build whose commit is the one already running is up to date: the agent logs that at debug and does not install. An equal build with a different commit is refused. Build 0 on a candidate is not newer than a running build of 0, so it is refused. A development binary can install the first positive build. Before replacing `channels/prod.json`, the publisher reads both channel indexes again and fails unless the new build is strictly greater than both. It also refuses a prod semver that is not strictly greater. A missing `channels/prod.json` is the first prod publish.
+
+A re-run of a prod tag whose `prod/<X.Y.Z>/release.json` is already stored verifies that signature and reuses the file. It does not sign again. It uploads only blobs that are missing and whose sha256 matches the signed checksums. A local file that does not match fails with `bump the version`. The build number on that path is the one in the stored `release.json`.
 
 This version does not expire a frozen old head. There is no freshness check on the signed release. A host that never sees a higher build stays on the binary it has.
 
@@ -41,7 +43,7 @@ Binaries are `CGO_ENABLED=0` builds of `./cmd/agent` for `linux/arm64` and `linu
 
 The storage account name and container name are GitHub Environment variables. This repo does not write them into the workflow or the publish script. Upload uses `az storage blob upload --auth-mode login` after `azure/login` (`allow-no-subscriptions: true`, because the release app has no subscription role). There is no storage account key in the workflow.
 
-Test and prod publish through one concurrency group, `release-publish`, with `cancel-in-progress: false`, so runs queue instead of cancelling. `max+1` is computed only inside that lock. `AZURE_CONFIG_DIR` is the job temp directory. An always-run step logs `az` out and removes that directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners. Environment `release` gates the job, including the prod path. The tag-on-main check runs only for a tag.
+Test and prod publish through one concurrency group, `release-publish`, with `cancel-in-progress: false`. That still keeps only one pending run: GitHub drops an older pending run when a newer one arrives. The workflow syntax has a `queue` property that would keep the pending run, and current GitHub Actions docs describe it. actionlint 1.7.12 rejects that property, so this repo does not set it. The publish script also acquires a 60-second lease on the blob `locks/publish`, retries while another publisher holds it, and renews the lease until the job exits. `max+1` is computed only after that lease is held. `AZURE_CONFIG_DIR` is set from `$RUNNER_TEMP` in a step (`$GITHUB_ENV`), not in the job `env` block. An always-run step logs `az` out and removes that directory. Third-party actions are pinned by commit SHA. `gpg` and `az` must be installed on the self-hosted runners. Environment `release` gates the job, including the prod path. The tag-on-main check runs only for a tag.
 
 ## What the host calls
 
@@ -99,7 +101,7 @@ The plane reads `channels/<channel>.json` and puts `<channel>/<release_id>/<name
 
 `204` means that channel has no build. The agent skips.
 
-A download that 404s (the channel manifest still names a `test/` build the lifecycle rule deleted) does not install. The agent tries again on the next check.
+A download that 404s does not install. The agent tries again on the next check. The release named by `channels/test.json` is not tagged `superseded=true`, so the cleanup rule does not delete it.
 
 `401` and `403` match the other agent routes. The agent does not install.
 
@@ -111,18 +113,18 @@ The signature and the SHA-256 in `checksums.txt` are the trust anchor. The plane
 
 1. `GET` the path above with the device credential.
 2. Download `checksums.txt` and `checksums.txt.sig` (or `.asc`) from the SAS URLs. The download sends no `Authorization` header. The read stops at `size`.
-3. `gpg --status-fd 1 --verify` with the keys in `/etc/hypermesh/update-pubkey.asc`. The status must contain a `VALIDSIG` line whose fingerprint is one of those imported keys. A zero exit code without that line rejects.
+3. `gpg --status-fd 1 --verify` with the keys in `/etc/hypermesh/update-pubkey.asc`. The status must contain `GOODSIG` and a `VALIDSIG` line whose fingerprint is listed in `HYPERMESH_UPDATE_FINGERPRINTS`. A key that is only in the pubkey file is not enough. `EXPKEYSIG`, `REVKEYSIG`, `EXPSIG`, `BADSIG`, and `ERRSIG` reject the signature, including when `VALIDSIG` is also present. An expired or revoked key is rejected. A zero exit code without `VALIDSIG` rejects.
 4. Download `release.json`. Its SHA-256 must be in the signed checksum file, and its channel, version, commit, and `build` must match the plane's 200 body. The host uses that signed `build` for the newer-than-current check.
 5. Download the `linux/<arch>` binary. Its SHA-256 must be in the signed checksum file. Failure rejects.
-6. A signed `build` that is less than or equal to the running build is refused. A build this host already rolled back is skipped until a strictly newer build appears. Same test commit, or a prod version that is not newer, skips. A lease or an unacked job result defers. Otherwise install.
+6. A signed `build` lower than the running build is refused. An equal build is up to date when the commit matches, and is refused when it does not. A build this host already rolled back is skipped until a strictly newer build appears. Same test commit on a newer build, or a prod version that is not newer, skips. A lease or an unacked job result defers. Otherwise install.
 
 Query strings are removed from errors. A missing pubkey, a bad signature, a size mismatch, or a checksum mismatch leaves the current binary in place.
 
 ## Trusted keys
 
-`/etc/hypermesh/update-pubkey.asc` is one or more ASCII-armored public keys, concatenated. The agent accepts a signature that any key in that file verifies. It does not read a directory, and it does not download the pubkey from the release.
+`/etc/hypermesh/update-pubkey.asc` is one or more ASCII-armored public keys, concatenated. `HYPERMESH_UPDATE_FINGERPRINTS` in `/etc/hypermesh/agent.env` lists the fingerprints that may sign an update, separated by commas or whitespace. The agent accepts a signature only when `VALIDSIG` names one of those fingerprints. It does not accept every key in the file. It does not read a directory, and it does not download the pubkey from the release.
 
-During rotation, enroll or Ansible writes the old block and the new block into that same file. After every host has the new block, remove the old block. A signature from the removed key then fails.
+During rotation, enroll or Ansible writes the old block and the new block into that same file and adds the new fingerprint to the list. After every host has the new block, remove the old block and the old fingerprint. A signature from the removed key then fails.
 
 `gpg` must be on `PATH`.
 
@@ -208,12 +210,12 @@ The self-hosted runner needs `gpg`, `az`, `python3`, `curl`, and `sha256sum`. Go
 This repo does not create these resources. Infra draft PR 143 does, and its `hypermesh_host_release_next_steps` output is what goes in the variables above.
 
 - A storage account and a private container. Anonymous access stays off. Shared keys stay off.
-- Lifecycle rule `expireTestChannelArtifacts` deletes block blobs under `test/` 20 days after last modification. `channels/` and `prod/` are outside that prefix.
+- Lifecycle rule `expireTestChannelArtifacts` deletes block blobs under `test/` whose blob index tag is `superseded=true`. There is no 20-day age rule. The publisher sets that tag on test releases older than the newest 20 and never on the release `channels/test.json` names. `channels/` and `prod/` are outside that prefix. `expireTestArtifactVersions` deletes previous versions and snapshots under `test/` after 90 days.
 - An app registration with a federated credential and no client secret:
   - Issuer: `https://token.actions.githubusercontent.com`
   - Subject: `repo:FyberLabs/hypermesh-host:environment:release`
   - Audience: `api://AzureADTokenExchange`
-- Role **Storage Blob Data Contributor** on that container (not the subscription).
+- Custom role **hypermesh-host publisher** on that container. It can read, write, add, and move blobs. Delete is denied when the path starts with `prod/`. `tags/write` is allowed only under `test/`. Built-in Contributor does not include that tag write.
 - No account key and no connection string in GitHub.
 
 ### 4. Public key on the hosts
