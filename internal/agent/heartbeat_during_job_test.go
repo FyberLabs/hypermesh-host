@@ -103,6 +103,29 @@ func TestHeartbeatCadenceDuringLongJob(t *testing.T) {
 			return ctx.Err()
 		}
 	}
+	// The success path waits exactly HeartbeatEvery and does not take the
+	// failure-hold wake. Driving that wait from the test counts beats while
+	// fetch is still blocked, without a wall-clock sleep that loses the race
+	// when heartbeat work (health, disk, cache) exceeds a few intervals.
+	type hbWaitCall struct {
+		d         time.Duration
+		interrupt bool
+	}
+	waiting := make(chan hbWaitCall)
+	releaseWait := make(chan struct{})
+	a.hbWait = func(ctx context.Context, d time.Duration, interrupt bool) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case waiting <- hbWaitCall{d: d, interrupt: interrupt}:
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-releaseWait:
+			return true
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -125,32 +148,49 @@ func TestHeartbeatCadenceDuringLongJob(t *testing.T) {
 	mu.Lock()
 	base := len(beats)
 	mu.Unlock()
-	time.Sleep(6 * interval)
+
+	const want = 4
+	releaseInterval := func(i int) {
+		t.Helper()
+		select {
+		case call := <-waiting:
+			if call.d != interval || call.interrupt {
+				t.Fatalf("heartbeat wait %d = %s interrupt %v, want %s on the success path", i, call.d, call.interrupt, interval)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("heartbeat %d did not reach its interval while the job was blocked", i)
+		}
+		select {
+		case releaseWait <- struct{}{}:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("heartbeat %d did not leave its interval", i)
+		}
+	}
+	for i := 0; i < want; i++ {
+		releaseInterval(i)
+	}
+	// The last release starts another beat. Parking on the next wait means
+	// that beat has already been recorded, and the job is still in fetch.
+	select {
+	case call := <-waiting:
+		if call.d != interval || call.interrupt {
+			t.Fatalf("heartbeat wait %d = %s interrupt %v, want %s on the success path", want, call.d, call.interrupt, interval)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("heartbeat %d did not reach its interval while the job was blocked", want)
+	}
 
 	mu.Lock()
 	extra := len(beats) - base
 	during := append([]string(nil), hashes[base:]...)
-	span := time.Duration(0)
-	var maxGap time.Duration
-	if len(beats) > base+1 {
-		span = beats[len(beats)-1].Sub(beats[base])
-		for i := base + 1; i < len(beats); i++ {
-			gap := beats[i].Sub(beats[i-1])
-			if gap > maxGap {
-				maxGap = gap
-			}
-		}
-	}
+	finished := results
 	mu.Unlock()
 
-	if extra < 3 {
+	if finished != 0 {
+		t.Fatalf("job result posted while fetch was still blocked")
+	}
+	if extra < want {
 		t.Fatalf("heartbeats while job blocked: %d (base %d)", extra, base)
-	}
-	if span < 2*interval {
-		t.Fatalf("heartbeats bunched at the end of the job: span %s", span)
-	}
-	if maxGap > 3*interval {
-		t.Fatalf("heartbeat gap %s exceeded 3× interval %s", maxGap, interval)
 	}
 	for _, h := range during {
 		if h != digest {
