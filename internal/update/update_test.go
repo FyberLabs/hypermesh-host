@@ -526,6 +526,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 			"AZURE_SUBSCRIPTION_ID",
 			"AZURE_STORAGE_ACCOUNT",
 			"AZURE_STORAGE_CONTAINER",
+			"allow-no-subscriptions: true",
 			"HYPERMESH_RELEASE_GPG_PRIVATE_KEY",
 			"packaging/release/publish-agent.sh",
 		} {
@@ -533,8 +534,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 				t.Fatalf("%s missing %s", name, want)
 			}
 		}
-		if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") {
-			t.Fatalf("%s has a storage key or restarts wireguard", name)
+		if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
+			t.Fatalf("%s has a storage key, a hardcoded account, or restarts wireguard", name)
 		}
 	}
 	ciText := string(ci)
@@ -567,6 +568,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(text, "connection-string") || strings.Contains(text, "--account-key") || strings.Contains(text, "HYPERMESH_UPDATE_GITHUB_TOKEN") {
 		t.Fatal("publish script has a storage key or a host github token")
 	}
+	if strings.Contains(text, "stfyberhmhost") || strings.Contains(text, "--container-name hypermesh-host") || strings.Contains(text, "current.json") || strings.Contains(text, "test/0.0.0") {
+		t.Fatal("publish script hardcodes storage names or overwrites test/0.0.0")
+	}
 	roll, err := os.ReadFile(filepath.Join(root, "deploy", "lib", "update-rollback"))
 	if err != nil {
 		t.Fatal(err)
@@ -585,6 +589,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 type fakeSource struct {
 	cand     *Candidate
 	fetchErr error
+	failURL  string
 	files    map[string][]byte
 }
 
@@ -593,6 +598,9 @@ func (f *fakeSource) Latest(context.Context, string) (*Candidate, error) {
 }
 
 func (f *fakeSource) Fetch(_ context.Context, rawURL string, size int64) ([]byte, error) {
+	if f.failURL != "" && rawURL == f.failURL {
+		return nil, fmt.Errorf("hypermesh update: download %s status 404", RedactQuery(rawURL))
+	}
 	if f.fetchErr != nil {
 		return nil, f.fetchErr
 	}
@@ -641,7 +649,100 @@ func art(name string, body []byte) Artifact {
 }
 
 func sasURL(name string) string {
-	return "https://blob.test/container/test/0.0.0/" + name + "?sig=not-logged"
+	return "https://blob.test/container/test/20260926120000-bbbbbbbbbbbb/" + name + "?sig=not-logged"
+}
+
+func TestReleaseIDAndManifestOrder(t *testing.T) {
+	layout := filepath.Join("..", "..", "packaging", "release", "layout.sh")
+	id := func(fn string, args ...string) string {
+		t.Helper()
+		cmdArgs := append([]string{"-c", `source "$1"; "$2" "$3" "$4"`, "bash", layout, fn}, args...)
+		// release_id_prod takes one argument. Pass an empty fourth.
+		for len(cmdArgs) < 7 {
+			cmdArgs = append(cmdArgs, "")
+		}
+		out, err := exec.Command("bash", cmdArgs...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s %v: %v %s", fn, args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	early := id("release_id_test", "20260926120000", sha)
+	later := id("release_id_test", "20260926120001", sha)
+	if early != "20260926120000-0123456789ab" || later != "20260926120001-0123456789ab" {
+		t.Fatalf("ids %s %s", early, later)
+	}
+	if early >= later {
+		t.Fatalf("release ids do not sort by time: %s %s", early, later)
+	}
+	if id("release_id_prod", "1.2.3") != "1.2.3" {
+		t.Fatal("prod release id")
+	}
+	if _, err := exec.Command("bash", "-c", `source "$1"; release_id_prod "$2"`, "bash", layout, "v1.2.3").CombinedOutput(); err == nil {
+		t.Fatal("prod release id accepted a leading v")
+	}
+
+	script, err := os.ReadFile(filepath.Join("..", "..", "packaging", "release", "publish-agent.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(script)
+	artifacts := strings.Index(text, "# publish-order: artifacts")
+	verify := strings.Index(text, "# publish-order: verify")
+	manifest := strings.Index(text, "# publish-order: channel-manifest")
+	if artifacts < 0 || verify < artifacts || manifest < verify {
+		t.Fatalf("publish order artifacts=%d verify=%d manifest=%d", artifacts, verify, manifest)
+	}
+	if !strings.Contains(text, "channels/${channel}.json") || !strings.Contains(text, "--overwrite false") {
+		t.Fatal("channel manifest path or immutable upload is missing")
+	}
+}
+
+func TestStaleBlobDoesNotInstall(t *testing.T) {
+	dir := t.TempDir()
+	pub := filepath.Join(dir, "pub.asc")
+	if err := os.WriteFile(pub, []byte("pubkey"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := []byte("#!/new-agent")
+	man := Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	manRaw, err := json.Marshal(man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binName := "hypermesh-agent_0.0.0_linux_arm64"
+	sums := checksumFile(map[string][]byte{
+		binName:      bin,
+		ManifestName: manRaw,
+	})
+	src := planeSource(man, sums, []byte("sig"), manRaw, binName, bin)
+	src.failURL = sasURL(binName)
+	var installed bool
+	plan, err := Tick(context.Background(), Config{
+		Channel:       ChannelTest,
+		CurrentCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Arch:          "arm64",
+		BinaryPath:    "/usr/local/bin/hypermesh-agent",
+		PubKeyPath:    pub,
+		MarkerPath:    filepath.Join(dir, MarkerName),
+	}, Hooks{
+		Source: src,
+		Verify: func(_, _, _ []byte) error { return nil },
+		Install: func(string, []byte, string) (string, error) {
+			installed = true
+			return "", nil
+		},
+	})
+	if installed || plan.Action == ActionInstall {
+		t.Fatalf("installed from a missing blob: %+v", plan)
+	}
+	if err == nil {
+		t.Fatalf("missing blob was not a retryable failure: %+v", plan)
+	}
+	if strings.Contains(err.Error(), "sig=") || strings.Contains(err.Error(), "not-logged") {
+		t.Fatalf("error leaked sas: %v", err)
+	}
 }
 
 func checksumFile(files map[string][]byte) []byte {

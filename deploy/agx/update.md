@@ -8,12 +8,21 @@ The agent checks for a new binary on a channel set in `/etc/hypermesh/agent.env`
 
 | `HYPERMESH_UPDATE_CHANNEL` | What it tracks | Blob prefix |
 |---|---|---|
-| `test` | Builds of `main`. The commit in `release.json` is the identity. Version is `0.0.0`. | `test/0.0.0/` overwritten on each main build. `test/current.json` is the same `release.json`. |
-| `prod` | Tagged semver `vX.Y.Z`. A newer version installs. An older one does not. | `prod/<X.Y.Z>/`. `prod/current.json` points at the version this workflow just published. |
+| `test` | Builds of `main`. The commit in `release.json` is the identity. The binary version stays `0.0.0`. | `test/<release-id>/`. release-id is UTC `yyyymmddHHMMSS` plus the first 12 hex chars of the commit (`20260926182316-0123456789ab`). A later build sorts after an earlier one. The directory is not overwritten. |
+| `prod` | Tagged semver `vX.Y.Z`. A newer version installs. An older one does not. | `prod/<X.Y.Z>/`. release-id is the semver with no leading `v`. The directory is not overwritten. |
 
 Workflows: `.github/workflows/release.yml` (tag `vX.Y.Z`) and `.github/workflows/release-test.yml` (push to `main`). Both run `packaging/release/publish-agent.sh`. A GitHub Release is also created so a person can download the files. The agent does not read it.
 
-Objects in `<channel>/<version>/`:
+The channel pointer is a different object, outside `test/` and `prod/`:
+
+- `channels/test.json`
+- `channels/prod.json`
+
+Each one names the current `release_id`, `version`, `commit`, and the artifact `name`, `sha256`, and `size`. It has no SAS URL. The publisher writes it only after every object under `<channel>/<release-id>/` has been uploaded and downloaded back for a SHA-256 match. The upload is one Put Blob of a few hundred bytes, so a reader sees the previous document or the whole new one. A crash before that write leaves the channel on the last complete build. An existing object in a release-id directory is left in place; if its bytes differ, the check fails and the channel manifest is not moved.
+
+Infra deletes blobs under `test/` 20 days after they were last modified. `channels/test.json`, `channels/prod.json`, and `prod/` are outside that rule. If the test manifest still names a directory that rule has removed, the host's download fails, nothing is installed, and the next check tries again.
+
+Objects in `<channel>/<release-id>/`:
 
 - `hypermesh-agent_<version>_linux_arm64`
 - `hypermesh-agent_<version>_linux_amd64`
@@ -24,7 +33,7 @@ Objects in `<channel>/<version>/`:
 
 Binaries are `CGO_ENABLED=0` builds of `./cmd/agent` for `linux/arm64` and `linux/amd64`. ldflags set `buildinfo.Commit` and `buildinfo.Version`.
 
-The storage account name and container name are GitHub Environment variables. This repo does not name a real account. Upload uses `az storage blob upload --auth-mode login` after `azure/login`. There is no storage account key in the workflow.
+The storage account name and container name are GitHub Environment variables. This repo does not write them into the workflow or the publish script. Upload uses `az storage blob upload --auth-mode login` after `azure/login` (`allow-no-subscriptions: true`, because the release app has no subscription role). There is no storage account key in the workflow.
 
 ## What the host calls
 
@@ -50,25 +59,25 @@ X-Tenant-ID: <tenant uuid>
       "name": "checksums.txt",
       "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "size": 180,
-      "url": "https://<account>.blob.core.windows.net/<container>/test/0.0.0/checksums.txt?<sas>"
+      "url": "https://<account>.blob.core.windows.net/<container>/test/<release-id>/checksums.txt?<sas>"
     },
     {
       "name": "checksums.txt.sig",
       "sha256": "<64 hex>",
       "size": 566,
-      "url": "https://<account>.blob.core.windows.net/<container>/test/0.0.0/checksums.txt.sig?<sas>"
+      "url": "https://<account>.blob.core.windows.net/<container>/test/<release-id>/checksums.txt.sig?<sas>"
     },
     {
       "name": "release.json",
       "sha256": "<64 hex>",
       "size": 96,
-      "url": "https://<account>.blob.core.windows.net/<container>/test/0.0.0/release.json?<sas>"
+      "url": "https://<account>.blob.core.windows.net/<container>/test/<release-id>/release.json?<sas>"
     },
     {
       "name": "hypermesh-agent_0.0.0_linux_arm64",
       "sha256": "<64 hex>",
       "size": 12000000,
-      "url": "https://<account>.blob.core.windows.net/<container>/test/0.0.0/hypermesh-agent_0.0.0_linux_arm64?<sas>"
+      "url": "https://<account>.blob.core.windows.net/<container>/test/<release-id>/hypermesh-agent_0.0.0_linux_arm64?<sas>"
     }
   ]
 }
@@ -76,7 +85,11 @@ X-Tenant-ID: <tenant uuid>
 
 `checksums.txt.asc` may be sent instead of, or in addition to, `checksums.txt.sig`. One signature that verifies is enough. Include the binary for the host's arch (`linux_arm64` or `linux_amd64`). `sha256` is 64 hex characters. `size` is the exact byte length. The agent caps the download at `size` and rejects a different length.
 
+The host body has no `release_id`. The plane reads `release_id` from `channels/<channel>.json` and puts the directory into the SAS URL. An extra `release_id` field on this response would be ignored.
+
 `204` means that channel has no build. The agent skips.
+
+A download that 404s (the channel manifest still names a `test/` build the lifecycle rule deleted) does not install. The agent tries again on the next check.
 
 `401` and `403` match the other agent routes. The agent does not install.
 
@@ -124,7 +137,7 @@ Checks run at most once an hour (`HYPERMESH_UPDATE_EVERY`), including while a re
 
 ## Before the first release
 
-Chris generates the signing key offline and creates the GitHub Environment `release`. The Azure account, container, app registration, and role live in the infra repo. This pull request does not create them.
+Chris generates the signing key offline and creates the GitHub Environment `release`. The Azure account, container, app registration, and role live in the infra repo (draft PR 143). This repo does not create them and does not embed the account or container name.
 
 The publish script exits before uploading when the private key is empty, or when the storage account and container variables are empty.
 
@@ -169,19 +182,20 @@ Variables (these are identifiers, not the signing key). Secrets of the same name
 | `AZURE_CLIENT_ID` | Application (client) id of the app registration or managed identity |
 | `AZURE_TENANT_ID` | Directory (tenant) id |
 | `AZURE_SUBSCRIPTION_ID` | Subscription id |
-| `AZURE_STORAGE_ACCOUNT` | Storage account name (lowercase, 3–24 letters and digits) |
-| `AZURE_STORAGE_CONTAINER` | Private container name |
+| `AZURE_STORAGE_ACCOUNT` | Storage account name from the entra output. Lowercase, 3–24 letters and digits |
+| `AZURE_STORAGE_CONTAINER` | Private container name from that same output |
 
-The release job's token scopes are `contents: write` (the human GitHub Release) and `id-token: write` (OIDC). The workflow default and CI stay `contents: read`.
+The release job's token scopes are `contents: write` (the human GitHub Release) and `id-token: write` (OIDC). `azure/login` sets `allow-no-subscriptions: true` because that app has no subscription role. The workflow default and CI stay `contents: read`.
 
 The self-hosted runner needs `gpg`, `az`, `python3`, `curl`, and `sha256sum`. Go comes from `setup-go`.
 
 ### 3. Azure, in the infra repo
 
-This repo does not create these resources.
+This repo does not create these resources. Infra draft PR 143 does, and its `hypermesh_host_release_next_steps` output is what goes in the variables above.
 
-- A storage account and a private container. Anonymous access stays off.
-- An app registration, or a user-assigned managed identity, with a federated credential:
+- A storage account and a private container. Anonymous access stays off. Shared keys stay off.
+- Lifecycle rule `expireTestChannelArtifacts` deletes block blobs under `test/` 20 days after last modification. `channels/` and `prod/` are outside that prefix.
+- An app registration with a federated credential and no client secret:
   - Issuer: `https://token.actions.githubusercontent.com`
   - Subject: `repo:FyberLabs/hypermesh-host:environment:release`
   - Audience: `api://AzureADTokenExchange`

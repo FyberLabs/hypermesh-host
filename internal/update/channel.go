@@ -1,8 +1,9 @@
 // Package update checks a release channel, verifies the candidate, and
 // installs it without touching WireGuard.
 //
-// test tracks the rolling build of main (blob prefix test/0.0.0/).
-// prod tracks the latest stable semver tag (blob prefix prod/X.Y.Z/).
+// test tracks builds of main. Each build is an immutable blob prefix
+// test/<UTC yyyymmddHHMMSS>-<12 hex of the commit>/.
+// prod tracks tagged semver releases at prod/<X.Y.Z>/.
 // The agent learns the candidate from the control plane, not from GitHub.
 // An empty channel does not check.
 package update
@@ -13,8 +14,8 @@ import (
 )
 
 const (
-	// ChannelTest tracks builds of main. The publish workflow overwrites
-	// the test/0.0.0/ prefix. The commit in release.json is the identity.
+	// ChannelTest tracks builds of main. The commit in release.json is
+	// the identity. The blob directory name is not the version.
 	ChannelTest = "test"
 	// ChannelProd tracks tagged semver releases (vX.Y.Z). A newer version
 	// installs. An older one does not.

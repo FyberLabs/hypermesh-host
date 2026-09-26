@@ -3,12 +3,27 @@
 #
 # Usage: publish-agent.sh prod|test
 #
-# prod publishes the tag in GITHUB_REF_NAME (vX.Y.Z).
-# test overwrites the rolling main build at prefix test/0.0.0/.
+# Blob layout (infra owns the account and the 20-day test/ lifecycle):
 #
-# Blobs go to a private Azure container. Login is the Azure CLI
-# session from azure/login (GitHub OIDC). This script does not take
-# a storage account key.
+#   channels/test.json
+#   channels/prod.json
+#   test/<release-id>/...
+#   prod/<release-id>/...
+#
+# test release-id is UTC yyyymmddHHMMSS plus the first 12 hex chars of
+# the commit. prod release-id is X.Y.Z. A release-id directory is not
+# overwritten. The channel manifest is uploaded only after every
+# artifact in that directory has been uploaded and sha256-checked.
+#
+# The manifest upload is one Put Blob of a few hundred bytes. Readers
+# see the previous document or the new one, never a partial file.
+# A crash before that upload leaves the channel on the last good build.
+#
+# Account and container names come from AZURE_STORAGE_ACCOUNT and
+# AZURE_STORAGE_CONTAINER. This file does not name a real account.
+#
+# Login is the Azure CLI session from azure/login (GitHub OIDC).
+# This script does not take a storage account key.
 #
 # A GitHub Release is also created so a person can download the same
 # bytes. Hosts do not read GitHub. They ask the control plane.
@@ -17,11 +32,11 @@
 # Environment named "release". The script refuses to upload when that
 # key is empty. HYPERMESH_RELEASE_GPG_PASSPHRASE is required only when
 # the key has one.
-#
-# AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_CONTAINER are Environment
-# variables (or secrets) on that same Environment. This file does not
-# name a real account or container.
 set -euo pipefail
+
+script_dir=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=layout.sh
+source "${script_dir}/layout.sh"
 
 channel=${1:?usage: publish-agent.sh prod|test}
 case "$channel" in
@@ -64,13 +79,19 @@ if [ "$channel" = prod ]; then
     echo "hypermesh release: tag must be vX.Y.Z" >&2
     exit 1
   fi
+  release_id=$(release_id_prod "$version")
 else
   tag=test
   version=0.0.0
   prerelease=true
+  ts=$(date -u +%Y%m%d%H%M%S)
+  release_id=$(release_id_test "$ts" "$GITHUB_SHA")
 fi
+case "$release_id" in
+  *[/\\]*|..*) echo "hypermesh release: release-id is not a single path segment" >&2; exit 1 ;;
+esac
 
-root=$(cd "$(dirname "$0")/../.." && pwd)
+root=$(cd "${script_dir}/../.." && pwd)
 dist=$(mktemp -d)
 gnupg=""
 cleanup() { rm -rf "$dist" ${gnupg:+"$gnupg"}; }
@@ -126,28 +147,94 @@ rm -rf "$shred_gnupg"
 unset GNUPGHOME
 unset HYPERMESH_RELEASE_GPG_PRIVATE_KEY HYPERMESH_RELEASE_GPG_PASSPHRASE
 
-prefix="${channel}/${version}"
-upload_blob() {
-  name=$1
-  file=$2
-  az storage blob upload \
+artifact_names=(
+  "hypermesh-agent_${version}_linux_arm64"
+  "hypermesh-agent_${version}_linux_amd64"
+  release.json
+  checksums.txt
+  checksums.txt.sig
+  checksums.txt.asc
+  hypermesh-release.pub
+)
+
+az_blob() {
+  az storage blob "$@" \
     --auth-mode login \
     --account-name "$AZURE_STORAGE_ACCOUNT" \
-    --container-name "$AZURE_STORAGE_CONTAINER" \
-    --name "$name" \
-    --file "$file" \
-    --overwrite true \
-    --only-show-errors
+    --container-name "$AZURE_STORAGE_CONTAINER"
 }
 
-upload_blob "${prefix}/hypermesh-agent_${version}_linux_arm64" "${dist}/hypermesh-agent_${version}_linux_arm64"
-upload_blob "${prefix}/hypermesh-agent_${version}_linux_amd64" "${dist}/hypermesh-agent_${version}_linux_amd64"
-upload_blob "${prefix}/release.json" "${dist}/release.json"
-upload_blob "${prefix}/checksums.txt" "${dist}/checksums.txt"
-upload_blob "${prefix}/checksums.txt.sig" "${dist}/checksums.txt.sig"
-upload_blob "${prefix}/checksums.txt.asc" "${dist}/checksums.txt.asc"
-upload_blob "${prefix}/hypermesh-release.pub" "${dist}/hypermesh-release.pub"
-upload_blob "${channel}/current.json" "${dist}/release.json"
+# Leave an existing object in place. verify_uploaded rejects it when
+# the bytes differ, and the channel manifest is not moved.
+upload_new() {
+  local name=$1 file=$2 exists
+  exists=$(az_blob exists --name "$name" --query exists --output tsv)
+  if [ "$exists" = "true" ]; then
+    echo "hypermesh release: ${name} already stored; leaving those bytes in place" >&2
+    return 0
+  fi
+  az_blob upload --name "$name" --file "$file" --overwrite false --only-show-errors
+}
+
+verify_uploaded() {
+  local name=$1 file=$2 tmp got want
+  tmp=$(mktemp)
+  # --overwrite replaces the local temp file, not the blob.
+  az_blob download --name "$name" --file "$tmp" --overwrite true --only-show-errors
+  got=$(sha256sum "$tmp" | awk '{print $1}')
+  want=$(sha256sum "$file" | awk '{print $1}')
+  rm -f "$tmp"
+  if [ "$got" != "$want" ]; then
+    echo "hypermesh release: ${name} bytes do not match the signed build" >&2
+    exit 1
+  fi
+}
+
+write_channel_manifest() {
+  python3 - "$channel" "$release_id" "$version" "$GITHUB_SHA" "$dist" "${dist}/channel.json" "${artifact_names[@]}" <<'PY'
+import hashlib, json, os, sys
+channel, release_id, version, commit, dist, out = sys.argv[1:7]
+arts = []
+for name in sys.argv[7:]:
+    data = open(os.path.join(dist, name), "rb").read()
+    arts.append({
+        "name": name,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+    })
+doc = {
+    "channel": channel,
+    "release_id": release_id,
+    "version": version,
+    "commit": commit,
+    "artifacts": arts,
+}
+with open(out, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh, separators=(",", ":"))
+    fh.write("\n")
+PY
+}
+
+# Single Put Blob of channels/<channel>.json. The file is far under the
+# CLI single-shot limit, so the write is atomic: the previous manifest
+# stays visible until this object is committed. Not under test/, so the
+# lifecycle rule that deletes test/ blobs does not remove the pointer.
+upload_channel_manifest() {
+  local name=$1 file=$2
+  az_blob upload --name "$name" --file "$file" --overwrite true --content-type application/json --only-show-errors
+}
+
+# publish-order: artifacts
+for name in "${artifact_names[@]}"; do
+  upload_new "${channel}/${release_id}/${name}" "${dist}/${name}"
+done
+# publish-order: verify
+for name in "${artifact_names[@]}"; do
+  verify_uploaded "${channel}/${release_id}/${name}" "${dist}/${name}"
+done
+write_channel_manifest
+# publish-order: channel-manifest
+upload_channel_manifest "channels/${channel}.json" "${dist}/channel.json"
 
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
@@ -156,18 +243,18 @@ if [ "$channel" = test ]; then
   code=$(curl -sS -o "${dist}/existing.json" -w '%{http_code}' "${auth[@]}" \
     "${api}/releases/tags/test" || true)
   if [ "$code" = 200 ]; then
-    rel_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/existing.json")
-    curl -sS -X DELETE "${auth[@]}" "${api}/releases/${rel_id}" >/dev/null
+    gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/existing.json")
+    curl -sS -X DELETE "${auth[@]}" "${api}/releases/${gh_rel}" >/dev/null
     curl -sS -X DELETE "${auth[@]}" "${api}/git/refs/tags/test" >/dev/null || true
   fi
 fi
 
-notes="Signed hypermesh-agent ${version} (${GITHUB_SHA}). Hosts install from the control plane."
+notes="Signed hypermesh-agent ${release_id} (${GITHUB_SHA}). Hosts install from the control plane."
 if [ "$channel" = test ]; then
-  notes="Rolling build of main ${GITHUB_SHA}. Not a prod release. Hosts install from the control plane."
+  notes="Test build ${release_id} of ${GITHUB_SHA}. Not a prod release. Hosts install from the control plane."
 fi
-payload=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":sys.argv[1],"body":sys.argv[2],"target_commitish":sys.argv[3],"draft":False,"prerelease":sys.argv[4]=="true"}))' \
-  "$tag" "$notes" "$GITHUB_SHA" "$prerelease")
+payload=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":sys.argv[2],"body":sys.argv[3],"target_commitish":sys.argv[4],"draft":False,"prerelease":sys.argv[5]=="true"}))' \
+  "$tag" "$release_id" "$notes" "$GITHUB_SHA" "$prerelease")
 code=$(curl -sS -o "${dist}/created.json" -w '%{http_code}' "${auth[@]}" \
   -H "Content-Type: application/json" \
   -X POST --data "$payload" "${api}/releases")
@@ -175,7 +262,7 @@ if [ "$code" != 201 ]; then
   echo "hypermesh release: create ${tag} failed with HTTP ${code}" >&2
   exit 1
 fi
-rel_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/created.json")
+gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/created.json")
 
 upload_github() {
   name=$1
@@ -185,7 +272,7 @@ upload_github() {
     -H "Content-Type: application/octet-stream" \
     -H "Accept: application/vnd.github+json" \
     -X POST --data-binary @"${file}" \
-    "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${rel_id}/assets?name=${name}")
+    "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${gh_rel}/assets?name=${name}")
   if [ "$code" != 201 ]; then
     echo "hypermesh release: upload ${name} failed with HTTP ${code}" >&2
     exit 1
@@ -200,4 +287,4 @@ upload_github checksums.txt.sig "${dist}/checksums.txt.sig"
 upload_github checksums.txt.asc "${dist}/checksums.txt.asc"
 upload_github hypermesh-release.pub "${dist}/hypermesh-release.pub"
 
-echo "hypermesh release: published ${channel} ${version} ${GITHUB_SHA}"
+echo "hypermesh release: published ${channel} ${release_id} ${GITHUB_SHA}"
