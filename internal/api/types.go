@@ -71,6 +71,9 @@ func TunnelHealthStates() []string {
 // HostHealth is optional host and tunnel health on the heartbeat.
 // No WireGuard keys, tokens, device secrets, raw HTTP bodies, renter ids,
 // or model prompts. Lease containers are a count only.
+// disk_free_bytes is free bytes for non-root users (statfs Bavail*Bsize)
+// on the filesystem that holds the configured GGUF path. It is omitted
+// when that path cannot be resolved or statfs fails.
 // Fields this box cannot compute are omitted. last_sync_error_class is
 // an empty string when there is no class. last_sync_http_status is 0
 // when there is no status. A failed collection must not fail the heartbeat.
@@ -83,6 +86,7 @@ type HostHealth struct {
 	WGPID               *int   `json:"wg_pid,omitempty"`
 	WGPort              *int   `json:"wg_port,omitempty"`
 	LeaseContainerCount *int   `json:"lease_container_count,omitempty"`
+	DiskFreeBytes       *int64 `json:"disk_free_bytes,omitempty"`
 	BuildCommit         string `json:"build_commit,omitempty"`
 	// HostType is model or supervisor. The agent always sets it so a
 	// supervisor is not offered as a normal device.

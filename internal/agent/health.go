@@ -104,6 +104,9 @@ func (a *Agent) fillHealth(ctx context.Context, h *api.HostHealth) {
 	if n, ok := a.leaseCount(probe); ok {
 		h.LeaseContainerCount = &n
 	}
+	if n, ok := a.diskFreeBytes(); ok {
+		h.DiskFreeBytes = &n
+	}
 }
 
 func (a *Agent) syncFacts() (at time.Time, ok bool, class string, status int) {
@@ -246,6 +249,7 @@ func (a *Agent) metricsText() []byte {
 		sample.WGPID = h.WGPID
 		sample.WGPort = h.WGPort
 		sample.LeaseCount = h.LeaseContainerCount
+		sample.DiskFreeBytes = h.DiskFreeBytes
 		sample.LastHTTP = h.LastSyncHTTPStatus
 		sample.ErrClass = h.LastSyncErrorClass
 		if h.BuildCommit != "" {

@@ -64,6 +64,9 @@ type Agent struct {
 	// countLeases counts running lease containers. Nil uses docker ps.
 	// A false ok omits lease_container_count. Tests stub this.
 	countLeases func(ctx context.Context) (n int, ok bool)
+	// statFree is statfs Bavail*Bsize. Nil uses the host syscall.
+	// An error omits disk_free_bytes. Tests stub this.
+	statFree func(path string) (int64, error)
 
 	healthMu   sync.Mutex
 	lastSyncAt time.Time

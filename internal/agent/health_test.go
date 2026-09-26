@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -318,6 +320,158 @@ type netTimeout struct{ timeout bool }
 func (n *netTimeout) Error() string   { return "net" }
 func (n *netTimeout) Timeout() bool   { return n.timeout }
 func (n *netTimeout) Temporary() bool { return true }
+
+func TestHeartbeatDiskFreeBytes(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "model.gguf")
+	if err := os.WriteFile(file, []byte("gguf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "weights", "model.gguf")
+	const want int64 = 424242
+	cases := []struct {
+		name     string
+		gguf     string
+		statPath string
+	}{
+		{name: "existing file", gguf: file, statPath: file},
+		{name: "missing file walks up", gguf: missing, statPath: dir},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			raw, hb, text := heartbeatHealth(t, func(a *Agent) {
+				a.cfg.GGUFPath = tc.gguf
+				a.statFree = func(path string) (int64, error) {
+					gotPath = path
+					return want, nil
+				}
+			})
+			if hb.Health == nil || hb.Health.DiskFreeBytes == nil {
+				t.Fatalf("disk_free_bytes missing: %s", raw)
+			}
+			if *hb.Health.DiskFreeBytes != want {
+				t.Fatalf("disk_free_bytes %d want %d", *hb.Health.DiskFreeBytes, want)
+			}
+			if gotPath != tc.statPath {
+				t.Fatalf("statfs path %q want %q", gotPath, tc.statPath)
+			}
+			if !strings.Contains(string(raw), `"disk_free_bytes":`+strconv.FormatInt(want, 10)) {
+				t.Fatalf("heartbeat JSON %s", raw)
+			}
+			line := "hypermesh_disk_free_bytes " + strconv.FormatInt(want, 10)
+			if !strings.Contains(text, line) {
+				t.Fatalf("metrics missing %s\n%s", line, text)
+			}
+		})
+	}
+}
+
+func TestStatfsFreeIsBavailTimesBsize(t *testing.T) {
+	dir := t.TempDir()
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		t.Fatal(err)
+	}
+	got, err := statfsFree(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := int64(st.Bavail) * int64(st.Bsize)
+	if got != want {
+		t.Fatalf("statfsFree %d want Bavail*Bsize %d", got, want)
+	}
+	if got < 0 {
+		t.Fatalf("free bytes %d", got)
+	}
+}
+
+func TestHeartbeatOmitsDiskFreeBytes(t *testing.T) {
+	t.Run("unset path", func(t *testing.T) {
+		raw, hb, text := heartbeatHealth(t, func(a *Agent) {
+			a.cfg.GGUFPath = "  "
+			a.statFree = func(string) (int64, error) {
+				t.Fatal("statfs called without a GGUF path")
+				return 0, nil
+			}
+		})
+		if hb.Health == nil {
+			t.Fatal("health missing")
+		}
+		if hb.Health.DiskFreeBytes != nil || strings.Contains(string(raw), "disk_free_bytes") {
+			t.Fatalf("unset path must omit disk_free_bytes: %s", raw)
+		}
+		if strings.Contains(text, "hypermesh_disk_free_bytes") {
+			t.Fatalf("metrics must omit the gauge: %s", text)
+		}
+	})
+	t.Run("statfs error", func(t *testing.T) {
+		dir := t.TempDir()
+		gguf := filepath.Join(dir, "model.gguf")
+		if err := os.WriteFile(gguf, []byte("gguf"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		raw, hb, text := heartbeatHealth(t, func(a *Agent) {
+			a.cfg.GGUFPath = gguf
+			a.statFree = func(string) (int64, error) {
+				return 0, errors.New("statfs failed")
+			}
+		})
+		if hb.DeviceID != testDevice {
+			t.Fatalf("old fields changed: %+v", hb)
+		}
+		if hb.Health == nil || hb.Health.BuildCommit == "" {
+			t.Fatalf("heartbeat must still succeed: %s", raw)
+		}
+		if hb.Health.DiskFreeBytes != nil || strings.Contains(string(raw), "disk_free_bytes") {
+			t.Fatalf("statfs error must omit disk_free_bytes: %s", raw)
+		}
+		if strings.Contains(text, "hypermesh_disk_free_bytes") {
+			t.Fatalf("metrics must omit the gauge: %s", text)
+		}
+	})
+}
+
+func heartbeatHealth(t *testing.T, setup func(*Agent)) ([]byte, api.HeartbeatRequest, string) {
+	t.Helper()
+	var raw []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		raw, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read heartbeat: %v", err)
+		}
+		writeJSON(w, http.StatusOK, api.HeartbeatResponse{
+			DeviceID:   testDevice,
+			PathBState: api.PathBGreen,
+			AcceptedAt: time.Now().UTC(),
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("4.0 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, srv.URL, dir, uptime, "", "")
+	a.state.DeviceID = testDevice
+	a.client.DeviceSecret = testSecret
+	a.tunnels = &fakeTunnel{}
+	if setup != nil {
+		setup(a)
+	}
+	if err := a.heartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var hb api.HeartbeatRequest
+	if err := json.Unmarshal(raw, &hb); err != nil {
+		t.Fatal(err)
+	}
+	return raw, hb, string(a.metricsText())
+}
 
 func sameKeys(m map[string]json.RawMessage, want []string) bool {
 	if len(m) != len(want) {
