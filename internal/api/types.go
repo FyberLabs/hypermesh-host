@@ -152,6 +152,10 @@ type Job struct {
 	// SourceRef is the trusted fetch pin for lab_pull (repo@rev/file or
 	// allowlisted HTTPS URL). Distinct from ImageDigest (content sha256).
 	SourceRef string `json:"source_ref,omitempty"`
+	// SizeBytes is the expected artifact size for lab_pull when the plane
+	// sends it. Zero means this box learns the size from HTTP HEAD
+	// Content-Length before downloading. Older planes omit the field.
+	SizeBytes int64  `json:"size_bytes,omitempty"`
 	Runtime   string `json:"runtime,omitempty"`
 	Backend   string `json:"backend,omitempty"`
 	SuiteID   string `json:"suite_id,omitempty"`

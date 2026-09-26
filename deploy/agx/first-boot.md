@@ -55,7 +55,7 @@ sudo cp deploy/agx/hypermesh-wg.service /etc/systemd/system/
 sudo cp deploy/agx/agent.env.example /etc/hypermesh/agent.env
 ```
 
-Set tenant id, enroll token, and `HYPERMESH_GGUF_PATH` to a regular file. On AGX64-1 set `HYPERMESH_WG_USERSPACE=1` (there is no wireguard kernel module). `chmod 0600` the env file. Install `wireguard-go` so `/usr/bin/wireguard-go` exists, plus `wireguard-tools` (`wg`, and `ip` from iproute2).
+Set tenant id and enroll token. `agent.env.example` already sets `HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf` (the binary default when the variable is omitted). Replace that line only when this box should keep a different file. The agent creates `models/` on start (root:root, mode 0755). On AGX64-1 set `HYPERMESH_WG_USERSPACE=1` (there is no wireguard kernel module). `chmod 0600` the env file. Install `wireguard-go` so `/usr/bin/wireguard-go` exists, plus `wireguard-tools` (`wg`, and `ip` from iproute2).
 
 ```bash
 sudo chmod 0600 /etc/hypermesh/agent.env
@@ -113,7 +113,7 @@ Later agent restarts do not stop `hypermesh-wg`. `wg show hypermesh` should keep
 
 ### Workload
 
-`lease_start` with `repo@digest` runs `docker pull` then `docker --runtime=nvidia -p <client_address>:8080:8080` (host port configurable via `HYPERMESH_LISTEN_PORT`) and bind-mounts the host GGUF at `/models/model.gguf:ro`. Set `HYPERMESH_GGUF_PATH` to a regular file (AGX64-1 cottage path is `/home/chris/hypermesh/workload/model.gguf`). Empty, missing, or a directory POSTs `passed=false` — Docker must not create a directory mount. Success POSTs `image_hash` = sha256 of that file (catalog `file_hash`), not the OCI pin. Start without a tunnel address, or with a different lease already running, also POSTs `passed=false`. The container must listen on `0.0.0.0:8080` and serve OpenAI-shaped `POST /v1/chat/completions`. The agent overrides the image entrypoint (it hardcodes `--alias hypermesh-test`, which wins over `LLAMA_ARG_ALIAS`) so llama-server runs with `LLAMA_ARG_JINJA=1`, `LLAMA_ARG_CTX_SIZE=16384`, `LLAMA_ARG_TIMEOUT=1800`, and `--alias` equal to the lease catalog id. Missing or empty `/models/model.gguf` still fails inside the container. Empty `catalog_id` POSTs `passed=false`. No image rebuild. The Fyber router is the only customer HTTPS path; it proxies to `http://<client_address>:8080/v1/chat/completions`.
+`lease_start` with `repo@digest` runs `docker pull` then `docker --runtime=nvidia -p <client_address>:8080:8080` (host port configurable via `HYPERMESH_LISTEN_PORT`) and bind-mounts the host GGUF at `/models/model.gguf:ro`. Unset `HYPERMESH_GGUF_PATH` uses `/var/lib/hypermesh/models/model.gguf`. An explicit path is kept (a cottage file such as `/home/chris/hypermesh/workload/model.gguf` still works when set). A missing file or a directory POSTs `passed=false` — Docker must not create a directory mount. Success POSTs `image_hash` = sha256 of that file (catalog `file_hash`), not the OCI pin. Start without a tunnel address, or with a different lease already running, also POSTs `passed=false`. The container must listen on `0.0.0.0:8080` and serve OpenAI-shaped `POST /v1/chat/completions`. The agent overrides the image entrypoint (it hardcodes `--alias hypermesh-test`, which wins over `LLAMA_ARG_ALIAS`) so llama-server runs with `LLAMA_ARG_JINJA=1`, `LLAMA_ARG_CTX_SIZE=16384`, `LLAMA_ARG_TIMEOUT=1800`, and `--alias` equal to the lease catalog id. Missing or empty `/models/model.gguf` still fails inside the container. Empty `catalog_id` POSTs `passed=false`. No image rebuild. The Fyber router is the only customer HTTPS path; it proxies to `http://<client_address>:8080/v1/chat/completions`.
 
 Empty `image_digest` POSTs `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. Do not invent a registry digest. Host will not invent `image_hash` / `repo@digest`. Catalog id stays `llama-3.1-8b-q4`.
 
@@ -121,7 +121,7 @@ Path B suite telem hash (`image_hash` from `HYPERMESH_IMAGE_HASH`, `/etc/hyperme
 
 Build the on-box image after overlay: [workload/README.md](workload/README.md). Target name `ghcr.io/fyberlabs/hypermesh-test`. Do not build that image on x86. Docker 29 Buildx does not accept `--runtime=nvidia` at build — the Dockerfile links CUDA devel stubs. Verify the running container on the AGX with `--runtime=nvidia --platform linux/arm64` (not `--gpus`). Pin the sha256 after the on-box build (CI may pin a digest then; Host will not invent one). The FROM tag is Hardware Research / Product lock default `nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04` (compile in-image; matches host CUDA 13.2.1; Orin sm_87) and stays **unverified-until-AGX-build** until someone on this box pulls it and the build succeeds. Runtime alternative `13.2.1-runtime-ubuntu24.04` is for a copy-a-binary recipe only. L4T major MUST match the host (r39). Do not invent `l4t-jetpack:r39.2.1`. Do not use `l4t-jetpack` / `r36.*` / `ubuntu:22.04` / JP6. If 13.2.1 hits the driver-allowlist gap on-box, keep **13.0.0 only** as the documented fallback (`13.0.0-devel-ubuntu24.04` with `-e NVIDIA_DISABLE_REQUIRE=true`) — rescue, not a second default.
 
-**GGUF is still required** before `instance_check` / completions, but it is **not** `COPY`’d into the image (eMMC cannot bake 4.9G). On AGX64-1 set `HYPERMESH_GGUF_PATH` to `/home/chris/hypermesh/workload/model.gguf`. A missing or directory path POSTs `passed=false` before Docker runs. Without that running container, the completions endpoint has nothing to serve.
+**GGUF is still required** before `instance_check` / completions, but it is **not** `COPY`’d into the image (eMMC cannot bake 4.9G). The default file is `/var/lib/hypermesh/models/model.gguf` unless `HYPERMESH_GGUF_PATH` is set. A missing or directory path POSTs `passed=false` before Docker runs. Without that running container, the completions endpoint has nothing to serve.
 
 ### thin-v1
 
@@ -143,7 +143,9 @@ In-tree P2 id: `llama-3.1-8b-q4`. Uncertified until a soak hash exists.
 
 ## Update
 
-Leave `agent.env` and `device.json` alone. The first boot that picks up userspace WireGuard follows the migration under WireGuard above (install `hypermesh-wg.service`, `daemon-reload`, `enable --now hypermesh-wg`, then restart the agent). After that unit is enabled, later updates are:
+Leave `agent.env` and `device.json` alone. Do not restart `hypermesh-agent` while a job is unacked unless heartbeats have been down for good. A restart re-runs that unacked job from scratch.
+
+The first boot that picks up userspace WireGuard follows the migration under WireGuard above (install `hypermesh-wg.service`, `daemon-reload`, `enable --now hypermesh-wg`, then restart the agent). After that unit is enabled, later updates are:
 
 ```bash
 cd hypermesh-host
@@ -152,3 +154,5 @@ go build -o hypermesh-agent ./cmd/agent
 sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 sudo systemctl restart hypermesh-agent
 ```
+
+AGX64-1 with `HYPERMESH_GGUF_PATH` unset picks up `/var/lib/hypermesh/models/model.gguf` from the new binary on that restart. The models directory is created on start (root:root, 0755). Do not hand-edit `agent.env` for that default. A host that already set `HYPERMESH_GGUF_PATH` keeps that path.

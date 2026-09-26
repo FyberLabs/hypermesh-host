@@ -1,17 +1,18 @@
 package agent
 
 import (
-	"errors"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"github.com/FyberLabs/hypermesh-host/internal/pull"
 )
 
 // diskFreeBytes is statfs Bavail*Bsize for the filesystem that holds the
 // configured GGUF path. A missing file walks up to the nearest existing
 // directory. An empty path or a failed statfs omits the field.
+// The default stat is pull.FreeBytes, the same helper the download
+// preflight uses.
 func (a *Agent) diskFreeBytes() (int64, bool) {
 	path, ok := nearestExisting(a.cfg.GGUFHostPath())
 	if !ok {
@@ -19,7 +20,7 @@ func (a *Agent) diskFreeBytes() (int64, bool) {
 	}
 	fn := a.statFree
 	if fn == nil {
-		fn = statfsFree
+		fn = pull.FreeBytes
 	}
 	n, err := fn(path)
 	if err != nil || n < 0 {
@@ -46,20 +47,4 @@ func nearestExisting(path string) (string, bool) {
 		}
 		path = parent
 	}
-}
-
-// statfsFree is free bytes available to non-root users.
-func statfsFree(path string) (int64, error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(path, &st); err != nil {
-		return 0, err
-	}
-	bsize := int64(st.Bsize)
-	if bsize <= 0 {
-		return 0, errors.New("hypermesh: statfs block size")
-	}
-	if st.Bavail > uint64(math.MaxInt64)/uint64(bsize) {
-		return 0, errors.New("hypermesh: statfs free bytes overflow")
-	}
-	return int64(st.Bavail) * bsize, nil
 }

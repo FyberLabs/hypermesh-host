@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/metrics"
+	"github.com/FyberLabs/hypermesh-host/internal/pull"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
@@ -21,6 +23,16 @@ const (
 	defaultCompletionsURL = "http://127.0.0.1:8080/v1/chat/completions"
 	defaultResultTries    = 3
 	defaultResultRetry    = 200 * time.Millisecond
+	// DefaultModelDir is persistent variable data for weights (FHS
+	// /var/lib). It is not the state dir: that directory is 0700 because
+	// it holds device.json. Weights are large and not secret, so they
+	// live in a sibling models directory (0755, root:root).
+	// An empty HYPERMESH_GGUF_PATH used to download into the process
+	// cwd, which systemd sets to /, producing /lab-pull-*.gguf.
+	DefaultModelDir = "/var/lib/hypermesh/models"
+	// DefaultModelPath is the weights file lease_start bind-mounts when
+	// HYPERMESH_GGUF_PATH is unset or empty. An explicit path wins.
+	DefaultModelPath = DefaultModelDir + "/model.gguf"
 )
 
 var uuidRE = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -44,8 +56,17 @@ type Config struct {
 	// Empty uses http://127.0.0.1:<ListenPort>/v1/chat/completions.
 	CompletionsURL string
 	// GGUFPath is the host file bind-mounted at /models/model.gguf:ro.
-	// Required for lease_start. Empty refuses; do not fall back to a cottage path.
+	// FromEnv uses DefaultModelPath when HYPERMESH_GGUF_PATH is unset
+	// or empty. An explicit path is kept as-is. A Config built in tests
+	// with an empty GGUFPath still means "no path" so lease_start refuses
+	// rather than inventing a file.
 	GGUFPath string
+	// DiskFloor is HYPERMESH_DISK_FLOOR_BYTES. Empty means 2 GiB must
+	// remain free after a model download. "0" leaves no floor.
+	DiskFloor string
+	// DiskMargin is HYPERMESH_DISK_MARGIN_BYTES. Empty means 64 MiB on
+	// top of the object size. "0" adds no margin.
+	DiskMargin string
 	// LlamaJinja, LlamaCtxSize, and LlamaTimeout are the lease container's
 	// llama-server settings (LLAMA_ARG_JINJA, LLAMA_ARG_CTX_SIZE,
 	// LLAMA_ARG_TIMEOUT). Empty uses the runtime defaults (1, 16384, 1800).
@@ -87,7 +108,9 @@ func FromEnv() Config {
 		ImageHash:               os.Getenv("HYPERMESH_IMAGE_HASH"),
 		ListenPort:              envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
 		CompletionsURL:          os.Getenv("HYPERMESH_COMPLETIONS_URL"),
-		GGUFPath:                os.Getenv("HYPERMESH_GGUF_PATH"),
+		GGUFPath:                envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
+		DiskFloor:               strings.TrimSpace(os.Getenv("HYPERMESH_DISK_FLOOR_BYTES")),
+		DiskMargin:              strings.TrimSpace(os.Getenv("HYPERMESH_DISK_MARGIN_BYTES")),
 		LlamaJinja:              envOr("HYPERMESH_LLAMA_JINJA", runtime.DefaultLlamaJinja),
 		LlamaCtxSize:            envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:            envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
@@ -156,7 +179,36 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("hypermesh: host type must be model or supervisor")
 	}
+	if _, err := c.DiskFloorBytes(); err != nil {
+		return err
+	}
+	if _, err := c.DiskMarginBytes(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// DiskFloorBytes is the free-space floor. Empty config means 2 GiB.
+func (c Config) DiskFloorBytes() (uint64, error) {
+	return parseByteCount("HYPERMESH_DISK_FLOOR_BYTES", c.DiskFloor, pull.DefaultFloorBytes)
+}
+
+// DiskMarginBytes is extra space required beyond the object size.
+// Empty config means 64 MiB.
+func (c Config) DiskMarginBytes() (uint64, error) {
+	return parseByteCount("HYPERMESH_DISK_MARGIN_BYTES", c.DiskMargin, pull.DefaultMarginBytes)
+}
+
+func parseByteCount(name, raw string, def uint64) (uint64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("hypermesh: %s must be an integer byte count", name)
+	}
+	return n, nil
 }
 
 // SupervisorHost is a non-model host. It enrolls and heartbeats.
@@ -212,7 +264,9 @@ func (c Config) PublishPort() string {
 }
 
 // GGUFHostPath is the host weights file for docker -v ...:/models/model.gguf:ro.
-// Empty means lease_start must refuse.
+// Empty means lease_start must refuse. FromEnv does not return empty:
+// an unset HYPERMESH_GGUF_PATH is DefaultModelPath. An explicit value,
+// including a cottage path, is returned unchanged.
 func (c Config) GGUFHostPath() string {
 	return strings.TrimSpace(c.GGUFPath)
 }

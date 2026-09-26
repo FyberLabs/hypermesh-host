@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/FyberLabs/hypermesh-host/internal/agent"
 )
 
 // AGX is the first host class. Another class implements HostClass and is
@@ -119,7 +121,29 @@ func configure(_ context.Context, opt Options) error {
 	if err := os.MkdirAll(state, 0o700); err != nil {
 		return err
 	}
-	return os.Chmod(state, 0o700)
+	if err := os.Chmod(state, 0o700); err != nil {
+		return err
+	}
+	return ensureDefaultModelDir(opt.Root)
+}
+
+// ensureDefaultModelDir creates /var/lib/hypermesh/models at 0755.
+// The state directory stays 0700 (device.json). Weights are not secret.
+// Root owns the directory when this process is root.
+func ensureDefaultModelDir(root string) error {
+	dir := underRoot(root, agent.DefaultModelDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return err
+	}
+	if os.Geteuid() == 0 {
+		if err := os.Chown(dir, 0, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func connect(ctx context.Context, opt Options) error {

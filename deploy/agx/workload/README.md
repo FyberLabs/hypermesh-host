@@ -92,7 +92,7 @@ sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:ll
 
 ## GGUF is volume-mounted (not COPY)
 
-Do **not** `COPY model.gguf` into the image. On AGX64-1 set **`HYPERMESH_GGUF_PATH=/home/chris/hypermesh/workload/model.gguf`**. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` after `stat` says it is a regular file. Empty, missing, or a directory POSTs `passed=false` so Docker cannot create a directory mount. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
+Do **not** `COPY model.gguf` into the image. The host default is **`/var/lib/hypermesh/models/model.gguf`** when `HYPERMESH_GGUF_PATH` is unset. An explicit path, including a cottage file, is kept. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` after `stat` says it is a regular file. Missing or a directory POSTs `passed=false` so Docker cannot create a directory mount. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
 
 ```bash
 # Manual run (same jail the host program adds):

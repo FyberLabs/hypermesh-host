@@ -102,7 +102,7 @@ sudo cp deploy/seeed-j4012/hypermesh-agent.service /etc/systemd/system/
 sudo cp deploy/seeed-j4012/agent.env.example /etc/hypermesh/agent.env
 ```
 
-Set tenant id, enroll token from host enroll, and `HYPERMESH_GGUF_PATH` to a regular file.
+Set tenant id and enroll token from host enroll. `agent.env.example` sets `HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf`. Replace that line only for a different file. The agent creates the directory on start.
 
 ```bash
 sudo chmod 0600 /etc/hypermesh/agent.env
@@ -113,7 +113,7 @@ sudo systemctl status hypermesh-agent
 
 Control plane: `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix `/api/v1/hypermesh`. After enroll, the secret lives in `/var/lib/hypermesh/device.json` (0600).
 
-`lease_start` bind-mounts that GGUF at `/models/model.gguf:ro`. An empty path, a missing file, or a directory fails closed. Pin `catalog.image_digest` on the plane after the on-box workload build.
+`lease_start` bind-mounts that GGUF at `/models/model.gguf:ro`. Unset `HYPERMESH_GGUF_PATH` uses `/var/lib/hypermesh/models/model.gguf`. An explicit path is kept. A missing file or a directory fails closed. Pin `catalog.image_digest` on the plane after the on-box workload build.
 
 Tunnel and lease behave the same as the AGX. One WireGuard peer per host. Router endpoint is `wg.test.hyperme.sh:51820`. Chat stays on `client_address:8080`.
 
@@ -144,7 +144,7 @@ Build the on-box image after overlay: [workload/README.md](workload/README.md).
 
 ## Update
 
-Leave `agent.env` and `device.json` alone.
+Leave `agent.env` and `device.json` alone. Do not restart `hypermesh-agent` while a job is unacked unless heartbeats have been down for good. A restart re-runs that unacked job from scratch. An omitted `HYPERMESH_GGUF_PATH` picks up `/var/lib/hypermesh/models/model.gguf` from the new binary; an explicit path is kept.
 
 ```bash
 cd hypermesh-host

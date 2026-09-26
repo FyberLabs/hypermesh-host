@@ -21,12 +21,12 @@ import (
 
 // GGUFPublisherAllowlist matches aiuditor_service.crawl.GGUF_PUBLISHER_ALLOWLIST.
 var GGUFPublisherAllowlist = map[string]struct{}{
-	"bartowski":           {},
-	"thebloke":            {},
-	"quantfactory":        {},
-	"ggml-org":            {},
-	"lmstudio-community":  {},
-	"fyberlabs":           {},
+	"bartowski":          {},
+	"thebloke":           {},
+	"quantfactory":       {},
+	"ggml-org":           {},
+	"lmstudio-community": {},
+	"fyberlabs":          {},
 }
 
 // TrustedDownloadURL turns a source_ref (repo@rev/file or https HF URL) into
@@ -124,13 +124,38 @@ func HTTPGet(client *http.Client) Fetcher {
 }
 
 // ToFile downloads url into dest and verifies the sha256 pin.
-// Fail closed on mismatch. Does not leave a mismatched file in place.
+// Fail closed on mismatch. Does not leave a mismatched or partial file.
+// Free-space preflight uses DefaultFloorBytes and DefaultMarginBytes.
+// The size comes from HTTP HEAD Content-Length. Unknown size fails closed
+// and downloads nothing.
 func ToFile(ctx context.Context, dest, rawURL, pin string, fetch Fetcher) error {
+	return ToFileWith(ctx, dest, rawURL, pin, fetch, Limits{})
+}
+
+// ToFileWith is ToFile with an explicit size and disk budget.
+// lim.Expected > 0 skips HEAD. Otherwise HEAD Content-Length is required.
+// Preflight runs before any byte is written. A failed copy, close, pin
+// check, or rename removes the partial lab-pull-*.gguf file.
+func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, lim Limits) error {
 	want := strings.ToLower(strings.TrimSpace(pin))
 	if !strings.HasPrefix(want, "sha256:") || len(want) < len("sha256:")+64 {
 		return fmt.Errorf("hypermesh: pinned hash required")
 	}
 	want = want[len("sha256:"):]
+	if err := validateDest(dest); err != nil {
+		return err
+	}
+	size, err := ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
+	if err != nil || size <= 0 {
+		free, statErr := lim.stat(dest)
+		if statErr != nil {
+			return &DiskError{StatErr: true}
+		}
+		return &DiskError{Unknown: true, Free: free}
+	}
+	if err := Preflight(dest, size, lim); err != nil {
+		return err
+	}
 	if fetch == nil {
 		fetch = HTTPGet(nil)
 	}

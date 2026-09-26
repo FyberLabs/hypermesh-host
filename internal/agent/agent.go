@@ -64,10 +64,16 @@ type Agent struct {
 	// countLeases counts running lease containers. Nil uses docker ps.
 	// A false ok omits lease_container_count. Tests stub this.
 	countLeases func(ctx context.Context) (n int, ok bool)
-	// statFree is statfs Bavail*Bsize. Nil uses the host syscall.
-	// An error omits disk_free_bytes. Tests stub this.
+	// statFree is statfs Bavail*Bsize on the GGUF filesystem. Nil uses
+	// pull.FreeBytes. The same value is disk_free_bytes and the pull
+	// preflight. An error omits the heartbeat field and fails the pull
+	// closed. Tests stub this.
 	statFree func(path string) (int64, error)
+	// headLength is HTTP HEAD Content-Length for a download URL.
+	// Nil uses pull.HTTPHeadLength. Tests stub this so they do not dial.
+	headLength func(ctx context.Context, rawURL string) (int64, error)
 
+	leaseMu    sync.RWMutex
 	healthMu   sync.Mutex
 	lastSyncAt time.Time
 	haveSync   bool
@@ -136,39 +142,80 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.ensureEnrolled(ctx); err != nil {
 		return err
 	}
-	a.lease = a.loadLease()
+	a.setLease(a.loadLease())
 	if err := a.startOwner(ctx); err != nil {
 		return err
 	}
+	if err := ensureModelDir(a.cfg.GGUFHostPath()); err != nil {
+		a.log.Warn("model directory not created", "path", a.cfg.GGUFHostPath(), "err", err)
+	}
 
+	// Heartbeat and jobs are separate loops. A lab_pull of a multi-gigabyte
+	// GGUF must not stall the heartbeat ticker: the plane drops a host
+	// whose heartbeat is older than 180s. Shutdown waits for the in-flight
+	// call on each loop, which stops when ctx is cancelled.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		a.heartbeatLoop(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		a.jobLoop(ctx)
+	}()
+	wg.Wait()
+	return ctx.Err()
+}
+
+func (a *Agent) heartbeatLoop(ctx context.Context) {
 	if err := a.heartbeat(ctx); err != nil {
 		a.log.Warn("heartbeat failed", "err", err)
 	}
+	ticker := time.NewTicker(a.cfg.HeartbeatEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := a.heartbeat(ctx); err != nil {
+				a.log.Warn("heartbeat failed", "err", err)
+			}
+		}
+	}
+}
+
+func (a *Agent) jobLoop(ctx context.Context) {
 	a.syncAndRecord(ctx)
 	if err := a.pullAndRun(ctx); err != nil {
 		a.log.Warn("job pull failed", "err", err)
 	}
-
-	hb := time.NewTicker(a.cfg.HeartbeatEvery)
-	jobs := time.NewTicker(a.cfg.JobEvery)
-	defer hb.Stop()
-	defer jobs.Stop()
-
+	ticker := time.NewTicker(a.cfg.JobEvery)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-hb.C:
-			if err := a.heartbeat(ctx); err != nil {
-				a.log.Warn("heartbeat failed", "err", err)
-			}
-		case <-jobs.C:
+			return
+		case <-ticker.C:
 			a.syncAndRecord(ctx)
 			if err := a.pullAndRun(ctx); err != nil {
 				a.log.Warn("job pull failed", "err", err)
 			}
 		}
 	}
+}
+
+func (a *Agent) setLease(h *runtime.Handle) {
+	a.leaseMu.Lock()
+	a.lease = h
+	a.leaseMu.Unlock()
+}
+
+func (a *Agent) currentLease() *runtime.Handle {
+	a.leaseMu.RLock()
+	defer a.leaseMu.RUnlock()
+	return a.lease
 }
 
 func (a *Agent) ensureEnrolled(ctx context.Context) error {
@@ -539,8 +586,8 @@ func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Resu
 	var ids []string
 	if id := strings.TrimSpace(job.CatalogID); id != "" {
 		ids = []string{id}
-	} else if a.lease != nil && strings.TrimSpace(a.lease.CatalogID) != "" {
-		ids = []string{a.lease.CatalogID}
+	} else if h := a.currentLease(); h != nil && strings.TrimSpace(h.CatalogID) != "" {
+		ids = []string{h.CatalogID}
 	} else {
 		for _, id := range bench.PackIDs() {
 			if bench.LocalImage(id) != "" {
@@ -616,7 +663,7 @@ func (a *Agent) ensureCertSample(ctx context.Context) func() {
 		a.log.Info("cert image not local", "catalog_id", catalog.Llama318BQ4)
 		return noop
 	}
-	if a.lease != nil || a.runtime == nil {
+	if a.currentLease() != nil || a.runtime == nil {
 		return noop
 	}
 	gguf := a.cfg.GGUFHostPath()
@@ -752,7 +799,7 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	}
 	dest := a.cfg.GGUFHostPath()
 	if source := strings.TrimSpace(job.SourceRef); source != "" {
-		if err := a.doFetchWeights(ctx, dest, source, pin); err != nil {
+		if err := a.doFetchWeights(ctx, dest, source, pin, job.SizeBytes); err != nil {
 			reason := labPullFailReason(err)
 			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
 			return pathb.Result{Passed: false, Reason: reason}
@@ -771,22 +818,71 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	return pathb.Result{Passed: true, ImageHash: hash}
 }
 
-func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string) error {
-	if a.fetchWeights != nil {
-		return a.fetchWeights(ctx, dest, sourceRef, pin)
+func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string, size int64) error {
+	if err := downloadDestOK(dest); err != nil {
+		return err
 	}
 	rawURL, err := pull.TrustedDownloadURL(sourceRef)
 	if err != nil {
 		return err
 	}
-	return pull.ToFile(ctx, dest, rawURL, pin, pull.HTTPGet(nil))
+	lim := a.pullLimits(size)
+	// A test stub must still refuse before it writes. Production ToFileWith
+	// HEADs when size_bytes is absent, then preflights, then downloads.
+	if a.fetchWeights != nil {
+		if err := a.preflightPull(ctx, dest, rawURL, lim); err != nil {
+			return err
+		}
+		return a.fetchWeights(ctx, dest, sourceRef, pin)
+	}
+	return pull.ToFileWith(ctx, dest, rawURL, pin, pull.HTTPGet(nil), lim)
+}
+
+func (a *Agent) pullLimits(size int64) pull.Limits {
+	floor, _ := a.cfg.DiskFloorBytes()
+	margin, _ := a.cfg.DiskMarginBytes()
+	stat := pull.FreeBytes
+	if a.statFree != nil {
+		stat = a.statFree
+	}
+	return pull.Limits{
+		Expected:  size,
+		Floor:     floor,
+		Margin:    margin,
+		FloorSet:  true,
+		MarginSet: true,
+		Stat:      stat,
+		Head:      a.headLength,
+	}
+}
+
+// preflightPull resolves size (job payload, else HEAD) and refuses before
+// any byte is written. Unknown size fails closed.
+func (a *Agent) preflightPull(ctx context.Context, dest, rawURL string, lim pull.Limits) error {
+	size, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
+	if err != nil || size <= 0 {
+		free, statErr := lim.Stat(dest)
+		if statErr != nil {
+			return &pull.DiskError{StatErr: true}
+		}
+		return &pull.DiskError{Unknown: true, Free: free}
+	}
+	lim.Expected = size
+	return pull.Preflight(dest, size, lim)
 }
 
 func labPullFailReason(err error) string {
 	if err == nil {
 		return "lab_pull failed"
 	}
+	var disk *pull.DiskError
+	if errors.As(err, &disk) {
+		return disk.Error()
+	}
 	msg := err.Error()
+	if strings.HasPrefix(msg, "insufficient_disk:") {
+		return msg
+	}
 	switch {
 	case strings.Contains(msg, "untrusted"):
 		return "untrusted source"
@@ -794,6 +890,8 @@ func labPullFailReason(err error) string {
 		return "artifact hash mismatch"
 	case strings.Contains(msg, "pinned hash"):
 		return "pinned hash required"
+	case strings.Contains(msg, "root filesystem"), strings.Contains(msg, "no download path"):
+		return "no GGUF path"
 	default:
 		return "lab_pull failed"
 	}
@@ -867,7 +965,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
 		return pathb.Result{Passed: false, Reason: "no image_hash"}
 	}
-	a.lease = h
+	a.setLease(h)
 	if err := a.saveLease(h); err != nil {
 		a.log.Warn("lease record not saved", "err", err)
 	}
@@ -887,7 +985,7 @@ func (a *Agent) leaseStartAlready(h *runtime.Handle) pathb.Result {
 			return pathb.Result{Passed: false, Reason: "no image_hash"}
 		}
 		h.FileHash = hash
-		a.lease = h
+		a.setLease(h)
 		if err := a.saveLease(h); err != nil {
 			a.log.Warn("lease record not saved", "err", err)
 		}
@@ -959,7 +1057,7 @@ func (a *Agent) stopHandle(ctx context.Context, h *runtime.Handle) error {
 }
 
 func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
-	h := a.lease
+	h := a.currentLease()
 	if h == nil {
 		h = a.loadLease()
 	}
@@ -983,7 +1081,7 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	if err := a.stopHandle(ctx, h); err != nil {
 		return pathb.Result{Passed: false, Reason: "runtime stop failed"}
 	}
-	a.lease = nil
+	a.setLease(nil)
 	_ = a.saveLease(nil)
 	// Host WireGuard peer stays up. Teardown only on GET revoked or 204.
 	a.log.Info("lease_stop", "lease_id", job.LeaseID)
@@ -992,8 +1090,8 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 }
 
 func (a *Agent) localLease() *runtime.Handle {
-	if a.lease != nil {
-		return a.lease
+	if h := a.currentLease(); h != nil {
+		return h
 	}
 	return a.loadLease()
 }

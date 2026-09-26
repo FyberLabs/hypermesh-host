@@ -19,6 +19,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"github.com/FyberLabs/hypermesh-host/internal/metrics"
+	"github.com/FyberLabs/hypermesh-host/internal/pull"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
@@ -373,13 +374,13 @@ func TestStatfsFreeIsBavailTimesBsize(t *testing.T) {
 	if err := syscall.Statfs(dir, &st); err != nil {
 		t.Fatal(err)
 	}
-	got, err := statfsFree(dir)
+	got, err := pull.FreeBytes(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := int64(st.Bavail) * int64(st.Bsize)
 	if got != want {
-		t.Fatalf("statfsFree %d want Bavail*Bsize %d", got, want)
+		t.Fatalf("FreeBytes %d want Bavail*Bsize %d", got, want)
 	}
 	if got < 0 {
 		t.Fatalf("free bytes %d", got)

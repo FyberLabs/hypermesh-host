@@ -1972,7 +1972,7 @@ func TestHeartbeatLogsNVIDIABackend(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
-	var logBuf strings.Builder
+	var logBuf syncBuf
 	a := newTestAgent(t, srv.URL, dir, uptime, "tok", "")
 	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
 	a.tunnels = &fakeTunnel{}
@@ -2393,6 +2393,8 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	t.Setenv("HYPERMESH_LISTEN_PORT", "")
 	t.Setenv("HYPERMESH_COMPLETIONS_URL", "")
 	t.Setenv("HYPERMESH_GGUF_PATH", "")
+	t.Setenv("HYPERMESH_DISK_FLOOR_BYTES", "")
+	t.Setenv("HYPERMESH_DISK_MARGIN_BYTES", "")
 	t.Setenv("HYPERMESH_METRICS_ADDR", "")
 	t.Setenv("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK", "")
 	cfg := FromEnv()
@@ -2405,8 +2407,16 @@ func TestDefaultControlPlaneURL(t *testing.T) {
 	if cfg.CompletionsEndpoint() != "http://127.0.0.1:8080/v1/chat/completions" {
 		t.Fatalf("default completions %q", cfg.CompletionsEndpoint())
 	}
-	if cfg.GGUFHostPath() != "" {
-		t.Fatalf("unset GGUF path must be empty, got %q", cfg.GGUFHostPath())
+	if cfg.GGUFHostPath() != DefaultModelPath {
+		t.Fatalf("unset GGUF path = %q want %q", cfg.GGUFHostPath(), DefaultModelPath)
+	}
+	floor, err := cfg.DiskFloorBytes()
+	if err != nil || floor != 2<<30 {
+		t.Fatalf("disk floor %d err=%v", floor, err)
+	}
+	margin, err := cfg.DiskMarginBytes()
+	if err != nil || margin != 64<<20 {
+		t.Fatalf("disk margin %d err=%v", margin, err)
 	}
 	if cfg.MetricsAddr != "127.0.0.1:9464" || cfg.MetricsAllowNonLoopback {
 		t.Fatalf("metrics default %+v", cfg.MetricsAddr)
@@ -2537,7 +2547,8 @@ func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
 	a.pathb.Collector = a.telem
 	a.keyDir = t.TempDir()
 	a.countLeases = func(context.Context) (int, bool) {
-		if a.lease != nil && strings.TrimSpace(a.lease.LeaseID) != "" {
+		h := a.currentLease()
+		if h != nil && strings.TrimSpace(h.LeaseID) != "" {
 			return 1, true
 		}
 		return 0, true
@@ -2584,6 +2595,24 @@ func waitLoop(t *testing.T, a *Agent, ok func() bool) {
 
 func discardLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// syncBuf is a strings.Builder safe for the heartbeat and job goroutines.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
