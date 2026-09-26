@@ -239,7 +239,8 @@ func (p livePeer) recent(now time.Time) bool {
 // is the resolved numeric address, and AllowedIPs are comma-joined with no
 // spaces, in trie order, with host bits cleared. A point-to-point address can
 // show up as a bare IP. The device's listen port is not a difference unless
-// the session names a different one. Those are the same peer.
+// the session names a different one. The private key is the clamped scalar;
+// an unclamped key file is the same key. Those are the same peer.
 func (r *Runner) liveMatches(ctx context.Context, l liveIface, s Session) bool {
 	if !l.Exists || len(l.Peers) != 1 {
 		return false
@@ -247,7 +248,7 @@ func (r *Runner) liveMatches(ctx context.Context, l liveIface, s Session) bool {
 	if strings.TrimSpace(l.PrivateKey) == "" || l.PrivateKey == "(none)" {
 		return false
 	}
-	if !sameWGKey(l.PrivateKey, s.PeerPrivateKey) {
+	if !sameWGPrivateKey(l.PrivateKey, s.PeerPrivateKey) {
 		return false
 	}
 	if addr := strings.TrimSpace(s.ClientAddress); addr != "" && !sameAddr(l.Address, addr) {
@@ -296,6 +297,19 @@ func listenPortFor(s Session, live int) int {
 }
 
 func sameWGKey(a, b string) bool {
+	return compareWGKey(a, b, false)
+}
+
+// sameWGPrivateKey reports whether two WireGuard private keys are the same
+// X25519 scalar. `wg show` prints the clamped form; a key file may still
+// hold the unclamped scalar. Those bits do not change the public key.
+// Both sides are clamped, then compared in constant time. Public keys use
+// sameWGKey: clamping a point is a different key.
+func sameWGPrivateKey(a, b string) bool {
+	return compareWGKey(a, b, true)
+}
+
+func compareWGKey(a, b string, clamp bool) bool {
 	a = strings.TrimSpace(a)
 	b = strings.TrimSpace(b)
 	if a == "" || b == "" || a == "(none)" || b == "(none)" {
@@ -308,6 +322,10 @@ func sameWGKey(a, b string) bool {
 	bb, bok := decodeWGKey(b)
 	if !aok || !bok {
 		return false
+	}
+	if clamp {
+		clampX25519(ab)
+		clampX25519(bb)
 	}
 	return subtle.ConstantTimeCompare(ab, bb) == 1
 }

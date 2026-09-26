@@ -18,14 +18,32 @@ const DefaultKeyDir = "/etc/wireguard"
 var ErrNoHostKey = errors.New("hypermesh tunnel: host WireGuard private key missing")
 
 // GenerateKeypair returns a WireGuard X25519 pair, standard base64 (44 chars).
+// The private key is clamped, which is the form `wg show` reports. Existing
+// key files are left as written; comparison accepts both forms.
 func GenerateKeypair() (privB64, pubB64 string, err error) {
 	key, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return "", "", err
 	}
-	return base64.StdEncoding.EncodeToString(key.Bytes()),
+	// Bytes is a copy. Clamping it does not change the public key: X25519
+	// clamps again inside the scalar multiply.
+	raw := key.Bytes()
+	clampX25519(raw)
+	return base64.StdEncoding.EncodeToString(raw),
 		base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()),
 		nil
+}
+
+// clampX25519 applies the X25519 scalar clamp WireGuard stores:
+// k[0] &= 248; k[31] &= 127; k[31] |= 64.
+// The operations are bitwise and do not branch on the key.
+func clampX25519(k []byte) {
+	if len(k) != 32 {
+		return
+	}
+	k[0] &= 248
+	k[31] &= 127
+	k[31] |= 64
 }
 
 func PublicFromPrivate(privB64 string) (string, error) {
