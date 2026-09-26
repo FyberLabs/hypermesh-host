@@ -266,20 +266,33 @@ func (r *Runner) liveMatches(ctx context.Context, l liveIface, s Session) bool {
 	if p.Keepalive != persistentKeepaliveSec {
 		return false
 	}
-	if s.ListenPort > 0 && s.ListenPort != l.ListenPort {
+	// Same port check as listenPortFor. An out-of-range value is unspecified,
+	// so it does not force syncconf on every start while the file keeps the
+	// port the device already bound.
+	if port := validListenPort(s.ListenPort); port != 0 && port != validListenPort(l.ListenPort) {
 		return false
 	}
 	return true
 }
 
-// listenPortFor is the port written into wg syncconf. A session port replaces
-// the bound one. Zero keeps the port the interface already has, so an omitted
-// ListenPort is not sent as listen_port=0.
-func listenPortFor(s Session, live int) int {
-	if s.ListenPort > 0 && s.ListenPort <= 65535 {
-		return s.ListenPort
+// validListenPort is a UDP port in 1..65535. Zero and anything outside that
+// range are unspecified. Callers on both sides of the listen-port compare
+// use this so they agree.
+func validListenPort(p int) int {
+	if p <= 0 || p > 65535 {
+		return 0
 	}
-	return live
+	return p
+}
+
+// listenPortFor is the port written into wg syncconf. A session port replaces
+// the bound one. Zero and out-of-range values keep the port the interface
+// already has, so an omitted ListenPort is not sent as listen_port=0.
+func listenPortFor(s Session, live int) int {
+	if port := validListenPort(s.ListenPort); port != 0 {
+		return port
+	}
+	return validListenPort(live)
 }
 
 func sameWGKey(a, b string) bool {
@@ -402,27 +415,34 @@ func dedupeSorted(in []string) []string {
 // endpointsMatch treats the numeric address from `wg show dump` as the same
 // endpoint as the hostname the control plane sent, when that name resolves
 // to the address. Ports must match. A different address is a real change.
+//
+// The host comes from the control plane. An IP literal is compared as an
+// address and is not resolved. Anything that is not a plain DNS name fails
+// the compare, so the agent applies, and is never passed to a resolver.
+// `getent ahosts -sfiles` dumps /etc/hosts and exits 0; a leading "-" would
+// otherwise be a getent option.
 func (r *Runner) endpointsMatch(ctx context.Context, desired, live string) bool {
 	desired = strings.TrimSpace(desired)
 	live = strings.TrimSpace(live)
-	if desired == live {
-		return true
-	}
 	dh, dp, err1 := net.SplitHostPort(desired)
 	lh, lp, err2 := net.SplitHostPort(live)
 	if err1 != nil || err2 != nil || dp != lp {
 		return false
-	}
-	if strings.EqualFold(dh, lh) {
-		return true
 	}
 	dip := net.ParseIP(dh)
 	lip := net.ParseIP(lh)
 	if dip != nil && lip != nil {
 		return dip.Equal(lip)
 	}
+	// One side is an address and the other is not. Do not resolve the literal.
 	if dip != nil || lip == nil {
 		return false
+	}
+	if !dnsHostname(dh) {
+		return false
+	}
+	if strings.EqualFold(dh, lh) {
+		return true
 	}
 	if ips, err := r.lookupHost(ctx, dh); err == nil && ipListHas(ips, lip) {
 		return true
@@ -432,12 +452,47 @@ func (r *Runner) endpointsMatch(ctx context.Context, desired, live string) bool 
 	// returns an error or a different answer. wg syncconf already stored
 	// the glibc result, so a miss here would syncconf the same hostname
 	// forever. getent is that glibc lookup. A test LookupHost is
-	// authoritative unless ExtraLookup is set.
-	if r.LookupHost != nil && r.ExtraLookup == nil {
+	// authoritative unless ExtraLookup or RunGetent is set.
+	if r.LookupHost != nil && r.ExtraLookup == nil && r.RunGetent == nil {
 		return false
 	}
 	more, err := r.extraLookup(ctx, dh)
 	return err == nil && ipListHas(more, lip)
+}
+
+// dnsHostname reports whether host is a plain DNS name: 1–253 characters,
+// LDH labels ([A-Za-z0-9-], 1–63, no leading or trailing hyphen). Spaces,
+// control characters, and a leading "-" are rejected. IP literals are not
+// names; callers handle those before this check.
+func dnsHostname(host string) bool {
+	if host == "" || len(host) > 253 || host[0] == '-' {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	for _, label := range labels {
+		if !ldhLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func ldhLabel(label string) bool {
+	if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(label); i++ {
+		c := label[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func ipListHas(ips []string, lip net.IP) bool {
@@ -463,18 +518,37 @@ func (r *Runner) extraLookup(ctx context.Context, host string) ([]string, error)
 	if r.ExtraLookup != nil {
 		return r.ExtraLookup(ctx, host)
 	}
-	return getentHosts(ctx, host)
+	return r.getentHosts(ctx, host)
 }
 
-// getentHosts resolves host the way wg does, through glibc. Output is not logged.
-func getentHosts(ctx context.Context, host string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "getent", "ahosts", host)
-	out, err := cmd.Output()
+// getentHosts resolves host the way wg does, through glibc.
+// The argv is `getent ahosts -- <host>`. Output is not logged.
+func (r *Runner) getentHosts(ctx context.Context, host string) ([]string, error) {
+	if net.ParseIP(host) != nil || !dnsHostname(host) {
+		return nil, errors.New("hypermesh tunnel: endpoint host is not a DNS name")
+	}
+	args := []string{"ahosts", "--", host}
+	var (
+		out []byte
+		err error
+	)
+	if r != nil && r.RunGetent != nil {
+		out, err = r.RunGetent(ctx, "getent", args...)
+	} else {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		out, err = exec.CommandContext(ctx, "getent", args...).Output()
+	}
 	if err != nil {
 		return nil, err
 	}
+	return parseGetentAhosts(out)
+}
+
+// parseGetentAhosts reads `getent ahosts` lines. Each address is repeated
+// for STREAM, DGRAM, and RAW; those repeats collapse to one entry. v4 and
+// v6 are both kept, in first-seen order. Empty or address-less output is an error.
+func parseGetentAhosts(out []byte) ([]string, error) {
 	var ips []string
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
