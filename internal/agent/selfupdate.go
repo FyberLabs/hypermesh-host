@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -118,6 +119,7 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 		Arch:           runtime.GOARCH,
 		BinaryPath:     binary,
 		PubKeyPath:     a.cfg.UpdatePubKey,
+		Fingerprints:   a.cfg.UpdateFingerprints,
 		MarkerPath:     marker,
 		Busy:           busy,
 		RollbackWindow: a.cfg.UpdateRollback,
@@ -125,13 +127,25 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 	if err != nil {
 		return err
 	}
-	a.log.Info("update",
+	logUpdate(a.log, plan)
+	return nil
+}
+
+// logUpdate writes one update decision. The steady state, already
+// running the signed build, is debug. Install, reject, and defer stay
+// at info.
+func logUpdate(log *slog.Logger, plan update.Plan) {
+	args := []any{
 		"action", plan.Action,
 		"version", plan.Version,
 		"commit", plan.Commit,
 		"reason", update.RedactQuery(plan.Reason),
-	)
-	return nil
+	}
+	if plan.Action == update.ActionSkip && plan.Reason == "up to date" {
+		log.Debug("update", args...)
+		return
+	}
+	log.Info("update", args...)
 }
 
 // updateSource asks the control plane with the device credential the

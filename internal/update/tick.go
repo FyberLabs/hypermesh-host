@@ -26,6 +26,7 @@ type Config struct {
 	Arch           string
 	BinaryPath     string
 	PubKeyPath     string
+	Fingerprints   []string
 	MarkerPath     string
 	Busy           bool
 	RollbackWindow time.Duration
@@ -117,7 +118,13 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	}
 	verify := h.Verify
 	if verify == nil {
-		verify = GPGVerify
+		if len(cfg.Fingerprints) == 0 {
+			return Plan{Action: ActionReject, Reason: "update fingerprints missing"}, nil
+		}
+		fps := append([]string(nil), cfg.Fingerprints...)
+		verify = func(checksums, sig, pubkey []byte) error {
+			return GPGVerify(checksums, sig, pubkey, fps)
+		}
 	}
 	if err := verify(sums, sig, pub); err != nil {
 		return Plan{Action: ActionReject, Reason: "checksum signature rejected"}, nil

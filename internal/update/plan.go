@@ -36,16 +36,22 @@ type Manifest struct {
 }
 
 // Decide chooses skip, defer, reject, or install after the manifest
-// has been authenticated. A candidate whose build is less than or
-// equal to currentBuild is refused before the commit or semver check.
-// badBuild is a build this host already rolled back; it stays skipped
-// until a strictly newer build appears. Busy defers an install; it
-// does not skip a real change.
+// has been authenticated. A candidate whose build is less than
+// currentBuild is refused before the commit or semver check. An equal
+// build is "up to date" only when the commit matches; any other equal
+// build is refused. badBuild is a build this host already rolled
+// back; it stays skipped until a strictly newer build appears. Busy
+// defers an install; it does not skip a real change.
 func Decide(channel, currentVersion, currentCommit string, currentBuild, badBuild int, m Manifest, busy bool) Plan {
 	p := Plan{Version: strings.TrimSpace(m.Version), Commit: strings.TrimSpace(m.Commit)}
 	if m.Channel != channel {
 		p.Action = ActionReject
 		p.Reason = "release channel does not match this box"
+		return p
+	}
+	if m.Build == currentBuild && sameCommit(m.Commit, currentCommit) {
+		p.Action = ActionSkip
+		p.Reason = "up to date"
 		return p
 	}
 	if m.Build <= currentBuild {
@@ -141,4 +147,10 @@ func semverLess(a, b string) bool {
 		return an < bn
 	}
 	return ap < bp
+}
+
+func sameCommit(candidate, current string) bool {
+	candidate = strings.TrimSpace(candidate)
+	current = strings.TrimSpace(current)
+	return candidate != "" && strings.EqualFold(candidate, current)
 }

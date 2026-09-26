@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
+	"github.com/FyberLabs/hypermesh-host/internal/update"
 )
 
 func TestBusyLeaseAndUnacked(t *testing.T) {
@@ -68,5 +71,36 @@ func TestUpdateChannelValidate(t *testing.T) {
 	got := FromEnv()
 	if got.UpdateChannel != "prod" || got.UpdateEvery != 15*time.Minute {
 		t.Fatalf("channel %q every %s", got.UpdateChannel, got.UpdateEvery)
+	}
+}
+
+func TestUpdateLogUpToDateIsDebug(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logUpdate(log, update.Plan{Action: update.ActionSkip, Reason: "up to date"})
+	if !strings.Contains(buf.String(), "level=DEBUG") || strings.Contains(buf.String(), "level=INFO") {
+		t.Fatalf("up to date log:\n%s", buf.String())
+	}
+	buf.Reset()
+	logUpdate(log, update.Plan{Action: update.ActionReject, Reason: "build is not newer"})
+	if !strings.Contains(buf.String(), "level=INFO") || strings.Contains(buf.String(), "level=DEBUG") {
+		t.Fatalf("reject log:\n%s", buf.String())
+	}
+}
+
+func TestUpdateFingerprintsFromEnv(t *testing.T) {
+	t.Setenv("HYPERMESH_TENANT_ID", "11111111-1111-1111-1111-111111111111")
+	t.Setenv("HYPERMESH_UPDATE_FINGERPRINTS", "0123456789abcdef0123456789abcdef01234567, abcdefabcdefabcdefabcdefabcdefabcdefabcd")
+	got := FromEnv()
+	if got.UpdateFingerprintsInvalid || len(got.UpdateFingerprints) != 2 {
+		t.Fatalf("fingerprints %+v invalid %v", got.UpdateFingerprints, got.UpdateFingerprintsInvalid)
+	}
+	if got.UpdateFingerprints[0] != "0123456789ABCDEF0123456789ABCDEF01234567" {
+		t.Fatalf("normalized %q", got.UpdateFingerprints[0])
+	}
+	t.Setenv("HYPERMESH_UPDATE_FINGERPRINTS", "not-a-fingerprint")
+	got = FromEnv()
+	if err := got.Validate(); err == nil || !strings.Contains(err.Error(), "FINGERPRINTS") {
+		t.Fatal(err)
 	}
 }

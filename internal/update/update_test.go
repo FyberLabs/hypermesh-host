@@ -64,6 +64,7 @@ func TestDecide(t *testing.T) {
 		{"channel mismatch", ChannelProd, "1.0.0", "c", 1, 0, Manifest{Channel: ChannelTest, Version: "1.2.0", Commit: "d", Build: 9}, false, ActionReject},
 		{"older build", ChannelTest, "0.0.0", "old", 5, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 4}, false, ActionReject},
 		{"equal build", ChannelTest, "0.0.0", "old", 5, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "new", Build: 5}, false, ActionReject},
+		{"up to date", ChannelTest, "0.0.0", "abc", 5, 0, Manifest{Channel: ChannelTest, Version: "0.0.0", Commit: "ABC", Build: 5}, false, ActionSkip},
 		{"switch test to newer prod", ChannelProd, "0.0.0", "testcommit", 57, 0, Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "prodcommit", Build: 58}, false, ActionInstall},
 		{"replayed equal prod build", ChannelProd, "0.0.0", "testcommit", 57, 0, Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "prodcommit", Build: 57}, false, ActionReject},
 		{"replayed lower prod build", ChannelProd, "0.0.0", "testcommit", 57, 0, Manifest{Channel: ChannelProd, Version: "1.2.3", Commit: "prodcommit", Build: 3}, false, ActionReject},
@@ -77,6 +78,12 @@ func TestDecide(t *testing.T) {
 			got := Decide(tc.channel, tc.ver, tc.commit, tc.curBuild, tc.badBuild, tc.man, tc.busy)
 			if got.Action != tc.want {
 				t.Fatalf("action %s want %s (%s)", got.Action, tc.want, got.Reason)
+			}
+			if tc.name == "up to date" && got.Reason != "up to date" {
+				t.Fatalf("reason %q", got.Reason)
+			}
+			if tc.name == "equal build" && got.Reason != "build is not newer" {
+				t.Fatalf("reason %q", got.Reason)
 			}
 			if tc.want != ActionInstall && got.Action == ActionInstall {
 				t.Fatal("refused build was installed")
@@ -121,9 +128,12 @@ func TestChecksumAndSelect(t *testing.T) {
 }
 
 func TestGPGVerifyRejectsGarbage(t *testing.T) {
-	err := GPGVerify([]byte("checksums"), []byte("not-a-signature"), []byte("not-a-key"))
+	err := GPGVerify([]byte("checksums"), []byte("not-a-signature"), []byte("not-a-key"), []string{"0123456789ABCDEF0123456789ABCDEF01234567"})
 	if err == nil {
 		t.Fatal("garbage signature was accepted")
+	}
+	if err := GPGVerify([]byte("checksums"), []byte("not-a-signature"), []byte("not-a-key"), nil); err == nil {
+		t.Fatal("empty fingerprint list was accepted")
 	}
 }
 
@@ -545,20 +555,26 @@ func TestGPGVerifyKeyList(t *testing.T) {
 		t.Fatal("gpg is required")
 	}
 	payload := []byte("checksums-for-rotation")
-	pub1, sig1 := armoredKeyAndSig(t, "hm-test-old <old@example.invalid>", payload)
-	pub2, sig2 := armoredKeyAndSig(t, "hm-test-new <new@example.invalid>", payload)
+	pub1, sig1, fp1 := armoredKeyAndSig(t, "hm-test-old <old@example.invalid>", payload)
+	pub2, sig2, fp2 := armoredKeyAndSig(t, "hm-test-new <new@example.invalid>", payload)
 	both := append(append([]byte{}, pub1...), pub2...)
-	if err := GPGVerify(payload, sig1, both); err != nil {
+	if err := GPGVerify(payload, sig1, both, []string{fp1, fp2}); err != nil {
 		t.Fatalf("old key in the list: %v", err)
 	}
-	if err := GPGVerify(payload, sig2, both); err != nil {
+	if err := GPGVerify(payload, sig2, both, []string{fp1, fp2}); err != nil {
 		t.Fatalf("new key in the list: %v", err)
 	}
-	if err := GPGVerify(payload, sig1, pub2); err == nil {
+	if err := GPGVerify(payload, sig1, pub2, []string{fp2}); err == nil {
 		t.Fatal("old signature was accepted after the old key was removed")
 	}
-	if err := GPGVerify(payload, sig2, pub2); err != nil {
+	if err := GPGVerify(payload, sig2, pub2, []string{fp2}); err != nil {
 		t.Fatalf("new key alone: %v", err)
+	}
+	if err := GPGVerify(payload, sig1, both, []string{fp2}); err == nil {
+		t.Fatal("signature from a key that is only in the keyring was accepted")
+	}
+	if err := GPGVerify(payload, sig2, both, nil); err == nil {
+		t.Fatal("empty fingerprint list was accepted")
 	}
 }
 
@@ -579,21 +595,50 @@ func TestValidSigFingerprint(t *testing.T) {
 	if signatureTrusted(untrusted, trusted) {
 		t.Fatal("VALIDSIG from an untrusted fingerprint was accepted")
 	}
-	primary := "[GNUPG:] VALIDSIG " + otherFP + " 2026-09-26 1 0 1 0 1 10 0 " + trustedFP + "\n"
+	primary := "[GNUPG:] GOODSIG " + trustedFP + " Hypermesh\n" +
+		"[GNUPG:] VALIDSIG " + otherFP + " 2026-09-26 1 0 1 0 1 10 0 " + trustedFP + "\n"
 	if !signatureTrusted(primary, trusted) {
 		t.Fatal("VALIDSIG whose primary key is trusted was rejected")
 	}
 	if signatureTrusted(valid, nil) {
 		t.Fatal("empty trust set accepted a signature")
 	}
+	validNoGood := "[GNUPG:] VALIDSIG " + trustedFP + " 2026-09-26 1 0 1 0 1 10 0 " + trustedFP + "\n"
+	if signatureTrusted(validNoGood, trusted) {
+		t.Fatal("VALIDSIG without GOODSIG was accepted")
+	}
+	for _, tok := range []string{"EXPKEYSIG", "REVKEYSIG", "EXPSIG", "BADSIG", "ERRSIG"} {
+		bad := valid + "[GNUPG:] " + tok + " " + trustedFP + " Hypermesh\n"
+		if signatureTrusted(bad, trusted) {
+			t.Fatalf("%s was accepted", tok)
+		}
+	}
 	colons := "pub:u:255:1:1:1:::u:::sc\nfpr:::::::::0123456789abcdef0123456789abcdef01234567:\n"
 	got := parseColonFingerprints(colons)
 	if _, ok := got[trustedFP]; !ok {
 		t.Fatalf("fingerprints %v", got)
 	}
+	if !signingKeyUsable(colons, trustedFP, time.Unix(2, 0)) {
+		t.Fatal("key with no expiry was rejected")
+	}
+	expired := "pub:e:255:22:ABCD:1600000000:1600000001::u:::scESC:::::ed25519:::\nfpr:::::::::" + trustedFP + ":\n"
+	if signingKeyUsable(expired, trustedFP, time.Unix(1700000000, 0)) {
+		t.Fatal("expired key was usable")
+	}
+	revoked := "pub:r:255:22:ABCD:1600000000::u:::scESC:::::ed25519:::\nfpr:::::::::" + trustedFP + ":\n"
+	if signingKeyUsable(revoked, trustedFP, time.Unix(1700000000, 0)) {
+		t.Fatal("revoked key was usable")
+	}
+	past := "pub:u:255:22:ABCD:1600000000:1600000001::u:::scESC:::::ed25519:::\nfpr:::::::::" + trustedFP + ":\n"
+	if signingKeyUsable(past, trustedFP, time.Unix(1700000000, 0)) {
+		t.Fatal("key past its expiry timestamp was usable")
+	}
+	if signingKeyUsable(colons, otherFP, time.Unix(2, 0)) {
+		t.Fatal("missing key record was usable")
+	}
 }
 
-func armoredKeyAndSig(t *testing.T, uid string, payload []byte) (pub, sig []byte) {
+func armoredKeyAndSig(t *testing.T, uid string, payload []byte) (pub, sig []byte, fp string) {
 	t.Helper()
 	home := t.TempDir()
 	env := append(os.Environ(), "GNUPGHOME="+home)
@@ -603,9 +648,25 @@ func armoredKeyAndSig(t *testing.T, uid string, payload []byte) (pub, sig []byte
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Fatalf("keygen %s: %v %s", uid, err, out)
 	}
+	list := exec.Command("gpg", "--batch", "--with-colons", "--fingerprint")
+	list.Env = env
+	listed, err := list.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(listed), "\n") {
+		parts := strings.Split(line, ":")
+		if len(parts) >= 10 && parts[0] == "fpr" && parts[9] != "" {
+			fp = strings.ToUpper(parts[9])
+			break
+		}
+	}
+	if fp == "" {
+		t.Fatal("generated key has no fingerprint")
+	}
 	exp := exec.Command("gpg", "--batch", "--armor", "--export")
 	exp.Env = env
-	pub, err := exp.Output()
+	pub, err = exp.Output()
 	if err != nil || !bytes.Contains(pub, []byte("BEGIN PGP PUBLIC KEY BLOCK")) {
 		t.Fatalf("export %s: %v", uid, err)
 	}
@@ -624,7 +685,64 @@ func armoredKeyAndSig(t *testing.T, uid string, payload []byte) (pub, sig []byte
 	if err != nil || len(sig) == 0 {
 		t.Fatal(err)
 	}
-	return pub, sig
+	return pub, sig, fp
+}
+
+func TestGPGVerifyRejectsExpiredKey(t *testing.T) {
+	if _, err := exec.LookPath("gpg"); err != nil {
+		t.Fatal("gpg is required")
+	}
+	home := t.TempDir()
+	env := append(os.Environ(), "GNUPGHOME="+home)
+	gen := exec.Command("gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+		"--quick-generate-key", "hm-expired <expired@example.invalid>", "ed25519", "sign", "seconds=4")
+	gen.Env = env
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Fatalf("keygen: %v %s", err, out)
+	}
+	payload := []byte("checksums-for-expired")
+	sum := filepath.Join(home, "checksums.txt")
+	if err := os.WriteFile(sum, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sigPath := filepath.Join(home, "checksums.txt.sig")
+	sign := exec.Command("gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+		"--detach-sign", "--output", sigPath, sum)
+	sign.Env = env
+	if out, err := sign.CombinedOutput(); err != nil {
+		t.Fatalf("sign: %v %s", err, out)
+	}
+	sig, err := os.ReadFile(sigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := exec.Command("gpg", "--batch", "--armor", "--export")
+	exp.Env = env
+	pub, err := exp.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := exec.Command("gpg", "--batch", "--with-colons", "--fingerprint")
+	list.Env = env
+	listed, err := list.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fp string
+	for _, line := range strings.Split(string(listed), "\n") {
+		parts := strings.Split(line, ":")
+		if len(parts) >= 10 && parts[0] == "fpr" && parts[9] != "" {
+			fp = strings.ToUpper(parts[9])
+			break
+		}
+	}
+	if fp == "" {
+		t.Fatal("expired test key has no fingerprint")
+	}
+	time.Sleep(5 * time.Second)
+	if err := GPGVerify(payload, sig, pub, []string{fp}); err == nil {
+		t.Fatal("expired signing key was accepted")
+	}
 }
 
 func TestReleaseWorkflowContract(t *testing.T) {
@@ -666,7 +784,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		`v[0-9]+.[0-9]+.[0-9]+`,
 		"cancel-in-progress: false",
 		"group: release-publish",
-		"AZURE_CONFIG_DIR: ${{ runner.temp }}/az",
+		"AZURE_CONFIG_DIR=$RUNNER_TEMP/az",
+		"GITHUB_ENV",
 		"az logout",
 		"if: always()",
 		"if: github.ref_type == 'tag'",
@@ -680,6 +799,12 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release.yml missing %s", want)
 		}
+	}
+	if strings.Contains(text, "${{ runner.temp }}") || strings.Contains(text, "runner.temp") {
+		t.Fatal("release.yml uses runner.temp in an expression")
+	}
+	if strings.Contains(text, "queue:") {
+		t.Fatal("release.yml sets a concurrency key actionlint 1.7.12 rejects")
 	}
 	if strings.Contains(text, "hypermesh-wg") || strings.Contains(text, "connection-string") || strings.Contains(text, "account-key") || strings.Contains(text, "stfyberhmhost") {
 		t.Fatal("release.yml has a storage key, a hardcoded account, or restarts wireguard")
@@ -696,6 +821,15 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	ciText := string(ci)
 	if strings.Contains(ciText, "id-token") {
 		t.Fatal("ci workflow must not request id-token")
+	}
+	for _, want := range []string{
+		"914e7df21a07ef503a81201c76d2b11c789d3fca",
+		"-shellcheck=",
+		"shellcheck -x packaging/release/publish-agent.sh",
+	} {
+		if !strings.Contains(ciText, want) {
+			t.Fatalf("ci.yml missing %s", want)
+		}
 	}
 	script, err := os.ReadFile(filepath.Join(root, "packaging", "release", "publish-agent.sh"))
 	if err != nil {
@@ -718,6 +852,13 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"--detach-sign",
 		"--auth-mode login",
 		"prerelease",
+		"locks/publish",
+		"require_builds_ahead",
+		"classify_prod_reuse",
+		"bump the version",
+		"superseded=true",
+		`tag="test"`,
+		"inherit_errexit",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("publish script missing %s", want)
@@ -1043,6 +1184,343 @@ func TestPlaneBuildMustMatchSigned(t *testing.T) {
 	})
 	if err != nil || installed || plan.Action != ActionReject {
 		t.Fatalf("mismatched build installed: %+v %v", plan, err)
+	}
+}
+
+func TestReleaseScriptFailClosedAndReuse(t *testing.T) {
+	layout := filepath.Join("..", "..", "packaging", "release", "layout.sh")
+	body, err := os.ReadFile(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "# shellcheck shell=bash") {
+		t.Fatal("layout.sh has no shellcheck shell directive")
+	}
+	run := func(t *testing.T, script string) string {
+		t.Helper()
+		cmd := exec.Command("bash", "-c", script, "bash", layout)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return string(out)
+	}
+	t.Run("index error is not missing", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c", `
+set -euo pipefail
+source "$1"
+az_blob() { echo denied >&2; return 1; }
+read_index_build test
+echo survived
+`, "bash", layout)
+		out, err := cmd.CombinedOutput()
+		if err == nil || strings.Contains(string(out), "survived") {
+			t.Fatalf("failed index read continued: %v %s", err, out)
+		}
+	})
+	t.Run("explicit false is missing", func(t *testing.T) {
+		out := run(t, `
+set -euo pipefail
+source "$1"
+az_blob() { printf '%s\n' false; }
+out=$(read_index_build test)
+if [ -n "$out" ]; then
+  echo "want empty, got [$out]" >&2
+  exit 1
+fi
+`)
+		if strings.TrimSpace(out) != "" {
+			t.Fatalf("output %q", out)
+		}
+	})
+	t.Run("download error fails", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c", `
+set -euo pipefail
+source "$1"
+az_blob() {
+  case "$1" in
+    exists) printf '%s\n' true ;;
+    *) return 1 ;;
+  esac
+}
+read_index_build prod
+echo survived
+`, "bash", layout)
+		out, err := cmd.CombinedOutput()
+		if err == nil || strings.Contains(string(out), "survived") {
+			t.Fatalf("failed download continued: %v %s", err, out)
+		}
+	})
+	t.Run("re-read must be ahead", func(t *testing.T) {
+		script := `
+set -euo pipefail
+source "$1"
+az_blob() {
+  local name="" file=""
+  local cmd=$1
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name=$2; shift 2 ;;
+      --file) file=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$cmd" in
+    exists) printf '%s\n' true ;;
+    download)
+      case "$name" in
+        channels/test.json) printf '%s\n' '{"build":5}' >"$file" ;;
+        channels/prod.json) printf '%s\n' '{"build":7}' >"$file" ;;
+        *) echo "unexpected $name" >&2; return 1 ;;
+      esac
+      ;;
+    *) echo "unexpected $cmd" >&2; return 1 ;;
+  esac
+}
+require_builds_ahead 8
+if ! require_builds_ahead 7; then
+  exit 0
+fi
+echo accepted-equal >&2
+exit 1
+`
+		if out := run(t, script); strings.Contains(out, "accepted-equal") {
+			t.Fatal(out)
+		}
+	})
+	t.Run("lease waits then fails closed", func(t *testing.T) {
+		out := run(t, `
+set -euo pipefail
+source "$1"
+count=$(mktemp)
+echo 0 >"$count"
+az_blob() {
+  if [ "$1" = exists ]; then
+    printf '%s\n' false
+    return 0
+  fi
+  return 0
+}
+az_lease() {
+  n=$(cat "$count")
+  n=$((n + 1))
+  echo "$n" >"$count"
+  if [ "$n" -eq 1 ]; then
+    echo LeaseAlreadyPresent >&2
+    return 1
+  fi
+  printf '%s\n' lease-ok
+}
+export HYPERMESH_LEASE_ATTEMPTS=3 HYPERMESH_LEASE_PAUSE=0
+id=$(acquire_publish_lease)
+if [ "$id" != lease-ok ]; then
+  echo "id=$id" >&2
+  exit 1
+fi
+az_lease() { echo forbidden >&2; return 1; }
+if acquire_publish_lease; then
+  echo acquired-without-lease >&2
+  exit 1
+fi
+`)
+		if strings.Contains(out, "acquired-without-lease") {
+			t.Fatal(out)
+		}
+	})
+	t.Run("superseded tag", func(t *testing.T) {
+		out := run(t, `
+set -euo pipefail
+source "$1"
+taglog=$(mktemp)
+az_blob() {
+  local cmd=$1
+  shift
+  if [ "$cmd" = list ]; then
+    local i
+    for i in $(seq 1 25); do
+      printf 'test/%s-aaaaaaaaaaaa/agent\n' "$i"
+    done
+    return 0
+  fi
+  if [ "$cmd" = tag ]; then
+    printf '%s\n' "$*" >>"$taglog"
+    return 0
+  fi
+  echo "bad $cmd" >&2
+  return 1
+}
+tag_superseded_test "25-aaaaaaaaaaaa"
+if grep -q 'prod/' "$taglog" || grep -q 'channels/' "$taglog"; then
+  echo tagged-outside-test >&2
+  exit 1
+fi
+if grep -q 'test/25-aaaaaaaaaaaa/' "$taglog"; then
+  echo tagged-current >&2
+  exit 1
+fi
+if grep -q 'test/6-aaaaaaaaaaaa/' "$taglog"; then
+  echo tagged-kept >&2
+  exit 1
+fi
+if ! grep -q 'test/5-aaaaaaaaaaaa/agent' "$taglog"; then
+  echo missing-old >&2
+  cat "$taglog" >&2
+  exit 1
+fi
+if ! grep -q 'superseded=true' "$taglog"; then
+  echo missing-tag-value >&2
+  exit 1
+fi
+az_blob() { return 1; }
+if tag_superseded_test "25-aaaaaaaaaaaa"; then
+  echo list-failure-ignored >&2
+  exit 1
+fi
+`)
+		if strings.Contains(out, "tagged-") || strings.Contains(out, "missing-") || strings.Contains(out, "list-failure") {
+			t.Fatal(out)
+		}
+	})
+	t.Run("prod reuse", func(t *testing.T) {
+		if _, err := exec.LookPath("gpg"); err != nil {
+			t.Fatal("gpg is required")
+		}
+		dir := t.TempDir()
+		home := filepath.Join(dir, "gnupg")
+		if err := os.Mkdir(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		env := append(os.Environ(), "GNUPGHOME="+home)
+		gen := exec.Command("gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+			"--quick-generate-key", "hm-reuse <reuse@example.invalid>", "ed25519", "sign", "never")
+		gen.Env = env
+		if out, err := gen.CombinedOutput(); err != nil {
+			t.Fatalf("keygen: %v %s", err, out)
+		}
+		store := filepath.Join(dir, "store", "prod", "1.2.3")
+		if err := os.MkdirAll(store, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dist := filepath.Join(dir, "dist")
+		if err := os.Mkdir(dist, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		bin := []byte("agent-bytes-v1")
+		rel := []byte("{\"channel\":\"prod\",\"version\":\"1.2.3\",\"commit\":\"abc\",\"build\":9,\"release_id\":\"1.2.3\"}\n")
+		if err := os.WriteFile(filepath.Join(dist, "hypermesh-agent_1.2.3_linux_arm64"), bin, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(store, "release.json"), rel, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dist, "release.json"), rel, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sums := checksumNamed(map[string][]byte{
+			"hypermesh-agent_1.2.3_linux_arm64": bin,
+			"release.json":                      rel,
+		})
+		if err := os.WriteFile(filepath.Join(store, "checksums.txt"), sums, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sumPath := filepath.Join(home, "checksums.txt")
+		if err := os.WriteFile(sumPath, sums, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sigPath := filepath.Join(store, "checksums.txt.sig")
+		sign := exec.Command("gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+			"--detach-sign", "--output", sigPath, sumPath)
+		sign.Env = env
+		if out, err := sign.CombinedOutput(); err != nil {
+			t.Fatalf("sign: %v %s", err, out)
+		}
+		ops := filepath.Join(dir, "gpg-ops")
+		script := `
+set -euo pipefail
+source "$1"
+store=$2
+dist=$3
+ops=$4
+gpg() {
+  case " $* " in
+    *" --detach-sign "*) echo detach >>"$ops"; return 99 ;;
+  esac
+  command gpg "$@"
+}
+az_blob() {
+  local cmd=$1
+  shift
+  local name="" file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) name=$2; shift 2 ;;
+      --file) file=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$cmd" in
+    exists)
+      if [ -f "$store/$name" ]; then printf '%s\n' true; else printf '%s\n' false; fi
+      ;;
+    download)
+      cp "$store/$name" "$file"
+      ;;
+    *) echo "unexpected $cmd" >&2; return 1 ;;
+  esac
+}
+classify_prod_reuse 1.2.3 "$dist"
+`
+		cmd := exec.Command("bash", "-c", script, "bash", layout, filepath.Join(dir, "store"), dist, ops)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("reuse: %v\n%s", err, out)
+		}
+		text := string(out)
+		if !strings.Contains(text, "upload hypermesh-agent_1.2.3_linux_arm64") {
+			t.Fatalf("missing artifact was not uploaded:\n%s", text)
+		}
+		if !strings.Contains(text, "keep release.json") || !strings.Contains(text, "keep checksums.txt") {
+			t.Fatalf("stored manifest was not kept:\n%s", text)
+		}
+		if _, err := os.Stat(ops); err == nil {
+			t.Fatal("reuse detached a new signature")
+		}
+		if err := os.WriteFile(filepath.Join(dist, "hypermesh-agent_1.2.3_linux_arm64"), []byte("different"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd = exec.Command("bash", "-c", script, "bash", layout, filepath.Join(dir, "store"), dist, ops)
+		cmd.Env = env
+		out, err = cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "bump the version") {
+			t.Fatalf("differing artifact: %v %s", err, out)
+		}
+	})
+}
+
+func checksumNamed(files map[string][]byte) []byte {
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sortStrings(names)
+	var b strings.Builder
+	for _, name := range names {
+		sum := sha256.Sum256(files[name])
+		b.WriteString(hex.EncodeToString(sum[:]))
+		b.WriteString("  ")
+		b.WriteString(name)
+		b.WriteByte('\n')
+	}
+	return []byte(b.String())
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
 	}
 }
 

@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrRejected means the candidate must not be installed.
@@ -89,14 +91,21 @@ func SelectBinary(checksums, arch string) (string, error) {
 
 // GPGVerify checks a detached signature over checksums. pubkey is one
 // or more ASCII-armored public keys concatenated in one file (the
-// rotation overlap). A signature counts only when gpg prints VALIDSIG
-// and that fingerprint is one of the keys just imported. The process
-// exit code alone is not enough. A missing gpg, a bad key, or a bad
+// rotation overlap). allow is the configured fingerprint list. A
+// signature counts only when gpg prints GOODSIG and VALIDSIG, none of
+// EXPKEYSIG, REVKEYSIG, EXPSIG, BADSIG, or ERRSIG, and the VALIDSIG
+// fingerprint is in allow. A key that is only in the keyring is not
+// enough. An expired or revoked key is rejected. The process exit
+// code alone is not enough. A missing gpg, a bad key, or a bad
 // signature is a rejection. The agent does not fetch this file from
 // the release.
-func GPGVerify(checksums, sig, pubkey []byte) error {
+func GPGVerify(checksums, sig, pubkey []byte, allow []string) error {
 	if len(checksums) == 0 || len(sig) == 0 || len(pubkey) == 0 {
 		return fmt.Errorf("%w: checksums, signature, and pubkey are required", ErrRejected)
+	}
+	trusted, err := fingerprintSet(allow)
+	if err != nil || len(trusted) == 0 {
+		return fmt.Errorf("%w: update fingerprints are required", ErrRejected)
 	}
 	if _, err := exec.LookPath("gpg"); err != nil {
 		return fmt.Errorf("%w: gpg is not installed", ErrRejected)
@@ -129,13 +138,21 @@ func GPGVerify(checksums, sig, pubkey []byte) error {
 	if err := gpg(gnupg, "--no-default-keyring", "--keyring", ring, "--import", pubPath); err != nil {
 		return fmt.Errorf("%w: pubkey was not imported", ErrRejected)
 	}
-	trusted, err := importedFingerprints(gnupg, ring)
-	if err != nil || len(trusted) == 0 {
+	imported, colons, err := importedFingerprints(gnupg, ring)
+	if err != nil || len(imported) == 0 {
 		return fmt.Errorf("%w: pubkey was not imported", ErrRejected)
 	}
 	status, _ := gpgStatus(gnupg, "--no-default-keyring", "--keyring", ring, "--status-fd", "1", "--verify", sigPath, sumPath)
 	if !signatureTrusted(status, trusted) {
 		return fmt.Errorf("%w: checksum signature", ErrRejected)
+	}
+	for _, fp := range validsigFingerprints(status) {
+		if _, ok := imported[fp]; !ok {
+			return fmt.Errorf("%w: checksum signature", ErrRejected)
+		}
+		if !signingKeyUsable(colons, fp, time.Now()) {
+			return fmt.Errorf("%w: signing key is expired or revoked", ErrRejected)
+		}
 	}
 	return nil
 }
@@ -154,16 +171,67 @@ func gpgStatus(home string, args ...string) (string, error) {
 	return string(out), err
 }
 
-func importedFingerprints(home, ring string) (map[string]struct{}, error) {
+func importedFingerprints(home, ring string) (map[string]struct{}, string, error) {
 	out, err := gpgStatus(home, "--no-default-keyring", "--keyring", ring, "--with-colons", "--fingerprint")
 	set := parseColonFingerprints(out)
 	if len(set) == 0 {
 		if err != nil {
-			return nil, err
+			return nil, out, err
 		}
-		return nil, fmt.Errorf("no fingerprints")
+		return nil, out, fmt.Errorf("no fingerprints")
+	}
+	return set, out, nil
+}
+
+// ParseFingerprints splits a config value on commas and whitespace.
+// Each entry must be 40 or 64 hex characters. An empty value is an
+// empty list, which fails closed at verify time.
+func ParseFingerprints(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', ' ', '\n', '\t', ';':
+			return true
+		default:
+			return false
+		}
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		fp := normalizeFingerprint(p)
+		if !fingerprintHex(fp) {
+			return nil, fmt.Errorf("hypermesh: fingerprint %q is not 40 or 64 hex characters", strings.TrimSpace(p))
+		}
+		out = append(out, fp)
+	}
+	return out, nil
+}
+
+func fingerprintSet(allow []string) (map[string]struct{}, error) {
+	set := map[string]struct{}{}
+	for _, fp := range allow {
+		norm := normalizeFingerprint(fp)
+		if !fingerprintHex(norm) {
+			return nil, fmt.Errorf("hypermesh: fingerprint %q is not 40 or 64 hex characters", fp)
+		}
+		set[norm] = struct{}{}
 	}
 	return set, nil
+}
+
+func fingerprintHex(fp string) bool {
+	if len(fp) != 40 && len(fp) != 64 {
+		return false
+	}
+	for _, r := range fp {
+		if (r < '0' || r > '9') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // parseColonFingerprints reads field 10 of GnuPG fpr records.
@@ -182,31 +250,123 @@ func parseColonFingerprints(colons string) map[string]struct{} {
 	return set
 }
 
-// signatureTrusted is true when status contains a VALIDSIG line whose
-// signing fingerprint or primary-key fingerprint is in trusted.
-// GOODSIG without VALIDSIG is not enough.
+// signatureTrusted is true when status contains GOODSIG and a VALIDSIG
+// line whose signing fingerprint or primary-key fingerprint is in
+// trusted. EXPKEYSIG, REVKEYSIG, EXPSIG, BADSIG, and ERRSIG reject the
+// status even if VALIDSIG is also present. GOODSIG without VALIDSIG is
+// not enough. An empty trust set is not enough.
 func signatureTrusted(status string, trusted map[string]struct{}) bool {
 	if len(trusted) == 0 {
 		return false
 	}
-	ok := false
+	good := false
+	valid := false
+	for _, line := range strings.Split(status, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 || fields[0] != "[GNUPG:]" {
+			continue
+		}
+		switch fields[1] {
+		case "EXPKEYSIG", "REVKEYSIG", "EXPSIG", "BADSIG", "ERRSIG":
+			return false
+		case "GOODSIG":
+			good = true
+		case "VALIDSIG":
+			if len(fields) < 3 {
+				return false
+			}
+			if fingerprintTrusted(fields[2], trusted) {
+				valid = true
+				continue
+			}
+			primary := fields[len(fields)-1]
+			if primary != fields[2] && fingerprintTrusted(primary, trusted) {
+				valid = true
+				continue
+			}
+			return false
+		}
+	}
+	return good && valid
+}
+
+func validsigFingerprints(status string) []string {
+	var out []string
+	seen := map[string]struct{}{}
 	for _, line := range strings.Split(status, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) < 3 || fields[0] != "[GNUPG:]" || fields[1] != "VALIDSIG" {
 			continue
 		}
-		if fingerprintTrusted(fields[2], trusted) {
-			ok = true
-			continue
+		for _, fp := range []string{fields[2], fields[len(fields)-1]} {
+			fp = normalizeFingerprint(fp)
+			if !fingerprintHex(fp) {
+				continue
+			}
+			if _, ok := seen[fp]; ok {
+				continue
+			}
+			seen[fp] = struct{}{}
+			out = append(out, fp)
 		}
-		primary := fields[len(fields)-1]
-		if primary != fields[2] && fingerprintTrusted(primary, trusted) {
-			ok = true
-			continue
-		}
+	}
+	return out
+}
+
+// signingKeyUsable reports whether the colon listing shows fp as a
+// public key that is not expired or revoked. A missing record fails
+// closed. now is compared with the key's expiry timestamp.
+func signingKeyUsable(colons, fp string, now time.Time) bool {
+	fp = normalizeFingerprint(fp)
+	if !fingerprintHex(fp) {
 		return false
 	}
-	return ok
+	type rec struct {
+		validity string
+		expires  string
+	}
+	var cur *rec
+	found := false
+	var got rec
+	for _, line := range strings.Split(colons, "\n") {
+		parts := strings.Split(line, ":")
+		if len(parts) == 0 {
+			continue
+		}
+		switch parts[0] {
+		case "pub", "sub":
+			cur = &rec{}
+			if len(parts) > 1 {
+				cur.validity = parts[1]
+			}
+			if len(parts) > 6 {
+				cur.expires = parts[6]
+			}
+		case "fpr":
+			if cur == nil || len(parts) < 10 {
+				continue
+			}
+			if normalizeFingerprint(parts[9]) == fp {
+				got = *cur
+				found = true
+			}
+			cur = nil
+		}
+	}
+	if !found {
+		return false
+	}
+	switch got.validity {
+	case "e", "r", "i", "d", "n":
+		return false
+	}
+	if got.expires != "" {
+		sec, err := strconv.ParseInt(got.expires, 10, 64)
+		if err != nil || !now.Before(time.Unix(sec, 0)) {
+			return false
+		}
+	}
+	return true
 }
 
 func fingerprintTrusted(fp string, trusted map[string]struct{}) bool {
