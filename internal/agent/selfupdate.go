@@ -151,9 +151,11 @@ func (a *Agent) updateSource() update.Source {
 
 func candidateFromManifest(m *api.UpdateManifest) *update.Candidate {
 	c := &update.Candidate{
-		Channel: m.Channel,
-		Version: m.Version,
-		Commit:  m.Commit,
+		Channel:   m.Channel,
+		Version:   m.Version,
+		Commit:    m.Commit,
+		ReleaseID: m.ReleaseID,
+		Build:     m.Build,
 	}
 	for _, art := range m.Artifacts {
 		c.Artifacts = append(c.Artifacts, update.Artifact{

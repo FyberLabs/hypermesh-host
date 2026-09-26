@@ -27,6 +27,8 @@ type Candidate struct {
 	Channel   string
 	Version   string
 	Commit    string
+	ReleaseID string
+	Build     int
 	Artifacts []Artifact
 }
 

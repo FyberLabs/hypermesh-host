@@ -10,10 +10,13 @@
 #   test/<release-id>/...
 #   prod/<release-id>/...
 #
-# test release-id is UTC yyyymmddHHMMSS plus the first 12 hex chars of
-# the commit. prod release-id is X.Y.Z. A release-id directory is not
-# overwritten. The channel manifest is uploaded only after every
-# artifact in that directory has been uploaded and sha256-checked.
+# test release-id is <run number>-<first 12 hex chars of the commit>.
+# prod release-id is X.Y.Z. Blobs go under test/<release-id>/ or
+# prod/<release-id>/. A release-id directory is not overwritten.
+# channels/<channel>.json is uploaded only after every artifact in
+# that directory has been uploaded and sha256-checked. The index is
+# exactly channel, version, commit, release_id, build, and artifacts
+# of name, sha256, and size. It has no url. The plane builds URLs.
 #
 # The manifest upload is one Put Blob of a few hundred bytes. Readers
 # see the previous document or the new one, never a partial file.
@@ -100,8 +103,7 @@ else
   tag=test
   version=0.0.0
   prerelease=true
-  ts=$(date -u +%Y%m%d%H%M%S)
-  release_id=$(release_id_test "$ts" "$GITHUB_SHA")
+  release_id=$(release_id_test "$build" "$GITHUB_SHA")
 fi
 case "$release_id" in
   *[/\\]*|..*) echo "hypermesh release: release-id is not a single path segment" >&2; exit 1 ;;
@@ -229,13 +231,12 @@ for name in sys.argv[8:]:
         "name": name,
         "sha256": hashlib.sha256(data).hexdigest(),
         "size": len(data),
-        "path": "%s/%s/%s" % (channel, release_id, name),
     })
 doc = {
     "channel": channel,
-    "release_id": release_id,
     "version": version,
     "commit": commit,
+    "release_id": release_id,
     "build": int(build),
     "artifacts": arts,
 }

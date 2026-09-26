@@ -649,14 +649,16 @@ func TestLatestUpdateUsesDeviceCredential(t *testing.T) {
 		switch mode {
 		case "ok":
 			writeJSON(w, http.StatusOK, UpdateManifest{
-				Channel: "test",
-				Version: "0.0.0",
-				Commit:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				Channel:   "test",
+				Version:   "0.0.0",
+				Commit:    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				ReleaseID: "42-bbbbbbbbbbbb",
+				Build:     42,
 				Artifacts: []UpdateArtifact{{
 					Name:   "checksums.txt",
 					SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 					Size:   12,
-					URL:    "https://blob.example/c/test/0.0.0/checksums.txt?" + sas,
+					URL:    "https://blob.example/c/test/42-bbbbbbbbbbbb/checksums.txt?" + sas,
 				}},
 			})
 		case "empty":
@@ -676,7 +678,7 @@ func TestLatestUpdateUsesDeviceCredential(t *testing.T) {
 	if gotPath != "/api/v1/hypermesh/agent/updates/test" || gotQuery != "device_id="+testDevice {
 		t.Fatalf("path %s query %s", gotPath, gotQuery)
 	}
-	if m == nil || m.Channel != "test" || len(m.Artifacts) != 1 || !strings.Contains(m.Artifacts[0].URL, sas) {
+	if m == nil || m.Channel != "test" || m.Build != 42 || m.ReleaseID != "42-bbbbbbbbbbbb" || len(m.Artifacts) != 1 || !strings.Contains(m.Artifacts[0].URL, sas) {
 		t.Fatalf("manifest %+v", m)
 	}
 	mode = "empty"

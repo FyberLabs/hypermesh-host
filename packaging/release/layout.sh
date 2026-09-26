@@ -1,13 +1,15 @@
 # Release-id helpers for publish-agent.sh.
 # Tests source this file. It does not upload and does not read secrets.
 
-# release_id_test TIMESTAMP SHA
-# TIMESTAMP is UTC yyyymmddHHMMSS. SHA is the full 40-hex commit.
-# The result is <timestamp>-<first 12 hex chars>. String order is time order.
+# release_id_test RUN SHA
+# RUN is the positive workflow run number (GITHUB_RUN_NUMBER). SHA is
+# the full 40-hex commit. The result is <run>-<first 12 hex chars>.
+# That directory is immutable. Order is the integer build, not the
+# string order of this id.
 release_id_test() {
-  local ts=$1 sha=$2 hex
-  if ! [[ "$ts" =~ ^[0-9]{14}$ ]]; then
-    echo "hypermesh release: timestamp must be UTC yyyymmddHHMMSS" >&2
+  local run=$1 sha=$2 hex
+  if ! [[ "$run" =~ ^[1-9][0-9]*$ ]]; then
+    echo "hypermesh release: run number must be a positive integer" >&2
     return 1
   fi
   hex=$(printf '%s' "$sha" | tr 'A-F' 'a-f')
@@ -15,7 +17,7 @@ release_id_test() {
     echo "hypermesh release: commit must be 40 hex characters" >&2
     return 1
   fi
-  printf '%s-%s\n' "$ts" "${hex:0:12}"
+  printf '%s-%s\n' "$run" "${hex:0:12}"
 }
 
 # semver_less A B

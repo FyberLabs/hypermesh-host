@@ -8,7 +8,7 @@ The agent checks for a new binary on a channel set in `/etc/hypermesh/agent.env`
 
 | `HYPERMESH_UPDATE_CHANNEL` | What it tracks | Blob prefix |
 |---|---|---|
-| `test` | Builds of `main`. The commit in `release.json` is the identity. The binary version stays `0.0.0`. | `test/<release-id>/`. release-id is UTC `yyyymmddHHMMSS` plus the first 12 hex chars of the commit (`20260926182316-0123456789ab`). A later build sorts after an earlier one. The directory is not overwritten. |
+| `test` | Builds of `main`. The commit in `release.json` is the identity. The binary version stays `0.0.0`. | `test/<release-id>/`. release-id is `<run number>-<first 12 hex chars of the commit>` (`42-0123456789ab`). The directory is not overwritten. Order is the integer `build`, not the string order of the release-id. |
 | `prod` | Tagged semver `vX.Y.Z`. A newer version installs. An older one does not. | `prod/<X.Y.Z>/`. release-id is the semver with no leading `v`. The directory is not overwritten. The publisher also refuses to move the pointer to a semver or a build number that is not strictly newer. |
 
 Workflows: `.github/workflows/release.yml` (tag `vX.Y.Z`) and `.github/workflows/release-test.yml` (push to `main`). Both run `packaging/release/publish-agent.sh`. A GitHub Release is also created so a person can download the files. The agent does not read it.
@@ -18,7 +18,7 @@ The channel pointer is a different object, outside `test/` and `prod/`:
 - `channels/test.json`
 - `channels/prod.json`
 
-Each one names the current `release_id`, `version`, `commit`, `build`, and the artifact `name`, `sha256`, `size`, and `path` (`<channel>/<release-id>/<name>`). It has no SAS URL. The publisher writes it only after every object under `<channel>/<release-id>/` has been uploaded and downloaded back for a SHA-256 match. The upload is one Put Blob of a few hundred bytes, so a reader sees the previous document or the whole new one. A crash before that write leaves the channel on the last complete build. An existing object in a release-id directory is left in place; if its bytes differ, the check fails and the channel manifest is not moved. `channels/*.json` stays outside `test/`, so the 20-day lifecycle rule cannot delete the pointer.
+Each one is exactly `channel`, `version`, `commit`, `release_id`, `build`, and `artifacts` of `name`, `sha256`, and `size`. It has no `url` and no `path`. The plane builds each blob URL as `<channel>/<release_id>/<name>` (`release_id` defaults to `version` only when the index omits it; this publisher always sets it). The publisher writes the index only after every object under `<channel>/<release-id>/` (both binaries, `release.json`, `checksums.txt`, both signature files, and the pubkey) has been uploaded and downloaded back for a SHA-256 match. The upload is one Put Blob of a few hundred bytes, so a reader sees the previous document or the whole new one. A crash before that write leaves the channel on the last complete build. An existing object in a release-id directory is left in place; if its bytes differ, the check fails and the channel manifest is not moved. `channels/*.json` stays outside `test/`, so the 20-day lifecycle rule cannot delete the pointer. A missing `channels/<channel>.json` is an empty channel: the plane returns 204 and the host skips.
 
 Infra deletes blobs under `test/` 20 days after they were last modified. `channels/test.json`, `channels/prod.json`, and `prod/` are outside that rule. If the test manifest still names a directory that rule has removed, the host's download fails, nothing is installed, and the next check tries again.
 
@@ -62,6 +62,8 @@ X-Tenant-ID: <tenant uuid>
   "channel": "test",
   "version": "0.0.0",
   "commit": "0123456789abcdef0123456789abcdef01234567",
+  "release_id": "42-0123456789ab",
+  "build": 42,
   "artifacts": [
     {
       "name": "checksums.txt",
@@ -93,7 +95,7 @@ X-Tenant-ID: <tenant uuid>
 
 `checksums.txt.asc` may be sent instead of, or in addition to, `checksums.txt.sig`. One signature that verifies is enough. Include the binary for the host's arch (`linux_arm64` or `linux_amd64`). `sha256` is 64 hex characters. `size` is the exact byte length. The agent caps the download at `size` and rejects a different length.
 
-The host body has no `release_id`. The plane reads `release_id` from `channels/<channel>.json` and puts the directory into the SAS URL. An extra `release_id` field on this response would be ignored.
+The plane reads `channels/<channel>.json` and puts `<channel>/<release_id>/<name>` into the SAS URL. The host accepts `build` and `release_id` on this 200 body. `build` must equal the `build` in the signed `release.json`. A missing index is `204`.
 
 `204` means that channel has no build. The agent skips.
 
@@ -110,7 +112,7 @@ The signature and the SHA-256 in `checksums.txt` are the trust anchor. The plane
 1. `GET` the path above with the device credential.
 2. Download `checksums.txt` and `checksums.txt.sig` (or `.asc`) from the SAS URLs. The download sends no `Authorization` header. The read stops at `size`.
 3. `gpg --status-fd 1 --verify` with the keys in `/etc/hypermesh/update-pubkey.asc`. The status must contain a `VALIDSIG` line whose fingerprint is one of those imported keys. A zero exit code without that line rejects.
-4. Download `release.json`. Its SHA-256 must be in the signed checksum file, and it must match the plane's channel, version, and commit. `build` is read from this signed file. The plane body does not have to send it.
+4. Download `release.json`. Its SHA-256 must be in the signed checksum file, and its channel, version, commit, and `build` must match the plane's 200 body. The host uses that signed `build` for the newer-than-current check.
 5. Download the `linux/<arch>` binary. Its SHA-256 must be in the signed checksum file. Failure rejects.
 6. A signed `build` that is less than or equal to the running build is refused. A build this host already rolled back is skipped until a strictly newer build appears. Same test commit, or a prod version that is not newer, skips. A lease or an unacked job result defers. Otherwise install.
 

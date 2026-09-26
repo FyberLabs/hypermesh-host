@@ -136,7 +136,7 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	if err := json.Unmarshal(manRaw, &man); err != nil {
 		return Plan{Action: ActionReject, Reason: "release.json rejected"}, nil
 	}
-	if man.Channel != cand.Channel || man.Version != cand.Version || !strings.EqualFold(strings.TrimSpace(man.Commit), strings.TrimSpace(cand.Commit)) {
+	if man.Channel != cand.Channel || man.Version != cand.Version || !strings.EqualFold(strings.TrimSpace(man.Commit), strings.TrimSpace(cand.Commit)) || man.Build != cand.Build {
 		return Plan{Action: ActionReject, Reason: "signed release.json does not match the plane"}, nil
 	}
 	plan := Decide(cfg.Channel, cfg.CurrentVersion, cfg.CurrentCommit, cfg.CurrentBuild, cfg.BadBuild, man, cfg.Busy)

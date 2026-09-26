@@ -2,7 +2,7 @@
 // installs it without touching WireGuard.
 //
 // test tracks builds of main. Each build is an immutable blob prefix
-// test/<UTC yyyymmddHHMMSS>-<12 hex of the commit>/.
+// test/<run number>-<12 hex of the commit>/.
 // prod tracks tagged semver releases at prod/<X.Y.Z>/.
 // The agent learns the candidate from the control plane, not from GitHub.
 // An empty channel does not check.

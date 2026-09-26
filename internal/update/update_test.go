@@ -795,6 +795,8 @@ func planeSource(man Manifest, sums, sig, manRaw []byte, binName string, bin []b
 			Channel:   man.Channel,
 			Version:   man.Version,
 			Commit:    man.Commit,
+			ReleaseID: man.ReleaseID,
+			Build:     man.Build,
 			Artifacts: arts,
 		},
 		files: files,
@@ -831,13 +833,13 @@ func TestReleaseIDAndManifestOrder(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 	sha := "0123456789abcdef0123456789abcdef01234567"
-	early := id("release_id_test", "20260926120000", sha)
-	later := id("release_id_test", "20260926120001", sha)
-	if early != "20260926120000-0123456789ab" || later != "20260926120001-0123456789ab" {
+	early := id("release_id_test", "9", sha)
+	later := id("release_id_test", "10", sha)
+	if early != "9-0123456789ab" || later != "10-0123456789ab" {
 		t.Fatalf("ids %s %s", early, later)
 	}
-	if early >= later {
-		t.Fatalf("release ids do not sort by time: %s %s", early, later)
+	if _, err := exec.Command("bash", "-c", `source "$1"; release_id_test "$2" "$3"`, "bash", layout, "2026-09-26", sha).CombinedOutput(); err == nil {
+		t.Fatal("test release id accepted a timestamp")
 	}
 	if id("release_id_prod", "1.2.3") != "1.2.3" {
 		t.Fatal("prod release id")
@@ -895,6 +897,23 @@ func TestReleaseIDAndManifestOrder(t *testing.T) {
 	if !strings.Contains(text, "channels/${channel}.json") || !strings.Contains(text, "--overwrite false") {
 		t.Fatal("channel manifest path or immutable upload is missing")
 	}
+	if !strings.Contains(text, `release_id=$(release_id_test "$build" "$GITHUB_SHA")`) {
+		t.Fatal("test release id is not <run number>-<shortsha>")
+	}
+	start := strings.Index(text, "write_channel_manifest()")
+	end := strings.Index(text, "# Single Put Blob")
+	if start < 0 || end < start {
+		t.Fatal("channel manifest writer is missing")
+	}
+	block := text[start:end]
+	if strings.Contains(block, `"path"`) || strings.Contains(block, `"url"`) {
+		t.Fatal("channel index must not carry path or url")
+	}
+	for _, key := range []string{`"channel"`, `"version"`, `"commit"`, `"release_id"`, `"build"`, `"name"`, `"sha256"`, `"size"`} {
+		if !strings.Contains(block, key) {
+			t.Fatalf("channel index missing %s", key)
+		}
+	}
 }
 
 func TestStaleBlobDoesNotInstall(t *testing.T) {
@@ -940,6 +959,49 @@ func TestStaleBlobDoesNotInstall(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "sig=") || strings.Contains(err.Error(), "not-logged") {
 		t.Fatalf("error leaked sas: %v", err)
+	}
+}
+
+func TestPlaneBuildMustMatchSigned(t *testing.T) {
+	dir := t.TempDir()
+	pub := filepath.Join(dir, "pub.asc")
+	if err := os.WriteFile(pub, []byte("pubkey"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := []byte("#!/new-agent")
+	man := Manifest{
+		Channel: ChannelTest, Version: "0.0.0", Commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		ReleaseID: "2-bbbbbbbbbbbb", Build: 2,
+	}
+	manRaw, err := json.Marshal(man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binName := "hypermesh-agent_0.0.0_linux_arm64"
+	sums := checksumFile(map[string][]byte{
+		binName:      bin,
+		ManifestName: manRaw,
+	})
+	src := planeSource(man, sums, []byte("sig"), manRaw, binName, bin)
+	src.cand.Build = 9
+	var installed bool
+	plan, err := Tick(context.Background(), Config{
+		Channel:       ChannelTest,
+		CurrentCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Arch:          "arm64",
+		BinaryPath:    "/usr/local/bin/hypermesh-agent",
+		PubKeyPath:    pub,
+		MarkerPath:    filepath.Join(dir, MarkerName),
+	}, Hooks{
+		Source: src,
+		Verify: func(_, _, _ []byte) error { return nil },
+		Install: func(string, []byte, string) (string, error) {
+			installed = true
+			return "", nil
+		},
+	})
+	if err != nil || installed || plan.Action != ActionReject {
+		t.Fatalf("mismatched build installed: %+v %v", plan, err)
 	}
 }
 

@@ -38,6 +38,8 @@ type UpdateManifest struct {
 	Channel   string           `json:"channel"`
 	Version   string           `json:"version"`
 	Commit    string           `json:"commit"`
+	ReleaseID string           `json:"release_id,omitempty"`
+	Build     int              `json:"build"`
 	Artifacts []UpdateArtifact `json:"artifacts"`
 }
 
