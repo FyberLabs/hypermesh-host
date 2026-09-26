@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/FyberLabs/hypermesh-host/deploy/agx"
+	"github.com/FyberLabs/hypermesh-host/internal/agent"
 )
 
 const (
@@ -45,7 +46,10 @@ func RenderAgentEnv(controlPlane, tenant, token, stateDir, gguf string, enrolled
 	}
 	gguf = strings.TrimSpace(gguf)
 	if gguf == "" {
-		return "", fmt.Errorf("GGUF path is required")
+		// Install path default. An explicit HYPERMESH_GGUF_PATH still wins
+		// when the caller passes one. Existing hosts that already set the
+		// variable keep that file.
+		gguf = agent.DefaultModelPath
 	}
 	stateDir = strings.TrimSpace(stateDir)
 	if stateDir == "" {

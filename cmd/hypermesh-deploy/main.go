@@ -34,7 +34,7 @@ func main() {
 	fs.StringVar(&opt.TenantID, "tenant-id", os.Getenv("HYPERMESH_TENANT_ID"), "marketplace tenant UUID")
 	fs.StringVar(&tokenFile, "enroll-token-file", os.Getenv("HYPERMESH_ENROLL_TOKEN_FILE"), "file containing the one-time enroll token (or HYPERMESH_ENROLL_TOKEN)")
 	fs.StringVar(&opt.StateDir, "state-dir", "/var/lib/hypermesh", "agent state directory")
-	fs.StringVar(&opt.GGUFPath, "gguf-path", os.Getenv("HYPERMESH_GGUF_PATH"), "host GGUF file for the existing agent")
+	fs.StringVar(&opt.GGUFPath, "gguf-path", os.Getenv("HYPERMESH_GGUF_PATH"), "host GGUF file (default /var/lib/hypermesh/models/model.gguf when empty)")
 	fs.StringVar(&opt.EnvFile, "env-file", "/etc/hypermesh/agent.env", "agent env file")
 	fs.StringVar(&opt.UnitDir, "unit-dir", "/etc/systemd/system", "systemd unit directory")
 	fs.StringVar(&opt.Serial, "serial", "", "known-host serial (required); device id comes from the plane list")

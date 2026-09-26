@@ -21,12 +21,12 @@ import (
 
 // GGUFPublisherAllowlist matches aiuditor_service.crawl.GGUF_PUBLISHER_ALLOWLIST.
 var GGUFPublisherAllowlist = map[string]struct{}{
-	"bartowski":           {},
-	"thebloke":            {},
-	"quantfactory":        {},
-	"ggml-org":            {},
-	"lmstudio-community":  {},
-	"fyberlabs":           {},
+	"bartowski":          {},
+	"thebloke":           {},
+	"quantfactory":       {},
+	"ggml-org":           {},
+	"lmstudio-community": {},
+	"fyberlabs":          {},
 }
 
 // TrustedDownloadURL turns a source_ref (repo@rev/file or https HF URL) into
@@ -124,13 +124,40 @@ func HTTPGet(client *http.Client) Fetcher {
 }
 
 // ToFile downloads url into dest and verifies the sha256 pin.
-// Fail closed on mismatch. Does not leave a mismatched file in place.
+// Fail closed on mismatch. Does not leave a mismatched or partial file.
+// Free-space preflight uses DefaultFloorBytes and DefaultMarginBytes.
+// The size comes from HTTP HEAD Content-Length. Unknown size fails closed
+// and downloads nothing.
 func ToFile(ctx context.Context, dest, rawURL, pin string, fetch Fetcher) error {
+	return ToFileWith(ctx, dest, rawURL, pin, fetch, Limits{})
+}
+
+// ToFileWith is ToFile with an explicit size and disk budget.
+// lim.Expected > 0 skips HEAD. Otherwise HEAD Content-Length is required.
+// Preflight runs before any byte is written. The copy is capped at the
+// size preflight approved: one extra byte aborts with
+// size_exceeded: approved N and removes the partial. A failed copy,
+// close, pin check, or rename also removes the partial lab-pull-*.gguf.
+func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, lim Limits) error {
 	want := strings.ToLower(strings.TrimSpace(pin))
 	if !strings.HasPrefix(want, "sha256:") || len(want) < len("sha256:")+64 {
 		return fmt.Errorf("hypermesh: pinned hash required")
 	}
 	want = want[len("sha256:"):]
+	if err := validateDest(dest); err != nil {
+		return err
+	}
+	size, err := ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
+	if err != nil || size <= 0 {
+		free, statErr := lim.stat(dest)
+		if statErr != nil || free < 0 {
+			return &DiskError{StatErr: true}
+		}
+		return &DiskError{Unknown: true, Free: free}
+	}
+	if err := Preflight(dest, size, lim); err != nil {
+		return err
+	}
 	if fetch == nil {
 		fetch = HTTPGet(nil)
 	}
@@ -150,7 +177,13 @@ func ToFile(ctx context.Context, dest, rawURL, pin string, fetch Fetcher) error 
 	}
 	tmpName := tmp.Name()
 	sum := sha256.New()
-	_, copyErr := io.Copy(io.MultiWriter(tmp, sum), body)
+	// Read one past the approved size so a lying Content-Length or
+	// size_bytes cannot fill the disk. LimitReader stops there.
+	limit := size + 1
+	if limit <= 0 {
+		limit = size
+	}
+	n, copyErr := io.Copy(io.MultiWriter(tmp, sum), io.LimitReader(body, limit))
 	closeErr := tmp.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmpName)
@@ -159,6 +192,10 @@ func ToFile(ctx context.Context, dest, rawURL, pin string, fetch Fetcher) error 
 	if closeErr != nil {
 		_ = os.Remove(tmpName)
 		return closeErr
+	}
+	if n > size {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("size_exceeded: approved %d", size)
 	}
 	got := hex.EncodeToString(sum.Sum(nil))
 	if got != want {

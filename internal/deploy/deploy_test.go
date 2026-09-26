@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/deploy/agx"
+	"github.com/FyberLabs/hypermesh-host/internal/agent"
 )
 
 const (
@@ -540,6 +541,64 @@ func (l *planeLab) arm(id string) {
 	}
 	now := time.Now()
 	l.liveHB = &now
+}
+
+func TestConfigureDefaultsModelPathAndDirectory(t *testing.T) {
+	root := t.TempDir()
+	var units [][]string
+	opt := readyOptions(t, root, nil, &units)
+	opt.GGUFPath = ""
+	opt.StateDir = "/var/lib/hypermesh"
+	if err := configure(context.Background(), opt); err != nil {
+		t.Fatal(err)
+	}
+	env, err := os.ReadFile(filepath.Join(root, "etc/hypermesh/agent.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(env), "HYPERMESH_GGUF_PATH="+agent.DefaultModelPath+"\n") {
+		t.Fatalf("env default path missing:\n%s", env)
+	}
+	models := filepath.Join(root, "var/lib/hypermesh/models")
+	fi, err := os.Stat(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o755 {
+		t.Fatalf("models mode %o", fi.Mode().Perm())
+	}
+	state, err := os.Stat(filepath.Join(root, "var/lib/hypermesh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode().Perm() != 0o700 {
+		t.Fatalf("state mode %o", state.Mode().Perm())
+	}
+	unit, err := os.ReadFile(filepath.Join(root, "etc/systemd/system", agentUnitName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(unit), "HYPERMESH_GGUF_PATH="+agent.DefaultModelPath) {
+		t.Fatal("unit missing default GGUF path")
+	}
+}
+
+func TestRenderAgentEnvKeepsExplicitGGUFPath(t *testing.T) {
+	const cottage = "/home/chris/hypermesh/workload/model.gguf"
+	body, err := RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "/var/lib/hypermesh", cottage, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "HYPERMESH_GGUF_PATH="+cottage+"\n") {
+		t.Fatalf("explicit path lost:\n%s", body)
+	}
+	body, err = RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "HYPERMESH_GGUF_PATH="+agent.DefaultModelPath+"\n") {
+		t.Fatalf("empty path did not default:\n%s", body)
+	}
 }
 
 func readyOptions(t *testing.T, root string, lab *planeLab, units *[][]string) Options {

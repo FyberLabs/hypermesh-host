@@ -7,6 +7,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
+# Default weights file. agent.env overrides this when HYPERMESH_GGUF_PATH
+# is set. An empty or omitted variable uses the same path in the agent.
+Environment=HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf
 EnvironmentFile=-/etc/hypermesh/agent.env
 ExecStart=/usr/local/bin/hypermesh-agent
 Restart=on-failure

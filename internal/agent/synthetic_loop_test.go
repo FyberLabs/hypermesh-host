@@ -137,7 +137,7 @@ func TestSyntheticAgentLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var logBuf strings.Builder
+	var logBuf syncBuf
 	a := newTestAgent(t, srv.URL, dir, uptime, "one-time-token", "")
 	wantGGUF := readyLeaseStart(t, a)
 	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
