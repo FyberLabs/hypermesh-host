@@ -144,7 +144,9 @@ Build the on-box image after overlay: [workload/README.md](workload/README.md).
 
 ## Update
 
-Leave `agent.env` and `device.json` alone. Do not restart `hypermesh-agent` while a job is unacked unless heartbeats have been down for good. A restart re-runs that unacked job from scratch. An omitted `HYPERMESH_GGUF_PATH` picks up `/var/lib/hypermesh/models/model.gguf` from the new binary; an explicit path is kept.
+Leave `agent.env` and `device.json` alone. Do not restart `hypermesh-agent` while a job is unacked unless heartbeats have been down for good. A restart re-runs that unacked job from scratch. An omitted `HYPERMESH_GGUF_PATH` picks up `/var/lib/hypermesh/models/model.gguf` from the new binary; an explicit path is kept. `lease_start` refuses until a `lab_pull` writes that file. Downloaded weights are 0600 root under the 0700 state directory; `models/` is 0755, which does not make the files readable to other users. Rootful Docker bind-mounts them as root.
+
+Check the root directory for leftover `lab-pull-*.gguf` partials from a pull that ran before this fix, and remove any that are still there (`find / -maxdepth 1 -name 'lab-pull-*.gguf'`).
 
 ```bash
 cd hypermesh-host

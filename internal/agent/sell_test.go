@@ -128,6 +128,58 @@ func TestSellPauseAppliesAndHeartbeatReports(t *testing.T) {
 	}
 }
 
+func TestSellPauseRacesHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	uptime := filepath.Join(dir, "uptime")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
+	a.state.DeviceID = testDevice
+	a.now = func() time.Time { return time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC) }
+
+	const n = 40
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(n * 2)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = a.effectiveSell()
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			out := a.sellPause(api.Job{
+				Kind:     api.KindSellPause,
+				DeviceID: testDevice,
+				Until:    "2026-12-01T00:00:00Z",
+			})
+			if !out.Passed || out.SellState != api.SellPaused {
+				t.Errorf("sell_pause %+v", out)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	got := a.effectiveSell()
+	if got.SellState != api.SellPaused {
+		t.Fatalf("sell_state %q want paused", got.SellState)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sell.json.tmp")); !os.IsNotExist(err) {
+		t.Fatalf("fixed temp sell.json.tmp present: %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "sell.json.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temp files left: %v", matches)
+	}
+}
+
 func TestSellPauseDeviceMismatchDoesNotPause(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")

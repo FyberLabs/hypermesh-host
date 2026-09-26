@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -72,6 +75,67 @@ func TestToFileVerifiesPinWithoutNetwork(t *testing.T) {
 	}
 	if leftovers := partials(t, dir); len(leftovers) != 0 {
 		t.Fatalf("mismatch left partial files: %v", leftovers)
+	}
+}
+
+func TestToFileAbortsWhenStreamExceedsApprovedSize(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "model.gguf")
+	const approved int64 = 10
+	err := ToFileWith(context.Background(), dest, "https://huggingface.co/bartowski/x/resolve/main/model.gguf",
+		"sha256:"+strings.Repeat("ab", 32),
+		func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(strings.Repeat("x", 100))), nil
+		},
+		plentyLimits(approved),
+	)
+	want := "size_exceeded: approved 10"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v want %q", err, want)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("dest written: %v", statErr)
+	}
+	if leftovers := partials(t, dir); len(leftovers) != 0 {
+		t.Fatalf("partials %v", leftovers)
+	}
+}
+
+func TestToFileAbortsWhenHEADLiesAboutLength(t *testing.T) {
+	const approved = 10
+	payload := strings.Repeat("y", 80)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(approved))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_, _ = io.WriteString(w, payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "model.gguf")
+	err := ToFileWith(context.Background(), dest, srv.URL,
+		"sha256:"+strings.Repeat("ab", 32),
+		HTTPGet(srv.Client()),
+		Limits{
+			FloorSet:  true,
+			MarginSet: true,
+			Stat: func(string) (int64, error) {
+				return 1 << 40, nil
+			},
+		},
+	)
+	want := "size_exceeded: approved 10"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v want %q", err, want)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("dest written: %v", statErr)
+	}
+	if leftovers := partials(t, dir); len(leftovers) != 0 {
+		t.Fatalf("partials %v", leftovers)
 	}
 }
 

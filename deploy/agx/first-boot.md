@@ -55,7 +55,7 @@ sudo cp deploy/agx/hypermesh-wg.service /etc/systemd/system/
 sudo cp deploy/agx/agent.env.example /etc/hypermesh/agent.env
 ```
 
-Set tenant id and enroll token. `agent.env.example` already sets `HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf` (the binary default when the variable is omitted). Replace that line only when this box should keep a different file. The agent creates `models/` on start (root:root, mode 0755). On AGX64-1 set `HYPERMESH_WG_USERSPACE=1` (there is no wireguard kernel module). `chmod 0600` the env file. Install `wireguard-go` so `/usr/bin/wireguard-go` exists, plus `wireguard-tools` (`wg`, and `ip` from iproute2).
+Set tenant id and enroll token. `agent.env.example` already sets `HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf` (the binary default when the variable is omitted). Replace that line only when this box should keep a different file. The agent creates `models/` on start (root:root, mode 0755). `/var/lib/hypermesh` stays 0700, and downloaded weight files are 0600 root, so 0755 on `models/` does not make the weights readable to other users. Rootful Docker bind-mounts them as root. On AGX64-1 set `HYPERMESH_WG_USERSPACE=1` (there is no wireguard kernel module). `chmod 0600` the env file. Install `wireguard-go` so `/usr/bin/wireguard-go` exists, plus `wireguard-tools` (`wg`, and `ip` from iproute2).
 
 ```bash
 sudo chmod 0600 /etc/hypermesh/agent.env
@@ -155,4 +155,13 @@ sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 sudo systemctl restart hypermesh-agent
 ```
 
-AGX64-1 with `HYPERMESH_GGUF_PATH` unset picks up `/var/lib/hypermesh/models/model.gguf` from the new binary on that restart. The models directory is created on start (root:root, 0755). Do not hand-edit `agent.env` for that default. A host that already set `HYPERMESH_GGUF_PATH` keeps that path.
+AGX64-1 with `HYPERMESH_GGUF_PATH` unset picks up `/var/lib/hypermesh/models/model.gguf` from the new binary on that restart. The models directory is created on start (root:root, 0755). Downloaded files are 0600 root, and `/var/lib/hypermesh` is 0700, so the directory mode does not make the weights readable. Rootful Docker bind-mounts them as root. Do not hand-edit `agent.env` for that default. A host that already set `HYPERMESH_GGUF_PATH` keeps that path.
+
+Check the root directory for leftover `lab-pull-*.gguf` partials from a pull that ran before this fix, and remove any that are still there:
+
+```bash
+sudo find / -maxdepth 1 -name 'lab-pull-*.gguf' -print
+sudo find / -maxdepth 1 -name 'lab-pull-*.gguf' -delete
+```
+
+On AGX64-1 none were present at 2026-09-26 12:52 ET. `lease_start` refuses until a `lab_pull` succeeds into `/var/lib/hypermesh/models` (the new default file is `model.gguf` there).

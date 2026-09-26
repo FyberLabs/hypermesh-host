@@ -74,6 +74,7 @@ type Agent struct {
 	headLength func(ctx context.Context, rawURL string) (int64, error)
 
 	leaseMu    sync.RWMutex
+	sellMu     sync.Mutex
 	healthMu   sync.Mutex
 	lastSyncAt time.Time
 	haveSync   bool
@@ -880,7 +881,7 @@ func labPullFailReason(err error) string {
 		return disk.Error()
 	}
 	msg := err.Error()
-	if strings.HasPrefix(msg, "insufficient_disk:") {
+	if strings.HasPrefix(msg, "insufficient_disk:") || strings.HasPrefix(msg, "size_exceeded:") {
 		return msg
 	}
 	switch {

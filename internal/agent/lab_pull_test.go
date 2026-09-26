@@ -238,3 +238,10 @@ func TestLabPullUnknownSizeDownloadsNothing(t *testing.T) {
 		t.Fatal("dest written")
 	}
 }
+
+func TestLabPullFailReasonKeepsSizeExceeded(t *testing.T) {
+	got := labPullFailReason(errors.New("size_exceeded: approved 10"))
+	if got != "size_exceeded: approved 10" {
+		t.Fatalf("reason %q", got)
+	}
+}

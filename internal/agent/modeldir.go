@@ -8,11 +8,16 @@ import (
 )
 
 // ensureModelDir creates the parent of the weights file.
-// The models directory is mode 0755. When this process is root, it is
-// owned by root:root. Ancestors that do not exist yet (usually
-// /var/lib/hypermesh, which also holds device.json) are created mode 0700
-// so a fresh box does not leave the state directory world-accessible.
-// An existing state directory is left alone.
+// The models directory is mode 0755, root:root when this process is root.
+// Ancestors that do not exist yet (usually /var/lib/hypermesh, which also
+// holds device.json) are created mode 0700 so a fresh box does not leave
+// the state directory world-accessible. An existing state directory is
+// left alone. Downloaded files are 0600 (CreateTemp) and owned by root.
+// The 0700 parent blocks other users from traversing to them. Rootful
+// Docker can still bind-mount the file: dockerd resolves it as root, and
+// the workload image has no USER so the process is uid 0. Rootless Docker
+// or a user-namespace remap cannot read it. Directory mode 0755 does not
+// make the weights readable.
 func ensureModelDir(ggufPath string) error {
 	if err := downloadDestOK(ggufPath); err != nil {
 		if strings.TrimSpace(ggufPath) == "" {

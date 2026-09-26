@@ -128,8 +128,10 @@ func configure(_ context.Context, opt Options) error {
 }
 
 // ensureDefaultModelDir creates /var/lib/hypermesh/models at 0755.
-// The state directory stays 0700 (device.json). Weights are not secret.
-// Root owns the directory when this process is root.
+// The state directory stays 0700 (device.json). Weight files written later
+// are 0600 root. The 0700 parent keeps them unreadable to other users.
+// Rootful Docker bind-mounts them as root. Root owns the directory when
+// this process is root.
 func ensureDefaultModelDir(root string) error {
 	dir := underRoot(root, agent.DefaultModelDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

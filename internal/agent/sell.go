@@ -53,6 +53,8 @@ func (a *Agent) loadSell() SellPosture {
 	return p
 }
 
+// saveSell writes sell.json. Caller must hold sellMu: heartbeat and the
+// job loop both read-modify-write this file.
 func (a *Agent) saveSell(p SellPosture) error {
 	if err := os.MkdirAll(a.cfg.StateDir, 0o700); err != nil {
 		return err
@@ -63,6 +65,12 @@ func (a *Agent) saveSell(p SellPosture) error {
 // effectiveSell returns the real sell posture after until expiry.
 // After the actuator exists the default is selling, never n/a.
 func (a *Agent) effectiveSell() SellPosture {
+	a.sellMu.Lock()
+	defer a.sellMu.Unlock()
+	return a.effectiveSellLocked()
+}
+
+func (a *Agent) effectiveSellLocked() SellPosture {
 	p := a.loadSell()
 	if p.SellState == "" || p.SellState == api.SellNA {
 		p = SellPosture{SellState: api.SellSelling}
@@ -111,7 +119,9 @@ func formatUntil(t time.Time) string {
 }
 
 func (a *Agent) sellPause(job api.Job) jobOutcome {
-	current := a.effectiveSell()
+	a.sellMu.Lock()
+	defer a.sellMu.Unlock()
+	current := a.effectiveSellLocked()
 	localID := strings.TrimSpace(a.state.DeviceID)
 	jobDev := strings.TrimSpace(job.DeviceID)
 	echoDev := jobDev
