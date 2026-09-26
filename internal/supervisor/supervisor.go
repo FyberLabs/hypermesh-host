@@ -49,6 +49,10 @@ const (
 	credEnrollToken = "hypermesh-enroll-token"
 )
 
+// forbiddenCallerKeyPrefixes are host, router, and site credentials.
+// Same prefixes the visor and the CLI reject. They are not org API keys.
+var forbiddenCallerKeyPrefixes = []string{"hm_dev_", "hm_rtr_", "hm_site_"}
+
 // ParsePlacement accepts outside, host, and renter.
 func ParsePlacement(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
@@ -375,7 +379,9 @@ func (s *Supervisor) serve(ctx context.Context) error {
 }
 
 // Handler is the local door. Renter placement forwards to the chat
-// gateway. Other placements do not call the control-plane stub.
+// gateway. The inbound X-Api-Key is the org key on that forward. Lease and
+// tenant headers stay on this process's credentials. Other placements do
+// not call the control-plane stub.
 func (s *Supervisor) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != ChatCompletionsPath || r.Method != http.MethodPost {
@@ -386,24 +392,51 @@ func (s *Supervisor) Handler() http.Handler {
 			http.Error(w, "this placement does not forward renter chat", http.StatusConflict)
 			return
 		}
+		apiKey, err := callerAPIKey(r.Header.Get("X-Api-Key"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			http.Error(w, "read", http.StatusBadRequest)
 			return
 		}
-		status, raw, err := s.forward(r.Context(), body)
+		status, raw, err := s.forward(r.Context(), apiKey, body)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			http.Error(w, redactAPIKey(err.Error(), apiKey), http.StatusBadGateway)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_, _ = w.Write(raw)
+		_, _ = w.Write([]byte(redactAPIKey(string(raw), apiKey)))
 	})
 }
 
-func (s *Supervisor) forward(ctx context.Context, body []byte) (int, []byte, error) {
-	return postChat(ctx, s.HTTP, s.Creds.ChatBase, s.Creds.APIKey, s.Creds.TenantID, s.Creds.LeaseID, body)
+// callerAPIKey is the inbound org key. A missing key, a blank key, or a
+// forbidden prefix is refused here, before any upstream forward.
+func callerAPIKey(header string) (string, error) {
+	key := strings.TrimSpace(header)
+	if key == "" {
+		return "", errors.New("api key is required")
+	}
+	for _, prefix := range forbiddenCallerKeyPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return "", fmt.Errorf("%s is not a renter identity; use an org API key (purpose: renter)", prefix)
+		}
+	}
+	return key, nil
+}
+
+func redactAPIKey(text, key string) string {
+	if key == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, key, "***")
+}
+
+func (s *Supervisor) forward(ctx context.Context, apiKey string, body []byte) (int, []byte, error) {
+	return postChat(ctx, s.HTTP, s.Creds.ChatBase, apiKey, s.Creds.TenantID, s.Creds.LeaseID, body)
 }
 
 // PostChat sends one completion to the chat gateway.
