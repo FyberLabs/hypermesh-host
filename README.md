@@ -257,3 +257,17 @@ deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 ## Out of scope here
 
 Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs. AIuditor witness is a sidecar (`deploy/agx/aiuditor-witness.service`), not this binary. Owner console does not bind loopback/LAN/public TCP, does not enqueue CP jobs, does not add `sell_resume`, a drain mega-job, `reason_code`, `preempt_mode=hard`, Path B, SociACL, WebAuthn, OIDC, or privilege_grant.
+
+
+## Enrollment identity
+
+Set `HYPERMESH_HOST_NAME` to the name this host should report, or let the agent
+use its operating-system hostname. Names support discovery; they are not
+credentials. The agent submits its locally generated WireGuard public key at
+enrollment. The private key stays in its protected state directory.
+
+Retire a box from the host dashboard before replacing its identity. Register it
+again, set the new `HYPERMESH_ENROLL_TOKEN` and `HYPERMESH_REENROLL=1`, then restart
+the agent. Each new token gets a fresh key and server-issued device ID. Restarts
+with that same token reuse the persisted identity and key. The old identity stays
+archived in the plane. Upgrade the plane to the enrollment-name/key API first.

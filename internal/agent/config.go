@@ -39,6 +39,8 @@ var uuidRE = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 // Config is env/flag configuration for the host agent.
 type Config struct {
+	HostName string
+	Reenroll bool
 	ControlPlaneURL string
 	TenantID        string
 	EnrollToken     string
@@ -135,6 +137,8 @@ func FromEnv() Config {
 		ControlPlaneURL:           envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
 		TenantID:                  os.Getenv("HYPERMESH_TENANT_ID"),
 		EnrollToken:               os.Getenv("HYPERMESH_ENROLL_TOKEN"),
+		HostName: strings.TrimSpace(os.Getenv("HYPERMESH_HOST_NAME")),
+		Reenroll: os.Getenv("HYPERMESH_REENROLL") == "1",
 		StateDir:                  envOr("HYPERMESH_STATE_DIR", defaultStateDir),
 		HeartbeatEvery:            defaultHeartbeat,
 		JobEvery:                  defaultJobInterval,

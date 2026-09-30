@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -303,6 +304,7 @@ func (a *Agent) currentLease() *runtime.Handle {
 }
 
 func (a *Agent) ensureEnrolled(ctx context.Context) error {
+	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(a.cfg.EnrollToken)))
 	st, err := a.loadState()
 	if err != nil {
 		return err
@@ -310,13 +312,17 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if st.DeviceSecret == "" {
 		st.DeviceSecret = a.cfg.DeviceSecret
 	}
-	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) != "" {
+	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) != "" &&
+        !(a.cfg.Reenroll && a.cfg.EnrollToken != "" && st.EnrollTokenHash != tokenHash) {
+        if st.WGKeyDir != "" {
+            a.keyDir = st.WGKeyDir
+        }
 		a.state = st
 		a.client.DeviceSecret = st.DeviceSecret
 		a.log.Info("using stored device", "device_id", st.DeviceID)
 		return nil
 	}
-	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) == "" {
+	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) == "" && !a.cfg.Reenroll {
 		return fmt.Errorf("hypermesh: this box has an id on disk but no secret; it cannot enroll again — ask for a new enroll-token")
 	}
 	if strings.TrimSpace(a.cfg.EnrollToken) == "" {
@@ -329,7 +335,23 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	}
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
 
+    // Stage a key per enrollment token. Network retries reuse it; a fresh
+    // enrollment never reuses the retired identity's WireGuard private key.
+    keyDir := filepath.Join(a.cfg.StateDir, "enrollment-keys", tokenHash)
+    _, publicKey, err := tunnel.LoadOrCreatePrivateKey(keyDir)
+    if err != nil {
+        return fmt.Errorf("hypermesh: prepare enrollment key: %w", err)
+    }
+    name := strings.TrimSpace(a.cfg.HostName)
+    if name == "" {
+        name, err = os.Hostname()
+        if err != nil || strings.TrimSpace(name) == "" {
+            return fmt.Errorf("hypermesh: HYPERMESH_HOST_NAME or hostname is required")
+        }
+    }
 	resp, err := a.client.Enroll(ctx, api.EnrollRequest{
+        HostName: name,
+        WGPublicKey: publicKey,
 		EnrollToken: a.cfg.EnrollToken,
 		ImageHash:   image,
 		HostType:    a.cfg.ReportedHostType(),
@@ -340,7 +362,10 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if strings.TrimSpace(resp.DeviceSecret) == "" {
 		return fmt.Errorf("hypermesh: enroll did not return a secret")
 	}
+	a.keyDir = keyDir
 	st = State{
+		EnrollTokenHash: tokenHash,
+		WGKeyDir: keyDir,
 		DeviceID:         resp.DeviceID,
 		CredentialPrefix: resp.CredentialPrefix,
 		DeviceSecret:     resp.DeviceSecret,
