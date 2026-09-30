@@ -10,6 +10,7 @@ import (
     "io"
     "os"
     "os/exec"
+    "path/filepath"
     "runtime"
     "strconv"
     "strings"
@@ -152,16 +153,56 @@ func Detect(ctx context.Context) Profile {
         f.GPU, f.AcceleratorFreeBytes = nvidiaMemory(gpu)
     }
     if f.Tegra && output(ctx,"nvcc","--version")!="" { f.CUDA=true;f.GPU="Tegra integrated GPU" }
-    if !f.CUDA && hasROCmGPU(output(ctx,"rocminfo")) { f.HIP=true;f.GPU="ROCm GPU (memory unmeasured)" }
+    if !f.CUDA && hasROCmGPU(output(ctx,"rocminfo")) { f.HIP=true;f.GPU="ROCm GPU";f.AcceleratorFreeBytes=amdMemory() }
     if !f.CUDA && !f.HIP && output(ctx,"vulkaninfo","--summary")!="" { f.Vulkan=true }
     if runtime.GOOS=="darwin" {
         f.Model=output(ctx,"sysctl","-n","hw.model")
         f.Processor=output(ctx,"sysctl","-n","machdep.cpu.brand_string")
         f.MemoryBytes,_=strconv.ParseInt(output(ctx,"sysctl","-n","hw.memsize"),10,64)
         f.Metal=runtime.GOARCH=="arm64"
-        // Total unified memory is not an available-memory measurement.
+        f.AvailableBytes=appleAvailable(output(ctx,"vm_stat"))
     }
     return Recommend(f)
+}
+
+func amdMemory() int64 {
+    paths,_:=filepath.Glob("/sys/class/drm/card*/device/mem_info_vram_total")
+    var minimum int64
+    seen:=false
+    for _,path:=range paths {
+        dir:=filepath.Dir(path)
+        if read(filepath.Join(dir,"vendor"))!="0x1002" {continue}
+        total,err:=strconv.ParseInt(read(path),10,64)
+        if err!=nil || total<=0 {return 0}
+        used,err:=strconv.ParseInt(read(filepath.Join(dir,"mem_info_vram_used")),10,64)
+        if err!=nil || used<0 || used>=total {return 0}
+        free:=total-used
+        if !seen || free<minimum {minimum=free}
+        seen=true
+    }
+    return minimum
+}
+
+func appleAvailable(text string) int64 {
+    lines:=strings.Split(text,"\n")
+    if len(lines)==0 {return 0}
+    var pageSize int64
+    for i,field:=range strings.Fields(lines[0]) {
+        if field=="of" {
+            fields:=strings.Fields(lines[0])
+            if i+1<len(fields) {pageSize,_=strconv.ParseInt(fields[i+1],10,64)}
+        }
+    }
+    if pageSize!=4096 && pageSize!=16384 {return 0}
+    var pages int64
+    for _,line:=range lines[1:] {
+        key,value,ok:=strings.Cut(line,":")
+        if !ok || (key!="Pages free" && key!="Pages inactive") {continue}
+        n,err:=strconv.ParseInt(strings.TrimSuffix(strings.TrimSpace(value),"."),10,64)
+        if err!=nil || n<0 || n>1<<40 {return 0}
+        pages+=n
+    }
+    return pages*pageSize
 }
 
 func nvidiaMemory(text string) (string, int64) {

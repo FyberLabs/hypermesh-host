@@ -42,3 +42,9 @@ func TestAcceleratorDetectionFailsClosed(t *testing.T) {
     if hasROCmGPU("Name: AMD Ryzen CPU") {t.Fatal("CPU agent counted as GPU")}
     if !hasROCmGPU("  Name: gfx1100") {t.Fatal("missed ROCm GPU")}
 }
+
+func TestAppleAvailableUsesMeasuredPages(t *testing.T) {
+    input:="Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 100.\nPages inactive: 200.\nPages active: 900."
+    if got:=appleAvailable(input);got!=300*16384 {t.Fatalf("available=%d",got)}
+    if appleAvailable("unknown")!=0 {t.Fatal("invented Apple memory")}
+}
