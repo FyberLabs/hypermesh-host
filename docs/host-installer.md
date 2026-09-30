@@ -1,0 +1,127 @@
+# Pull-based host installation
+
+Status: approved design; implementation started. This is the installation
+roadmap, not a claim that a guided installer already exists. The existing
+`hypermesh-deploy inspect` detects hardware; the existing `agx` deployment
+command retains its legacy preflight and configuration behavior.
+
+## Approved behavior
+
+An operator downloads a signed host installer. Before enrollment or privileged
+changes, it checks internet connectivity to the selected AIuditor, detects
+CPU/GPU architecture and memory topology, measures resources, and presents an
+installation plan. A familiar model name may select a candidate profile; it
+does not prove compatibility or grant certification.
+
+Resource minimums use **GiB (2^30 bytes)** consistently:
+
+- At least 16 GiB installed system memory.
+- At least 12 GiB total discrete VRAM, or a proposed UMA allocation of at least
+  12 GiB backed by currently available system RAM.
+- Free space on the chosen model-cache filesystem at least **2.2 times**
+  discrete VRAM or the proposed UMA allocation, rounded up to whole bytes.
+  This is disk capacity, not an additional system-RAM requirement.
+- UMA allocation must respect measured runtime limits and leave the OS and
+  other services adequate headroom. Never infer allocatable memory solely
+  from the 64/128 GB product label or double-count firmware-reserved VRAM.
+- Aggregate GPU capacity is only an admission gate. Preflight must demonstrate
+  that the runtime supports the selected GPUs and model distribution.
+  A 12 GiB capacity result alone does not prove an 11–12 GB model fits with
+  its context, runtime buffers, and working memory.
+
+Unknown architecture, unknown capacity, inaccessible cache storage, or failed
+AIuditor connectivity must produce a named blocker and a concrete next action.
+An HTTP response alone is not proof of AIuditor identity: distinguish DNS/TLS
+reachability from authenticated protocol compatibility and enrollment.
+
+## Installation stages and approvals
+
+1. Inspect locally without root; choose environment, reported host name,
+   model directory, memory allocation, and candidate hardware profile.
+2. Verify signed bootstrap metadata and installer checksum with a bundled
+   trust root, then update the installer to the selected channel's version.
+   Record that version and the immutable profile revision in the plan.
+3. Present exact package, library, driver, kernel, boot, service, headless, and
+   reboot changes. Default to headless operation only after explicit approval.
+   Preserve SSH/network access and unrelated services.
+4. Apply the approved plan. Required changes declined by the operator stop
+   with an explanation; optional changes can be skipped. Never silently use
+   a general “yes” to approve a materially changed plan.
+5. Persist progress atomically; resume after interruption or reboot, rechecking
+   hardware and completed steps. Repeated execution converges without duplicate
+   units, identities, keys, or package sources.
+6. Enroll with a locally generated key and one-time credential, verify tunnel
+   and heartbeat connectivity, and benchmark the actual runtime/model.
+   Keep selling disabled until all required checks pass.
+
+Support interactive confirmation and unattended execution of a previously
+reviewed, versioned plan. A changed plan requires fresh approval. Do not put
+tokens, private keys, or passwords in process arguments or diagnostic output.
+
+The existing authenticated agent-update endpoint is for enrolled hosts.
+Bootstrap discovery before enrollment needs its own defined trust and release
+contract; it must not assume that endpoint is anonymously available. Updating
+the installer does not mean upgrading every driver to “latest”: profiles pin
+compatible OS/kernel/runtime combinations with recorded validation.
+
+## Repeatability, recovery, and operator visibility
+
+Keep a journal containing installer/profile versions, detected facts, approved
+changes, completed steps, reboot requirement, and failure/remediation details.
+Back up managed configuration, retain a bootable prior kernel, and provide
+repair, resume, and uninstall paths. Do not promise automatic rollback of every
+driver/kernel transition. Uninstall must explicitly distinguish removing
+software from retiring a host identity and deleting cached models.
+
+Status should show current stage, blockers, what changed, and what to do next.
+Provide a redacted support bundle and structured diagnostics. Retiring a host
+archives its prior identity; reenrollment generates a fresh key/setup.
+Hardware fingerprints describe machine capabilities, never durable identity.
+
+For NAS appliances, use an explicitly chosen existing cache filesystem.
+Never partition/format disks or alter storage pools, shares, or NAS services
+as an incidental installer step. Headless mode means graphical login is
+disabled with consent, not that other services are disabled.
+
+## Implementation tracking
+
+- [x] Existing hardware inspection and backend recommendations.
+- [x] Resource admission policy in `internal/installer/admission.go`, with
+  boundary, UMA, invalid-input, and overflow test cases.
+- [ ] Connect admission to measured local GPU/UMA and filesystem probes.
+- [ ] Read-only CLI plan with structured blockers and AIuditor checks.
+- [ ] Signed bootstrap release discovery and installer self-update.
+- [ ] Versioned, validated hardware profiles and exact mutation plans.
+- [ ] Approval capture, unattended plan application, checkpoint/resume.
+- [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
+- [ ] Recovery commands, redacted support bundle, and status presentation.
+- [ ] Enrollment plus benchmark/connectivity gates before selling.
+- [ ] Hardware acceptance runs below.
+
+The admission package is a pure policy foundation, not yet wired into the CLI
+or a replacement for existing hardware preflight. Its eligible result only
+means that supplied resource measurements pass the minimums.
+
+## Required hardware acceptance
+
+Both targets are pending real-machine validation. No device UUID is part of
+a profile or test fixture. Select hosts by their reported enrollment name.
+
+| Target | Initial profile investigation | Required evidence |
+| --- | --- | --- |
+| AGX 64 | Exact module/carrier, JetPack/L4T, kernel, integrated GPU and usable UMA | Inventory, approved plan, free RAM/disk, runtime allocation, benchmark, reboot/resume, heartbeat and workload |
+| MINISFORUM N5 MAX, 128 GB, Ryzen AI Max+ 395 | Firmware, Linux support, AMD GPU architecture, ROCm compatibility, UMA limits and NAS service preservation | Same evidence, plus storage/share integrity and GPU allocation under memory pressure |
+
+For each target run: clean install, no-op rerun, interrupted package step,
+interrupted enrollment, reboot/resume, supported upgrade, declined required
+change, unreachable AIuditor, insufficient RAM/disk, repair, and uninstall.
+Verify a real model workload and confirm selling remains blocked on failures.
+Record OS/firmware/kernel/driver/runtime versions, installer commit, plan,
+redacted logs, and measured results before marking a profile tested.
+Certification remains a separate explicit decision.
+
+Consult vendor compatibility documentation when selecting candidate versions:
+[AMD Ryzen Linux compatibility](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityryz/native_linux/native_linux_compatibility.html),
+[MINISFORUM N5 MAX](https://store.minisforum.com/products/minisforum-n5-max-ai-nas).
+Do not copy a version from a moving documentation page into a certified profile
+without testing it on the target machine.

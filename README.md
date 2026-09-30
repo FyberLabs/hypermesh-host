@@ -288,3 +288,10 @@ recommendations do not grant certification. Existing AGX deployment pins remain
 in the AGX-specific installation path.
 
 Backend build options follow the [llama.cpp build documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).
+
+## Pull-based installer roadmap
+
+The approved guided installation flow, resource rules, implementation checklist,
+and AGX 64 / MINISFORUM N5 MAX acceptance plan are tracked in
+[Host installer](docs/host-installer.md). The first implementation increment is
+the resource admission policy; guided installation is not yet available.
