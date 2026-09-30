@@ -271,3 +271,20 @@ again, set the new `HYPERMESH_ENROLL_TOKEN` and `HYPERMESH_REENROLL=1`, then res
 the agent. Each new token gets a fresh key and server-issued device ID. Restarts
 with that same token reuse the persisted identity and key. The old identity stays
 archived in the plane. Upgrade the plane to the enrollment-name/key API first.
+
+## Hardware preflight and generic benchmarks
+
+Run `hypermesh-deploy inspect` for a hardware-class fingerprint, detected
+processor/memory, backend recommendations and a conservative model memory budget.
+Jetson recognition requires Tegra evidence; AGX, other Jetsons, DGX-branded systems
+and Apple silicon retain their class labels. Other machines use detected runtime
+capabilities. This fingerprint contains no host name, serial, device UUID or keys.
+
+Run `hypermesh-deploy inspect --benchmark --model /path/model.gguf` to execute
+an installed llama-bench after checking the model against measured available
+memory. Missing accelerator-memory measurements fail closed. CPU is the fallback
+when no accelerator runtime is detected. Software/model downloads are explicit;
+recommendations do not grant certification. Existing AGX deployment pins remain
+in the AGX-specific installation path.
+
+Backend build options follow the [llama.cpp build documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).

@@ -178,3 +178,32 @@ func waitHeartbeat(ctx context.Context, p plane, deviceID string, since time.Tim
 		}
 	}
 }
+
+func waitEnrollmentHeartbeat(ctx context.Context, p plane, name string, since time.Time, every, timeout time.Duration) error {
+    if every <= 0 { every = 500*time.Millisecond }
+    if timeout <= 0 { timeout = 45*time.Second }
+    deadline := time.Now().Add(timeout)
+    var lastErr error
+    for {
+        rows,err:=p.devices(ctx)
+        if err==nil {
+            id,resolveErr:=DeviceIDFromList(rows,name)
+            err=resolveErr
+            if err==nil {
+                for _,row:=range rows {
+                    if row.id()==id && row.LastHeartbeat!=nil && row.LastHeartbeat.After(since) {
+                        return nil
+                    }
+                }
+                err=fmt.Errorf("heartbeat was not accepted for %s",id)
+            }
+        }
+        lastErr=err
+        if time.Now().After(deadline) { return lastErr }
+        timer:=time.NewTimer(every)
+        select {
+        case <-ctx.Done(): timer.Stop();return ctx.Err()
+        case <-timer.C:
+        }
+    }
+}

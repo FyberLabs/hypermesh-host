@@ -168,19 +168,10 @@ func connect(ctx context.Context, opt Options) error {
 	if err := p.catalog(ctx); err != nil {
 		return err
 	}
-	rows, err := p.devices(ctx)
-	if err != nil {
-		return err
-	}
-	deviceID, err := DeviceIDFromList(rows, opt.Serial)
-	if err != nil {
-		return err
-	}
-	// Heartbeats at or before this instant do not count. Two minutes of
-	// skew covers a clock that is slightly behind the plane.
+	// Start enrollment before resolving the name that the agent reports.
 	since := opt.Now().Add(-2 * time.Minute)
 	if err := startExistingAgent(ctx, opt.Run); err != nil {
 		return err
 	}
-	return waitHeartbeat(ctx, p, deviceID, since, opt.PollEvery, opt.HeartbeatWait)
+	return waitEnrollmentHeartbeat(ctx, p, opt.Serial, since, opt.PollEvery, opt.HeartbeatWait)
 }

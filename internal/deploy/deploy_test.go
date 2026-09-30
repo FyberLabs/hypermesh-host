@@ -379,7 +379,7 @@ func TestSerialRequired(t *testing.T) {
 	opt.Facts = &facts
 	opt.Serial = ""
 	err := AGX{}.Pipeline(opt).Run(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "serial") {
+	if err == nil || !strings.Contains(err.Error(), "host name") {
 		t.Fatalf("error %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "etc/hypermesh/agent.env")); !os.IsNotExist(statErr) {

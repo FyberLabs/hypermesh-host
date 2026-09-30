@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/FyberLabs/hypermesh-host/internal/deploy"
+	"github.com/FyberLabs/hypermesh-host/internal/hardware"
 )
 
 func main() {
@@ -21,6 +23,22 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+    if name == "inspect" {
+        flags := flag.NewFlagSet("inspect",flag.ExitOnError)
+        model := flags.String("model","","explicit local GGUF for a measured benchmark")
+        benchmark := flags.Bool("benchmark",false,"run installed llama-bench after memory preflight")
+        _ = flags.Parse(os.Args[2:])
+        ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
+        defer stop()
+        profile:=hardware.Detect(ctx)
+        _ = json.NewEncoder(os.Stdout).Encode(profile)
+        if *benchmark {
+            if err:=hardware.Benchmark(ctx,profile,*model);err!=nil {
+                fmt.Fprintln(os.Stderr,err);os.Exit(1)
+            }
+        }
+        return
+    }
 	class, err := deploy.Class(name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -38,11 +56,11 @@ func main() {
 	fs.StringVar(&opt.ModelCacheMax, "model-cache-max-bytes", os.Getenv("HYPERMESH_MODEL_CACHE_MAX_BYTES"), "model cache byte budget (default: filesystem size minus the 2 GiB disk floor)")
 	fs.StringVar(&opt.EnvFile, "env-file", "/etc/hypermesh/agent.env", "agent env file")
 	fs.StringVar(&opt.UnitDir, "unit-dir", "/etc/systemd/system", "systemd unit directory")
-	fs.StringVar(&opt.Serial, "serial", "", "known-host serial (required); device id comes from the plane list")
+	fs.StringVar(&opt.Serial, "host-name", os.Getenv("HYPERMESH_HOST_NAME"), "reported enrollment host name; device id comes from the plane list")
 	fs.DurationVar(&opt.HeartbeatWait, "heartbeat-wait", 0, "how long to wait for a heartbeat (default 45s)")
 	_ = fs.Parse(os.Args[2:])
 	if opt.Serial == "" {
-		fmt.Fprintln(os.Stderr, "serial is required")
+		fmt.Fprintln(os.Stderr, "host-name is required")
 		os.Exit(2)
 	}
 	token, err := deploy.LoadEnrollToken(os.Getenv("HYPERMESH_ENROLL_TOKEN"), tokenFile)
@@ -63,11 +81,15 @@ func main() {
 func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
+Commands:
+  inspect   report hardware fingerprint, memory budget and preflight recommendations.
+            --benchmark --model /path/model.gguf runs an installed llama-bench.
+
 Host classes:
   agx    preflight, configure, and connect an AGX. Stops on the first failure.
 
--serial is required. The device id is read from GET /api/v1/hypermesh/devices
-for that serial. It is not a flag.
+-host-name is required. The device id is read from GET /api/v1/hypermesh/devices
+for that name. It is not a flag.
 
 The enroll token comes from HYPERMESH_ENROLL_TOKEN or -enroll-token-file.
 It is not a command-line flag. A box that already has device.json can rerun
