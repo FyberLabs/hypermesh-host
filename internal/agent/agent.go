@@ -387,7 +387,10 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	}
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
 	sell := a.effectiveSell()
+	name := strings.TrimSpace(a.cfg.HostName)
+	if name == "" { name, _ = os.Hostname() }
 	hb, err := a.client.Heartbeat(ctx, api.HeartbeatRequest{
+		HostName: name,
 		DeviceID:        a.state.DeviceID,
 		ImageHash:       image,
 		LoadedModelHash: a.leaseImageDigest(),

@@ -66,6 +66,7 @@ type EnrollResponse struct {
 // Health is additive. Older planes ignore it (pydantic extra='ignore').
 // Existing fields stay. A missing Health is the pre-health body.
 type HeartbeatRequest struct {
+	HostName string `json:"host_name,omitempty"`
 	DeviceID        string      `json:"device_id"`
 	ImageHash       string      `json:"image_hash,omitempty"`
 	LoadedModelHash string      `json:"loaded_model_hash,omitempty"`
