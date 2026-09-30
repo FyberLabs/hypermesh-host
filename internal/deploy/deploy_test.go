@@ -644,3 +644,27 @@ func readyOptions(t *testing.T, root string, lab *planeLab, units *[][]string) O
 		},
 	}
 }
+
+func TestConnectStartsAgentBeforeDiscovery(t *testing.T) {
+    started:=false
+    now:=time.Now()
+    server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request) {
+        switch r.URL.Path {
+        case catalogPath:
+            _,_=w.Write([]byte("[]"))
+        case devicesPath:
+            if !started {t.Error("discovery ran before enrollment agent started")}
+            _=json.NewEncoder(w).Encode([]HostRecord{{ID:"fresh-device",HostName:"fresh-box",Enrolled:true,LastHeartbeat:&now}})
+        default:
+            http.NotFound(w,r)
+        }
+    }))
+    defer server.Close()
+    opt:=Options{ControlPlaneURL:server.URL,Serial:"fresh-box",HTTP:server.Client(),
+        Now:func() time.Time{return now},HeartbeatWait:time.Second,
+        Run:func(_ context.Context,_ string,args ...string) error {
+            if len(args)>0 && args[len(args)-1]==agentUnitName {started=true}
+            return nil
+        }}
+    if err:=connect(context.Background(),opt);err!=nil {t.Fatal(err)}
+}

@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -328,6 +329,12 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if strings.TrimSpace(a.cfg.EnrollToken) == "" {
 		return fmt.Errorf("hypermesh: this box has no saved identity and no enroll token")
 	}
+
+    if st.DeviceID != "" && a.cfg.Reenroll {
+        if err := a.resetEnrollmentWork(ctx); err != nil {
+            return fmt.Errorf("hypermesh: retire local enrollment work: %w", err)
+        }
+    }
 
 	snap, err := a.telem.Collect(ctx)
 	if err != nil {
@@ -1415,4 +1422,30 @@ func firstNonEmpty(vs ...string) string {
 		}
 	}
 	return ""
+}
+
+// resetEnrollmentWork runs before exchanging a fresh enrollment token.
+// Old work must stop successfully before a replacement identity is issued.
+func (a *Agent) resetEnrollmentWork(ctx context.Context) error {
+    leasePath:=filepath.Join(a.cfg.StateDir,leaseFile)
+    if raw,err:=os.ReadFile(leasePath);err==nil {
+        var handle runtime.Handle
+        if err:=json.Unmarshal(raw,&handle);err!=nil {return fmt.Errorf("invalid old lease state: %w",err)}
+        if err:=a.stopHandle(ctx,&handle);err!=nil {return err}
+    } else if !os.IsNotExist(err) {return err}
+    if err:=a.tunnels.Teardown(ctx);err!=nil {return err}
+    for _,name:=range []string{leaseFile,sellFile,"boot.json"} {
+        if err:=os.Remove(filepath.Join(a.cfg.StateDir,name));err!=nil && !os.IsNotExist(err) {return err}
+    }
+    if dir,err:=modelCacheDir(a.cfg.GGUFHostPath());err==nil {
+        if _,err:=os.Stat(dir);err==nil {
+            idx,_,err:=readCacheIndex(dir)
+            if err!=nil {return err}
+            idx.Loaded="";idx.Pending=nil
+            if err:=writeCacheIndex(dir,idx);err!=nil {return err}
+        } else if !os.IsNotExist(err) {return err}
+    }
+    a.setLease(nil)
+    a.applied="";a.peerPosted=false;a.postedPub=""
+    return nil
 }

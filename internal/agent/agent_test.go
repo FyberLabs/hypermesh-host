@@ -2656,6 +2656,7 @@ func TestFreshEnrollmentChangesKeyAndRestartReusesIdentity(t *testing.T) {
     second := newTestAgent(t, srv.URL, dir, uptime, "second-enrollment", "")
     second.cfg.HostName = "configured-box"
     second.cfg.Reenroll = true
+    second.tunnels = &fakeTunnel{}
     if err := second.ensureEnrolled(context.Background()); err != nil { t.Fatal(err) }
     if len(requests) != 2 { t.Fatalf("enroll requests: %d", len(requests)) }
     if requests[0].HostName != "configured-box" || requests[1].HostName != "configured-box" {
@@ -2668,4 +2669,17 @@ func TestFreshEnrollmentChangesKeyAndRestartReusesIdentity(t *testing.T) {
     restart.cfg.Reenroll = true
     if err := restart.ensureEnrolled(context.Background()); err != nil { t.Fatal(err) }
     if len(requests) != 2 || restart.keyDir != second.keyDir { t.Fatal("restart changed identity") }
+}
+
+func TestReenrollmentRefusesCorruptLeaseState(t *testing.T) {
+    dir:=t.TempDir()
+    a:=newTestAgent(t,"http://127.0.0.1:1",dir,"","fresh-token","")
+    a.cfg.Reenroll=true
+    a.tunnels=&fakeTunnel{}
+    if err:=a.saveState(State{DeviceID:"old-device",DeviceSecret:testSecret});err!=nil {t.Fatal(err)}
+    if err:=os.WriteFile(filepath.Join(dir,leaseFile),[]byte("{broken"),0600);err!=nil {t.Fatal(err)}
+    err:=a.ensureEnrolled(context.Background())
+    if err==nil || !strings.Contains(err.Error(),"invalid old lease state") {t.Fatalf("got %v",err)}
+    st,err:=a.loadState()
+    if err!=nil || st.DeviceID!="old-device" {t.Fatal("old identity overwritten")}
 }
