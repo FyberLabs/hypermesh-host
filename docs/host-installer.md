@@ -88,7 +88,9 @@ disabled with consent, not that other services are disabled.
 - [x] Existing hardware inspection and backend recommendations.
 - [x] Resource admission policy in `internal/installer/admission.go`, with
   boundary, UMA, invalid-input, and overflow test cases.
-- [ ] Connect admission to measured local GPU/UMA and filesystem probes.
+- [x] Connect resource admission to Linux RAM, GPU capacity and filesystem probes
+  through the read-only CLI (operator explicitly selects memory topology).
+- [ ] Validate UMA runtime allocation limits and reserve OS/runtime headroom.
 - [ ] Read-only CLI plan with structured blockers and AIuditor checks.
 - [ ] Signed bootstrap release discovery and installer self-update.
 - [ ] Versioned, validated hardware profiles and exact mutation plans.
@@ -98,9 +100,52 @@ disabled with consent, not that other services are disabled.
 - [ ] Enrollment plus benchmark/connectivity gates before selling.
 - [ ] Hardware acceptance runs below.
 
-The admission package is a pure policy foundation, not yet wired into the CLI
-or a replacement for existing hardware preflight. Its eligible result only
-means that supplied resource measurements pass the minimums.
+The admission package is wired into `hypermesh-deploy check-resources`.
+Its eligible result means only that measured resource capacity passes the
+minimums, not that installation or selling is approved.
+
+## Resource-check milestone
+
+Completed: a read-only Linux command emits a schema-versioned JSON report
+with measured resources, required disk bytes, eligibility and failure reasons.
+Exit codes: 0 capacity passed, 1 failed/unknown measurement, 2 invalid arguments.
+It creates no directories, installs nothing, and does not enroll a host.
+
+Build from the reviewed checkout:
+
+```bash
+go build -o hypermesh-deploy ./cmd/hypermesh-deploy
+./hypermesh-deploy check-resources --memory-mode uma --uma-gib 40 --model-dir /existing/model/cache
+```
+
+Use UMA mode on both the AGX and N5 MAX. The 40 GiB allocation above is an
+example, not a validated default. Choose an allocation that fits current free
+RAM and intended workload; actual GPU allocation still needs runtime preflight.
+For example, a proposed 80 GiB allocation requires 176 GiB free cache disk.
+
+For a discrete GPU host:
+
+```bash
+./hypermesh-deploy check-resources --memory-mode discrete --model-dir /existing/model/cache
+```
+
+RAM comes from Linux MemTotal/MemAvailable, which describe OS-visible memory
+rather than the product label. Disk uses filesystem space available to
+unprivileged users (Bavail), on the explicit existing directory. Quotas,
+write permissions and runtime allocations still need later preflight.
+NVIDIA capacity uses nvidia-smi memory.total; otherwise AMD capacity uses
+DRM mem_info_vram_total. NVIDIA is selected first on mixed-vendor machines;
+capacities from different backends are not combined. Missing drivers or
+unreadable capacity fail with remediation. An integrated GPU's reserved
+VRAM must not be treated as discrete capacity: select UMA mode explicitly.
+Memory topology is operator-selected at this stage, not automatically verified.
+
+Automated coverage includes command arguments/exit codes/JSON, failed probes,
+disk boundaries, malformed and overflow measurements, multi-GPU summation,
+and a real Linux RAM/filesystem probe that checks no directory was created.
+AGX/N5 physical results remain pending. The next milestone is a read-only
+installation plan with architecture and AIuditor checks; package installation
+and reboot orchestration have not started.
 
 ## Required hardware acceptance
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/FyberLabs/hypermesh-host/internal/deploy"
 	"github.com/FyberLabs/hypermesh-host/internal/hardware"
+	"github.com/FyberLabs/hypermesh-host/internal/installer"
 )
 
 func main() {
@@ -23,6 +24,12 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "check-resources" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := installer.RunResourceCheck(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
     if name == "inspect" {
         flags := flag.NewFlagSet("inspect",flag.ExitOnError)
         model := flags.String("model","","explicit local GGUF for a measured benchmark")
@@ -82,6 +89,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  check-resources  read-only Linux RAM, accelerator capacity and model-filesystem check.
+                   --model-dir PATH --memory-mode uma --uma-gib N
+                   --model-dir PATH --memory-mode discrete
   inspect   report hardware fingerprint, memory budget and preflight recommendations.
             --benchmark --model /path/model.gguf runs an installed llama-bench.
 
