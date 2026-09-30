@@ -174,8 +174,12 @@ trap cleanup EXIT
 
 # queue: max keeps pending runs of this group. The lease is the lock
 # this job holds: wait until locks/release-publish is free, then renew
-# it until exit.
-lease_id=$(acquire_publish_lease)
+# it until exit. A failed acquire must not leave command output in
+# lease_id: release would send it as x-ms-lease-id.
+if ! lease_id=$(acquire_publish_lease); then
+  lease_id=""
+  exit 1
+fi
 renew_publish_lease "$lease_id" &
 renew_pid=$!
 

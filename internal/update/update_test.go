@@ -1854,6 +1854,115 @@ fi
 			t.Fatal(out)
 		}
 	})
+	t.Run("lease id stays a clean token", func(t *testing.T) {
+		out := run(t, `
+set -euo pipefail
+source "$1"
+export HYPERMESH_LEASE_ATTEMPTS=2 HYPERMESH_LEASE_PAUSE=0
+calls=$(mktemp)
+az_blob() {
+  if [ "$1" = exists ]; then
+    printf '%s\n' false
+    return 0
+  fi
+  if [ "$1" = upload ]; then
+    printf '%s\n' '{' '  "client_request_id": "abc",' '  "etag": "x"' '}'
+    return 0
+  fi
+  echo "unexpected blob $*" >&2
+  return 1
+}
+az_lease() {
+  printf '%s\n' "$*" >>"$calls"
+  if [ "$1" = acquire ]; then
+    printf '%s\n' '11111111-1111-1111-1111-111111111111'
+    return 0
+  fi
+  return 0
+}
+lease_id=""
+if ! lease_id=$(acquire_publish_lease); then
+  lease_id=""
+  echo "acquire failed" >&2
+  exit 1
+fi
+if [ "$lease_id" != "11111111-1111-1111-1111-111111111111" ]; then
+  echo "dirty id [$lease_id]" >&2
+  exit 1
+fi
+release_publish_lease "$lease_id"
+if ! grep -q -- '--lease-id 11111111-1111-1111-1111-111111111111' "$calls"; then
+  echo "release missed id" >&2
+  cat "$calls" >&2
+  exit 1
+fi
+if grep -q 'client_request_id' "$calls"; then
+  echo "release got json" >&2
+  exit 1
+fi
+: >"$calls"
+release_publish_lease "$(printf '{\n  "etag": "x"\n}')"
+if [ -s "$calls" ]; then
+  echo "json release called az" >&2
+  cat "$calls" >&2
+  exit 1
+fi
+if confirm_publish_lease "$(printf '{\n  "etag": "x"\n}')"; then
+  echo "json confirm called az" >&2
+  exit 1
+fi
+`)
+		if strings.Contains(out, "dirty id") || strings.Contains(out, "release got json") || strings.Contains(out, "json release") || strings.Contains(out, "json confirm") || strings.Contains(out, "acquire failed") || strings.Contains(out, "release missed") {
+			t.Fatal(out)
+		}
+	})
+	t.Run("header error is printed and not retried", func(t *testing.T) {
+		out := run(t, `
+set -euo pipefail
+source "$1"
+export HYPERMESH_LEASE_ATTEMPTS=3 HYPERMESH_LEASE_PAUSE=0
+count=$(mktemp)
+echo 0 >"$count"
+az_blob() {
+  if [ "$1" = exists ]; then
+    printf '%s\n' false
+    return 0
+  fi
+  if [ "$1" = upload ]; then
+    printf '%s\n' '{' '  "etag": "x"' '}'
+    return 0
+  fi
+  return 0
+}
+az_lease() {
+  n=$(cat "$count")
+  n=$((n + 1))
+  echo "$n" >"$count"
+  echo 'ERROR: Invalid leading whitespace, reserved character(s), or return character(s) in header value: {"etag":"x"}' >&2
+  return 1
+}
+lease_id=sentinel
+if lease_id=$(acquire_publish_lease); then
+  echo acquired-header-error >&2
+  exit 1
+fi
+if [ -n "$lease_id" ]; then
+  echo "stdout leaked [$lease_id]" >&2
+  exit 1
+fi
+n=$(cat "$count")
+if [ "$n" -ne 1 ]; then
+  echo "retried header error $n" >&2
+  exit 1
+fi
+`)
+		if strings.Contains(out, "acquired-header-error") || strings.Contains(out, "stdout leaked") || strings.Contains(out, "retried header") {
+			t.Fatal(out)
+		}
+		if !strings.Contains(out, "lock acquire failed") || !strings.Contains(out, "Invalid leading whitespace") {
+			t.Fatalf("az stderr was hidden:\n%s", out)
+		}
+	})
 	t.Run("superseded tag", func(t *testing.T) {
 		out := run(t, `
 set -euo pipefail

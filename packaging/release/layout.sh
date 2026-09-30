@@ -564,16 +564,66 @@ require_builds_ahead() {
   done
 }
 
+# lease_id_clean ID
+# True when ID can be an x-ms-lease-id header. One token: letters,
+# digits, and hyphens. Pretty-printed JSON has newlines and quotes, and
+# requests rejects it as an invalid header value.
+lease_id_clean() {
+  local id=$1
+  local re='^[A-Za-z0-9-]+$'
+  [[ "$id" =~ $re ]]
+}
+
+# lease_held_by_other FILE...
+# Another publisher holds locks/release-publish. A header error is not
+# this case, and retrying it will not succeed.
+lease_held_by_other() {
+  local file
+  for file in "$@"; do
+    if [ -f "$file" ] && grep -qi -e 'LeaseAlreadyPresent' -e 'already a lease' "$file"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# read_lease_token FILE
+# Prints one clean lease id. acquire returns that id as its own output.
+# --query leaseId is null on a string, so it used to discard a lease
+# that had already been taken. A JSON object is not an id.
+read_lease_token() {
+  local file=$1 raw id
+  raw=$(tr -d '\r' <"$file") || return 1
+  raw=${raw%$'\n'}
+  if [ -z "$raw" ] || [[ "$raw" == *$'\n'* ]]; then
+    return 1
+  fi
+  if [[ "$raw" == \"*\" ]]; then
+    id=${raw#\"}
+    id=${id%\"}
+  else
+    id=$raw
+  fi
+  if ! lease_id_clean "$id"; then
+    return 1
+  fi
+  printf '%s\n' "$id"
+}
+
 # acquire_publish_lease
 # Creates locks/release-publish when it is absent, then acquires a 60s lease.
-# Another holder is a wait. Any other error fails immediately.
-# Prints the lease id on stdout.
+# Another holder is a wait. Any other error fails immediately and prints
+# the az stderr (and stdout, when that is where az wrote the error).
+# Prints the lease id on stdout. Nothing else: upload's pretty-printed
+# JSON must not be captured as the id. release would send it as
+# x-ms-lease-id. Lease commands get only the clean token. There is no
+# JSON metadata header.
 # That blob is the one write and lease both publishers have outside
 # their channel prefix. Nothing else outside the prefix is written.
 acquire_publish_lease() {
   local attempts=${HYPERMESH_LEASE_ATTEMPTS:-120}
   local pause=${HYPERMESH_LEASE_PAUSE:-15}
-  local i exists empty id errf
+  local i exists empty id outf errf rc
   if ! exists=$(az_blob exists --name "locks/release-publish" --query exists --output tsv); then
     echo "hypermesh release: lock blob lookup failed" >&2
     return 1
@@ -581,7 +631,10 @@ acquire_publish_lease() {
   if [ "$exists" = "false" ]; then
     empty=$(mktemp)
     : >"$empty"
-    if ! az_blob upload --name "locks/release-publish" --file "$empty" --overwrite false --only-show-errors; then
+    # --output none and the redirect keep the upload result off stdout.
+    # That result is pretty-printed JSON. A failed acquire used to assign
+    # it to lease_id, and release passed it through as a header.
+    if ! az_blob upload --name "locks/release-publish" --file "$empty" --overwrite false --only-show-errors --output none >/dev/null; then
       rm -f "$empty"
       if ! exists=$(az_blob exists --name "locks/release-publish" --query exists --output tsv); then
         echo "hypermesh release: lock blob lookup failed" >&2
@@ -598,51 +651,68 @@ acquire_publish_lease() {
     echo "hypermesh release: lock blob exists query was not true or false" >&2
     return 1
   fi
+  outf=$(mktemp)
   errf=$(mktemp)
   i=0
   while [ "$i" -lt "$attempts" ]; do
     i=$((i + 1))
-    if id=$(az_lease acquire --blob-name "locks/release-publish" --lease-duration 60 --query leaseId --output tsv 2>"$errf"); then
-      if [ -n "$id" ]; then
-        rm -f "$errf"
-        printf '%s\n' "$id"
-        return 0
+    : >"$outf"
+    : >"$errf"
+    rc=0
+    az_lease acquire --blob-name "locks/release-publish" --lease-duration 60 --only-show-errors --output tsv >"$outf" 2>"$errf" || rc=$?
+    if [ "$rc" -eq 0 ] && id=$(read_lease_token "$outf"); then
+      rm -f "$outf" "$errf"
+      printf '%s\n' "$id"
+      return 0
+    fi
+    if lease_held_by_other "$errf" "$outf"; then
+      if [ "$i" -ge "$attempts" ]; then
+        break
       fi
+      sleep "$pause"
+      continue
     fi
-    if ! grep -qi 'lease' "$errf"; then
-      echo "hypermesh release: lock acquire failed" >&2
-      cat "$errf" >&2
-      rm -f "$errf"
-      return 1
+    echo "hypermesh release: lock acquire failed" >&2
+    cat "$errf" >&2
+    if [ -s "$outf" ]; then
+      cat "$outf" >&2
     fi
-    if [ "$i" -ge "$attempts" ]; then
-      break
-    fi
-    sleep "$pause"
+    rm -f "$outf" "$errf"
+    return 1
   done
-  rm -f "$errf"
+  rm -f "$outf" "$errf"
   echo "hypermesh release: timed out waiting for locks/release-publish" >&2
   return 1
 }
 
 # renew_publish_lease LEASE_ID
 # Blocks, renewing until killed. Failures are ignored so the holder
-# can release on the way out.
+# can release on the way out. The lease id is one clean token.
 renew_publish_lease() {
   local id=$1 every=${HYPERMESH_LEASE_RENEW:-30}
+  if ! lease_id_clean "$id"; then
+    echo "hypermesh release: locks/release-publish lease id is not a clean token" >&2
+    return 1
+  fi
   while true; do
     sleep "$every"
-    az_lease renew --blob-name "locks/release-publish" --lease-id "$id" || true
+    az_lease renew --blob-name "locks/release-publish" --lease-id "$id" --only-show-errors --output none || true
   done
 }
 
 # release_publish_lease LEASE_ID
+# A value that is not a single token is not sent. Pretty-printed JSON
+# becomes an illegal x-ms-lease-id header.
 release_publish_lease() {
   local id=$1
   if [ -z "$id" ]; then
     return 0
   fi
-  az_lease release --blob-name "locks/release-publish" --lease-id "$id" || true
+  if ! lease_id_clean "$id"; then
+    echo "hypermesh release: refusing to release locks/release-publish; lease id is not a clean token" >&2
+    return 0
+  fi
+  az_lease release --blob-name "locks/release-publish" --lease-id "$id" --only-show-errors --output none || true
 }
 
 # confirm_publish_lease LEASE_ID
@@ -650,11 +720,11 @@ release_publish_lease() {
 # is written. A failed renew means this publisher lost the lease.
 confirm_publish_lease() {
   local id=$1
-  if [ -z "$id" ]; then
+  if ! lease_id_clean "$id"; then
     echo "hypermesh release: locks/release-publish lease is not held" >&2
     return 1
   fi
-  if ! az_lease renew --blob-name "locks/release-publish" --lease-id "$id"; then
+  if ! az_lease renew --blob-name "locks/release-publish" --lease-id "$id" --only-show-errors --output none; then
     echo "hypermesh release: locks/release-publish lease was lost" >&2
     return 1
   fi
