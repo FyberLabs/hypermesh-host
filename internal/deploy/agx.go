@@ -107,14 +107,15 @@ func loadFacts(ctx context.Context, opt Options) (Facts, error) {
 }
 
 func configure(_ context.Context, opt Options) error {
-	if strings.TrimSpace(opt.Serial) == "" {
-		return fmt.Errorf("known host serial is required")
+	if strings.TrimSpace(opt.Serial) == "" || strings.ContainsAny(opt.Serial, "\r\n\x00") {
+		return fmt.Errorf("a single-line reported host name is required")
 	}
 	enrolled := AlreadyEnrolled(opt.Root, opt.StateDir)
 	body, err := RenderAgentEnv(opt.ControlPlaneURL, opt.TenantID, opt.EnrollToken, opt.StateDir, opt.GGUFPath, opt.ModelCacheMax, enrolled)
 	if err != nil {
 		return err
 	}
+	body += fmt.Sprintf("HYPERMESH_HOST_NAME=%s\n", strings.TrimSpace(opt.Serial))
 	if _, err := writeAgentEnv(opt.Root, opt.EnvFile, body); err != nil {
 		return err
 	}

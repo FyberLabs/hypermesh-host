@@ -237,8 +237,8 @@ func TestConnectRejectsHealthWithoutCatalog(t *testing.T) {
 
 func TestConnectTakesDeviceIDFromListedHost(t *testing.T) {
 	rows := []HostRecord{
-		{ID: seedDeviceID, Serial: "seed-row"},
-		{ID: labDeviceID, Serial: labSerial},
+		{ID: "unregistered-device", Serial: "seed-row"},
+		{ID: labDeviceID, Serial: labSerial, HostName: labSerial, Enrolled: true},
 	}
 	id, err := DeviceIDFromList(rows, labSerial)
 	if err != nil {
@@ -247,10 +247,10 @@ func TestConnectTakesDeviceIDFromListedHost(t *testing.T) {
 	if id != labDeviceID {
 		t.Fatalf("id %s", id)
 	}
-	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: "seed-row"}}, labSerial); err == nil {
+	if _, err := DeviceIDFromList([]HostRecord{{ID: "unregistered-device", Serial: "seed-row"}}, labSerial); err == nil {
 		t.Fatal("missing listed host fell back to the seed row")
 	}
-	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: labSerial}}, labSerial); err == nil {
+	if _, err := DeviceIDFromList([]HostRecord{{ID: "unregistered-device", Serial: labSerial}}, labSerial); err == nil {
 		t.Fatal("seed id on the listed serial was accepted")
 	}
 }
@@ -274,7 +274,7 @@ func TestHeartbeatMustBeTheListedHost(t *testing.T) {
 	if !strings.Contains(err.Error(), labDeviceID) {
 		t.Fatalf("error should name the listed device, got %v", err)
 	}
-	if strings.Contains(err.Error(), seedDeviceID) {
+	if strings.Contains(err.Error(), "unregistered-device") {
 		t.Fatalf("error named the seed id: %v", err)
 	}
 }
@@ -517,8 +517,8 @@ func (l *planeLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		old := now.Add(-24 * time.Hour)
 		rows := []HostRecord{
-			{ID: seedDeviceID, Serial: "seed-row"},
-			{ID: labDeviceID, Serial: labSerial},
+			{ID: "unregistered-device", Serial: "seed-row"},
+			{ID: labDeviceID, Serial: labSerial, HostName: labSerial, Enrolled: true},
 		}
 		if l.seedFresh {
 			rows[0].LastHeartbeat = &now
