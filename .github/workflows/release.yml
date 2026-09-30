@@ -43,8 +43,8 @@ jobs:
         run: echo "AZURE_CONFIG_DIR=$RUNNER_TEMP/az" >> "$GITHUB_ENV"
 
       - name: Checkout
-        # actions/checkout v4
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
@@ -90,8 +90,8 @@ jobs:
       # Prod output is hypermesh_host_prod_client_id.
       - name: Azure login (test)
         if: env.channel == 'test'
-        # azure/login v2
-        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6
+        # azure/login v3.1.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
         with:
           client-id: ${{ vars.HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -100,8 +100,8 @@ jobs:
 
       - name: Azure login (prod)
         if: env.channel == 'prod'
-        # azure/login v2
-        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6
+        # azure/login v3.1.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906
         with:
           client-id: ${{ vars.HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
