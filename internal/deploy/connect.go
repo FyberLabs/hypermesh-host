@@ -13,9 +13,6 @@ import (
 const (
 	catalogPath = "/api/v1/hypermesh/catalog"
 	devicesPath = "/api/v1/hypermesh/devices"
-	// seedDeviceID is the placeholder row. The device id for a serial
-	// is whatever GET /devices lists. This constant is only a rejection.
-	seedDeviceID = "a6400000-0640-4000-8000-000000000001"
 )
 
 // HostRecord is one device row from GET /api/v1/hypermesh/devices.
@@ -23,6 +20,9 @@ type HostRecord struct {
 	ID            string     `json:"id"`
 	DeviceID      string     `json:"device_id"`
 	Serial        string     `json:"serial"`
+	HostName      string     `json:"host_name"`
+	Enrolled      bool       `json:"enrolled"`
+	ArchivedAt    *time.Time `json:"archived_at"`
 	LastHeartbeat *time.Time `json:"last_heartbeat_at"`
 }
 
@@ -33,9 +33,7 @@ func (h HostRecord) id() string {
 	return strings.TrimSpace(h.DeviceID)
 }
 
-// DeviceIDFromList returns the device id the plane listed for serial.
-// The seed id is refused even when it is the only row, or when it is
-// attached to that serial by mistake.
+// DeviceIDFromList resolves an enrolled, unarchived name reported by the agent.
 func DeviceIDFromList(rows []HostRecord, serial string) (string, error) {
 	serial = strings.TrimSpace(serial)
 	if serial == "" {
@@ -43,23 +41,21 @@ func DeviceIDFromList(rows []HostRecord, serial string) (string, error) {
 	}
 	var match string
 	for _, row := range rows {
-		if strings.TrimSpace(row.Serial) != serial {
+		if strings.TrimSpace(row.HostName) != serial || !row.Enrolled || row.ArchivedAt != nil {
 			continue
 		}
 		id := row.id()
 		if id == "" {
 			return "", fmt.Errorf("known host %s was listed without a device id", serial)
 		}
-		if strings.EqualFold(id, seedDeviceID) {
-			return "", fmt.Errorf("known host %s listed seed device %s; that row is not the live AGX", serial, seedDeviceID)
-		}
+
 		if match != "" && !strings.EqualFold(match, id) {
 			return "", fmt.Errorf("known host %s listed more than one device id", serial)
 		}
 		match = id
 	}
 	if match == "" {
-		return "", fmt.Errorf("known host %s is not in the plane device list", serial)
+		return "", fmt.Errorf("no host named %s enrolled", serial)
 	}
 	return match, nil
 }
@@ -181,4 +177,33 @@ func waitHeartbeat(ctx context.Context, p plane, deviceID string, since time.Tim
 		case <-timer.C:
 		}
 	}
+}
+
+func waitEnrollmentHeartbeat(ctx context.Context, p plane, name string, since time.Time, every, timeout time.Duration) error {
+    if every <= 0 { every = 500*time.Millisecond }
+    if timeout <= 0 { timeout = 45*time.Second }
+    deadline := time.Now().Add(timeout)
+    var lastErr error
+    for {
+        rows,err:=p.devices(ctx)
+        if err==nil {
+            id,resolveErr:=DeviceIDFromList(rows,name)
+            err=resolveErr
+            if err==nil {
+                for _,row:=range rows {
+                    if row.id()==id && row.LastHeartbeat!=nil && row.LastHeartbeat.After(since) {
+                        return nil
+                    }
+                }
+                err=fmt.Errorf("heartbeat was not accepted for %s",id)
+            }
+        }
+        lastErr=err
+        if time.Now().After(deadline) { return lastErr }
+        timer:=time.NewTimer(every)
+        select {
+        case <-ctx.Done(): timer.Stop();return ctx.Err()
+        case <-timer.C:
+        }
+    }
 }

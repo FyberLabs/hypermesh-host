@@ -2633,3 +2633,53 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+func TestFreshEnrollmentChangesKeyAndRestartReusesIdentity(t *testing.T) {
+    var requests []api.EnrollRequest
+    srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        var body api.EnrollRequest
+        if err := json.NewDecoder(r.Body).Decode(&body); err != nil { t.Fatal(err) }
+        requests = append(requests, body)
+        writeJSON(w, http.StatusOK, api.EnrollResponse{
+            DeviceID: body.EnrollToken, DeviceSecret: testSecret,
+        })
+    }))
+    defer srv.Close()
+    dir := t.TempDir()
+    uptime := filepath.Join(dir, "uptime")
+    if err := os.WriteFile(uptime, []byte("1 1\n"), 0600); err != nil { t.Fatal(err) }
+    first := newTestAgent(t, srv.URL, dir, uptime, "first-enrollment", "")
+    first.cfg.HostName = "configured-box"
+    first.cfg.Reenroll = true
+    if err := first.ensureEnrolled(context.Background()); err != nil { t.Fatal(err) }
+    if err := first.ensureEnrolled(context.Background()); err != nil { t.Fatal(err) }
+    second := newTestAgent(t, srv.URL, dir, uptime, "second-enrollment", "")
+    second.cfg.HostName = "configured-box"
+    second.cfg.Reenroll = true
+    second.tunnels = &fakeTunnel{}
+    if err := second.ensureEnrolled(context.Background()); err != nil { t.Fatal(err) }
+    if len(requests) != 2 { t.Fatalf("enroll requests: %d", len(requests)) }
+    if requests[0].HostName != "configured-box" || requests[1].HostName != "configured-box" {
+        t.Fatal("reported name changed")
+    }
+    if requests[0].WGPublicKey == "" || requests[0].WGPublicKey == requests[1].WGPublicKey {
+        t.Fatal("fresh enrollment reused public key")
+    }
+    restart := newTestAgent(t, srv.URL, dir, uptime, "second-enrollment", "")
+    restart.cfg.Reenroll = true
+    if err := restart.ensureEnrolled(context.Background()); err != nil { t.Fatal(err) }
+    if len(requests) != 2 || restart.keyDir != second.keyDir { t.Fatal("restart changed identity") }
+}
+
+func TestReenrollmentRefusesCorruptLeaseState(t *testing.T) {
+    dir:=t.TempDir()
+    a:=newTestAgent(t,"http://127.0.0.1:1",dir,"","fresh-token","")
+    a.cfg.Reenroll=true
+    a.tunnels=&fakeTunnel{}
+    if err:=a.saveState(State{DeviceID:"old-device",DeviceSecret:testSecret});err!=nil {t.Fatal(err)}
+    if err:=os.WriteFile(filepath.Join(dir,leaseFile),[]byte("{broken"),0600);err!=nil {t.Fatal(err)}
+    err:=a.ensureEnrolled(context.Background())
+    if err==nil || !strings.Contains(err.Error(),"invalid old lease state") {t.Fatalf("got %v",err)}
+    st,err:=a.loadState()
+    if err!=nil || st.DeviceID!="old-device" {t.Fatal("old identity overwritten")}
+}

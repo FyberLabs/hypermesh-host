@@ -107,14 +107,15 @@ func loadFacts(ctx context.Context, opt Options) (Facts, error) {
 }
 
 func configure(_ context.Context, opt Options) error {
-	if strings.TrimSpace(opt.Serial) == "" {
-		return fmt.Errorf("known host serial is required")
+	if strings.TrimSpace(opt.Serial) == "" || strings.ContainsAny(opt.Serial, "\r\n\x00") {
+		return fmt.Errorf("a single-line reported host name is required")
 	}
 	enrolled := AlreadyEnrolled(opt.Root, opt.StateDir)
 	body, err := RenderAgentEnv(opt.ControlPlaneURL, opt.TenantID, opt.EnrollToken, opt.StateDir, opt.GGUFPath, opt.ModelCacheMax, enrolled)
 	if err != nil {
 		return err
 	}
+	body += fmt.Sprintf("HYPERMESH_HOST_NAME=%s\n", strings.TrimSpace(opt.Serial))
 	if _, err := writeAgentEnv(opt.Root, opt.EnvFile, body); err != nil {
 		return err
 	}
@@ -167,19 +168,10 @@ func connect(ctx context.Context, opt Options) error {
 	if err := p.catalog(ctx); err != nil {
 		return err
 	}
-	rows, err := p.devices(ctx)
-	if err != nil {
-		return err
-	}
-	deviceID, err := DeviceIDFromList(rows, opt.Serial)
-	if err != nil {
-		return err
-	}
-	// Heartbeats at or before this instant do not count. Two minutes of
-	// skew covers a clock that is slightly behind the plane.
+	// Start enrollment before resolving the name that the agent reports.
 	since := opt.Now().Add(-2 * time.Minute)
 	if err := startExistingAgent(ctx, opt.Run); err != nil {
 		return err
 	}
-	return waitHeartbeat(ctx, p, deviceID, since, opt.PollEvery, opt.HeartbeatWait)
+	return waitEnrollmentHeartbeat(ctx, p, opt.Serial, since, opt.PollEvery, opt.HeartbeatWait)
 }

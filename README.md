@@ -257,3 +257,34 @@ deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 ## Out of scope here
 
 Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs. AIuditor witness is a sidecar (`deploy/agx/aiuditor-witness.service`), not this binary. Owner console does not bind loopback/LAN/public TCP, does not enqueue CP jobs, does not add `sell_resume`, a drain mega-job, `reason_code`, `preempt_mode=hard`, Path B, SociACL, WebAuthn, OIDC, or privilege_grant.
+
+
+## Enrollment identity
+
+Set `HYPERMESH_HOST_NAME` to the name this host should report, or let the agent
+use its operating-system hostname. Names support discovery; they are not
+credentials. The agent submits its locally generated WireGuard public key at
+enrollment. The private key stays in its protected state directory.
+
+Retire a box from the host dashboard before replacing its identity. Register it
+again, set the new `HYPERMESH_ENROLL_TOKEN` and `HYPERMESH_REENROLL=1`, then restart
+the agent. Each new token gets a fresh key and server-issued device ID. Restarts
+with that same token reuse the persisted identity and key. The old identity stays
+archived in the plane. Upgrade the plane to the enrollment-name/key API first.
+
+## Hardware preflight and generic benchmarks
+
+Run `hypermesh-deploy inspect` for a hardware-class fingerprint, detected
+processor/memory, backend recommendations and a conservative model memory budget.
+Jetson recognition requires Tegra evidence; AGX, other Jetsons, DGX-branded systems
+and Apple silicon retain their class labels. Other machines use detected runtime
+capabilities. This fingerprint contains no host name, serial, device UUID or keys.
+
+Run `hypermesh-deploy inspect --benchmark --model /path/model.gguf` to execute
+an installed llama-bench after checking the model against measured available
+memory. Missing accelerator-memory measurements fail closed. CPU is the fallback
+when no accelerator runtime is detected. Software/model downloads are explicit;
+recommendations do not grant certification. Existing AGX deployment pins remain
+in the AGX-specific installation path.
+
+Backend build options follow the [llama.cpp build documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).

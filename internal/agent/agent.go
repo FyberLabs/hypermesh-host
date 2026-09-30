@@ -3,6 +3,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -303,6 +305,7 @@ func (a *Agent) currentLease() *runtime.Handle {
 }
 
 func (a *Agent) ensureEnrolled(ctx context.Context) error {
+	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(a.cfg.EnrollToken)))
 	st, err := a.loadState()
 	if err != nil {
 		return err
@@ -310,18 +313,28 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if st.DeviceSecret == "" {
 		st.DeviceSecret = a.cfg.DeviceSecret
 	}
-	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) != "" {
+	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) != "" &&
+        !(a.cfg.Reenroll && a.cfg.EnrollToken != "" && st.EnrollTokenHash != tokenHash) {
+        if st.WGKeyDir != "" {
+            a.keyDir = st.WGKeyDir
+        }
 		a.state = st
 		a.client.DeviceSecret = st.DeviceSecret
 		a.log.Info("using stored device", "device_id", st.DeviceID)
 		return nil
 	}
-	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) == "" {
+	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) == "" && !a.cfg.Reenroll {
 		return fmt.Errorf("hypermesh: this box has an id on disk but no secret; it cannot enroll again — ask for a new enroll-token")
 	}
 	if strings.TrimSpace(a.cfg.EnrollToken) == "" {
 		return fmt.Errorf("hypermesh: this box has no saved identity and no enroll token")
 	}
+
+    if st.DeviceID != "" && a.cfg.Reenroll {
+        if err := a.resetEnrollmentWork(ctx); err != nil {
+            return fmt.Errorf("hypermesh: retire local enrollment work: %w", err)
+        }
+    }
 
 	snap, err := a.telem.Collect(ctx)
 	if err != nil {
@@ -329,7 +342,23 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	}
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
 
+    // Stage a key per enrollment token. Network retries reuse it; a fresh
+    // enrollment never reuses the retired identity's WireGuard private key.
+    keyDir := filepath.Join(a.cfg.StateDir, "enrollment-keys", tokenHash)
+    _, publicKey, err := tunnel.LoadOrCreatePrivateKey(keyDir)
+    if err != nil {
+        return fmt.Errorf("hypermesh: prepare enrollment key: %w", err)
+    }
+    name := strings.TrimSpace(a.cfg.HostName)
+    if name == "" {
+        name, err = os.Hostname()
+        if err != nil || strings.TrimSpace(name) == "" {
+            return fmt.Errorf("hypermesh: HYPERMESH_HOST_NAME or hostname is required")
+        }
+    }
 	resp, err := a.client.Enroll(ctx, api.EnrollRequest{
+        HostName: name,
+        WGPublicKey: publicKey,
 		EnrollToken: a.cfg.EnrollToken,
 		ImageHash:   image,
 		HostType:    a.cfg.ReportedHostType(),
@@ -340,7 +369,10 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if strings.TrimSpace(resp.DeviceSecret) == "" {
 		return fmt.Errorf("hypermesh: enroll did not return a secret")
 	}
+	a.keyDir = keyDir
 	st = State{
+		EnrollTokenHash: tokenHash,
+		WGKeyDir: keyDir,
 		DeviceID:         resp.DeviceID,
 		CredentialPrefix: resp.CredentialPrefix,
 		DeviceSecret:     resp.DeviceSecret,
@@ -362,7 +394,10 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	}
 	image := firstNonEmpty(a.cfg.ImageHash, snap.ImageHash)
 	sell := a.effectiveSell()
+	name := strings.TrimSpace(a.cfg.HostName)
+	if name == "" { name, _ = os.Hostname() }
 	hb, err := a.client.Heartbeat(ctx, api.HeartbeatRequest{
+		HostName: name,
 		DeviceID:        a.state.DeviceID,
 		ImageHash:       image,
 		LoadedModelHash: a.leaseImageDigest(),
@@ -1387,4 +1422,30 @@ func firstNonEmpty(vs ...string) string {
 		}
 	}
 	return ""
+}
+
+// resetEnrollmentWork runs before exchanging a fresh enrollment token.
+// Old work must stop successfully before a replacement identity is issued.
+func (a *Agent) resetEnrollmentWork(ctx context.Context) error {
+    leasePath:=filepath.Join(a.cfg.StateDir,leaseFile)
+    if raw,err:=os.ReadFile(leasePath);err==nil {
+        var handle runtime.Handle
+        if err:=json.Unmarshal(raw,&handle);err!=nil {return fmt.Errorf("invalid old lease state: %w",err)}
+        if err:=a.stopHandle(ctx,&handle);err!=nil {return err}
+    } else if !os.IsNotExist(err) {return err}
+    if err:=a.tunnels.Teardown(ctx);err!=nil {return err}
+    for _,name:=range []string{leaseFile,sellFile,"boot.json"} {
+        if err:=os.Remove(filepath.Join(a.cfg.StateDir,name));err!=nil && !os.IsNotExist(err) {return err}
+    }
+    if dir,err:=modelCacheDir(a.cfg.GGUFHostPath());err==nil {
+        if _,err:=os.Stat(dir);err==nil {
+            idx,_,err:=readCacheIndex(dir)
+            if err!=nil {return err}
+            idx.Loaded="";idx.Pending=nil
+            if err:=writeCacheIndex(dir,idx);err!=nil {return err}
+        } else if !os.IsNotExist(err) {return err}
+    }
+    a.setLease(nil)
+    a.applied="";a.peerPosted=false;a.postedPub=""
+    return nil
 }

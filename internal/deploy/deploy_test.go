@@ -237,8 +237,8 @@ func TestConnectRejectsHealthWithoutCatalog(t *testing.T) {
 
 func TestConnectTakesDeviceIDFromListedHost(t *testing.T) {
 	rows := []HostRecord{
-		{ID: seedDeviceID, Serial: "seed-row"},
-		{ID: labDeviceID, Serial: labSerial},
+		{ID: "unregistered-device", Serial: "seed-row"},
+		{ID: labDeviceID, Serial: labSerial, HostName: labSerial, Enrolled: true},
 	}
 	id, err := DeviceIDFromList(rows, labSerial)
 	if err != nil {
@@ -247,10 +247,10 @@ func TestConnectTakesDeviceIDFromListedHost(t *testing.T) {
 	if id != labDeviceID {
 		t.Fatalf("id %s", id)
 	}
-	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: "seed-row"}}, labSerial); err == nil {
+	if _, err := DeviceIDFromList([]HostRecord{{ID: "unregistered-device", Serial: "seed-row"}}, labSerial); err == nil {
 		t.Fatal("missing listed host fell back to the seed row")
 	}
-	if _, err := DeviceIDFromList([]HostRecord{{ID: seedDeviceID, Serial: labSerial}}, labSerial); err == nil {
+	if _, err := DeviceIDFromList([]HostRecord{{ID: "unregistered-device", Serial: labSerial}}, labSerial); err == nil {
 		t.Fatal("seed id on the listed serial was accepted")
 	}
 }
@@ -274,7 +274,7 @@ func TestHeartbeatMustBeTheListedHost(t *testing.T) {
 	if !strings.Contains(err.Error(), labDeviceID) {
 		t.Fatalf("error should name the listed device, got %v", err)
 	}
-	if strings.Contains(err.Error(), seedDeviceID) {
+	if strings.Contains(err.Error(), "unregistered-device") {
 		t.Fatalf("error named the seed id: %v", err)
 	}
 }
@@ -379,7 +379,7 @@ func TestSerialRequired(t *testing.T) {
 	opt.Facts = &facts
 	opt.Serial = ""
 	err := AGX{}.Pipeline(opt).Run(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "serial") {
+	if err == nil || !strings.Contains(err.Error(), "host name") {
 		t.Fatalf("error %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "etc/hypermesh/agent.env")); !os.IsNotExist(statErr) {
@@ -517,8 +517,8 @@ func (l *planeLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		old := now.Add(-24 * time.Hour)
 		rows := []HostRecord{
-			{ID: seedDeviceID, Serial: "seed-row"},
-			{ID: labDeviceID, Serial: labSerial},
+			{ID: "unregistered-device", Serial: "seed-row"},
+			{ID: labDeviceID, Serial: labSerial, HostName: labSerial, Enrolled: true},
 		}
 		if l.seedFresh {
 			rows[0].LastHeartbeat = &now
@@ -643,4 +643,28 @@ func readyOptions(t *testing.T, root string, lab *planeLab, units *[][]string) O
 			return nil
 		},
 	}
+}
+
+func TestConnectStartsAgentBeforeDiscovery(t *testing.T) {
+    started:=false
+    now:=time.Now()
+    server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request) {
+        switch r.URL.Path {
+        case catalogPath:
+            _,_=w.Write([]byte("[]"))
+        case devicesPath:
+            if !started {t.Error("discovery ran before enrollment agent started")}
+            _=json.NewEncoder(w).Encode([]HostRecord{{ID:"fresh-device",HostName:"fresh-box",Enrolled:true,LastHeartbeat:&now}})
+        default:
+            http.NotFound(w,r)
+        }
+    }))
+    defer server.Close()
+    opt:=Options{ControlPlaneURL:server.URL,Serial:"fresh-box",HTTP:server.Client(),
+        Now:func() time.Time{return now},HeartbeatWait:time.Second,
+        Run:func(_ context.Context,_ string,args ...string) error {
+            if len(args)>0 && args[len(args)-1]==agentUnitName {started=true}
+            return nil
+        }}
+    if err:=connect(context.Background(),opt);err!=nil {t.Fatal(err)}
 }

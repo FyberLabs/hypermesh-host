@@ -17,6 +17,8 @@ const (
 // State is persisted after enroll at mode 0600.
 // The enroll token is never stored. DeviceSecret is shown once by enroll.
 type State struct {
+	EnrollTokenHash string `json:"enroll_token_hash,omitempty"`
+	WGKeyDir string `json:"wg_key_dir,omitempty"`
 	DeviceID         string `json:"device_id"`
 	CredentialPrefix string `json:"credential_prefix,omitempty"`
 	DeviceSecret     string `json:"device_secret,omitempty"`
