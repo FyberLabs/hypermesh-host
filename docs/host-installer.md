@@ -121,6 +121,7 @@ disabled with consent, not that other services are disabled.
   endpoint reachability checks.
 - [ ] Authenticated AIuditor identity and protocol compatibility checks.
 - [x] Signed bootstrap verification, channel discovery and persistent build floor.
+- [x] Signed agent download for both Linux architectures, with optional exact installer-release binding.
 - [ ] Reviewed installer self-update.
 - [x] Versioned candidate Linux profiles and exact prerequisite package/headless plans.
 - [ ] Hardware validation of profiles and complete agent/service/apply plans.
@@ -696,3 +697,42 @@ checks, no-op reruns, concurrent locks, private atomic journals and status.
 Physical AGX/N5 acceptance remains pending. Next: bind verified agent and
 rollback-helper payloads and install configuration/systemd units while retaining
 the selected WireGuard mode, then extend the journal to that complete flow.
+
+## Verified agent acquisition
+
+Completed: `download --artifact agent` uses the same independently trusted GPG
+key, signed checksum manifest, metadata validation, bounded HTTPS transfer and
+persistent build floor as the deploy CLI. The default artifact remains
+`deploy`. Only these two executable names are accepted.
+
+For a release-built installer, add `--match-installer` to require the agent's
+signed version, build and commit to match that installer exactly. A development
+binary without release identity cannot use this option. Mismatch stops before
+fetching the executable or advancing the stored build floor. Prefer the
+installer's immutable release URL: a moving channel head can legitimately point
+at a newer build and will then be rejected by this constraint.
+
+Example (replace the uppercase placeholders with independently reviewed values;
+use `amd64` on x86-64):
+
+```bash
+./hypermesh-deploy download --artifact agent --match-installer \
+  --release-url https://RELEASE_HOST/test/BUILD-COMMIT_PREFIX \
+  --channel test --arch arm64 --min-build BUILD \
+  --trusted-key /trusted/release-public.asc --fingerprints TRUSTED_FINGERPRINT \
+  --state-file /owner-controlled/release-build.json \
+  --output ./hypermesh-agent.verified
+```
+
+Reuse the same owner-controlled build-state file for installer and agent
+downloads so both honor the highest accepted build. The output is a new private
+0700 executable; existing paths are never overwritten. It is not executed,
+installed into system directories or registered as a service by this command.
+
+Automated coverage exercises both artifacts and both architectures against
+signature/hash tampering, discovery mismatch, rollback and existing-file
+preservation, plus exact installer identity and invalid artifact selection.
+The remaining installation task must bind this verified agent, the rollback
+helper, environment configuration and mode-specific systemd units into the
+approved plan and journal. Agent/service installation is still incomplete;
+this acquisition step does not make AGX-1 ready for acceptance.

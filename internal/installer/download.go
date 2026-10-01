@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/update"
+	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 )
 
 type releaseMetadata struct {
@@ -28,6 +29,8 @@ type releaseMetadata struct {
 
 type downloadOptions struct {
 	BaseURL, Channel, Arch, Output string
+	Artifact string
+	MatchInstaller bool
 	StateFile string
 	ChannelRoot string
 	MinimumBuild int64
@@ -46,6 +49,8 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 	flags.SetOutput(diagnostic)
 	var opt downloadOptions
 	var keyPath, fingerprints string
+	flags.StringVar(&opt.Artifact, "artifact", "deploy", "signed executable: deploy or agent")
+	flags.BoolVar(&opt.MatchInstaller, "match-installer", false, "require the signed release to match this installer build, version and commit")
 	flags.StringVar(&opt.BaseURL, "release-url", "", "HTTPS directory containing release assets")
 	flags.StringVar(&opt.ChannelRoot, "channel-root", "", "discover channels/<channel>.json under this HTTPS root; requires --state-file")
 	flags.StringVar(&opt.Channel, "channel", "", "expected channel: test or prod")
@@ -85,11 +90,23 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 		fmt.Fprintln(diagnostic, err)
 		return 1
 	}
-	fmt.Fprintf(out, "Verified Linux/%s CLI: channel=%s build=%d commit=%s\n", opt.Arch, meta.Channel, meta.Build, meta.Commit)
+	fmt.Fprintf(out, "Verified Linux/%s %s: channel=%s build=%d commit=%s\n", opt.Arch, downloadArtifact(opt), meta.Channel, meta.Build, meta.Commit)
 	return 0
 }
 
+func downloadArtifact(opt downloadOptions) string {
+	if opt.Artifact == "" { return "deploy" } // Preserve existing callers.
+	return opt.Artifact
+}
+
 func validateDownload(opt downloadOptions) error {
+	if artifact := downloadArtifact(opt); artifact != "deploy" && artifact != "agent" {
+		return fmt.Errorf("artifact must be deploy or agent")
+	}
+	if opt.MatchInstaller && (buildinfo.CurrentBuild() <= 0 ||
+		!releaseVersion.MatchString(buildinfo.CurrentVersion()) || !releaseCommit.MatchString(buildinfo.Current())) {
+		return fmt.Errorf("match-installer requires a release-built installer with version, build and commit")
+	}
 	address := opt.BaseURL
 	if opt.ChannelRoot != "" {
 		if opt.BaseURL != "" || opt.StateFile == "" {
@@ -153,7 +170,11 @@ func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, 
 	if advertised != nil && meta != *advertised {
 		return meta, fmt.Errorf("signed release metadata does not match the discovered channel head")
 	}
-	name := fmt.Sprintf("hypermesh-deploy_%s_linux_%s", meta.Version, opt.Arch)
+	if opt.MatchInstaller && (meta.Build != int64(buildinfo.CurrentBuild()) ||
+		meta.Version != buildinfo.CurrentVersion() || meta.Commit != buildinfo.Current()) {
+		return meta, fmt.Errorf("signed release does not match this installer; select its immutable release URL")
+	}
+	name := fmt.Sprintf("hypermesh-%s_%s_linux_%s", downloadArtifact(opt), meta.Version, opt.Arch)
 	payload, err := fetch(ctx, base+name, 128<<20)
 	if err != nil { return meta, err }
 	if err := update.CheckHash(sums, name, payload); err != nil { return meta, err }
@@ -170,7 +191,7 @@ func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, 
 // Stage privately, then link atomically without replacing any existing path.
 func writeVerifiedCLI(destination string, payload []byte) error {
 	file, err := os.CreateTemp(filepath.Dir(destination), ".hypermesh-download-")
-	if err != nil { return fmt.Errorf("cannot stage verified CLI in output directory") }
+	if err != nil { return fmt.Errorf("cannot stage verified executable in output directory") }
 	name := file.Name()
 	defer os.Remove(name)
 	if _, err := file.Write(payload); err != nil { _ = file.Close(); return err }
