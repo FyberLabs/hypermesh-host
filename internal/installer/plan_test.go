@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"sync/atomic"
 
 	"github.com/FyberLabs/hypermesh-host/internal/hardware"
 )
@@ -50,11 +51,12 @@ func TestPlanRejectsCredentialURLsBeforeProbing(t *testing.T) {
 }
 
 func TestEndpointProbe(t *testing.T) {
-	status := http.StatusOK
+	var status atomic.Int32
+	status.Store(http.StatusOK)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet { t.Error("expected read-only GET") }
 		w.Header().Set("Location", "/other")
-		w.WriteHeader(status)
+		w.WriteHeader(int(status.Load()))
 		_, _ = w.Write([]byte("private diagnostic body"))
 	}))
 	defer server.Close()
@@ -62,7 +64,7 @@ func TestEndpointProbe(t *testing.T) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if err := probeEndpoint(context.Background(), server.URL, client); err != nil { t.Fatal(err) }
 	for _, value := range []int{302, 401, 503} {
-		status = value
+		status.Store(int32(value))
 		if err := probeEndpoint(context.Background(), server.URL, client); err == nil {
 			t.Fatalf("accepted HTTP %d", value)
 		}
