@@ -375,3 +375,67 @@ Use an owner-controlled local directory that supports rename, links and fsync.
 
 This completes local build tracking; automatic discovery, self-replacement and
 full guided onboarding remain pending.
+
+## Automatic channel discovery milestone
+
+Implemented: `download --channel-root https://YOUR_RELEASE_ROOT` reads
+`channels/test.json` or `channels/prod.json`, derives the immutable release
+directory from validated channel/release identity, and feeds it through the
+existing signature and checksum verifier. Use it instead of `--release-url`.
+Discovery requires `--state-file`, independently trusted key material, an
+explicit channel and an initial `--min-build`.
+
+The channel pointer is a locator, not a signed authority. All five identity
+fields (channel, version, build, commit, release ID) must match signed
+release.json before a binary is published or build state changes. Artifact
+URLs in the pointer are never followed. Old heads below the stored floor,
+malformed metadata, unsafe release IDs and mismatched signed metadata fail
+closed. A replay at or above the known floor can still be an older channel
+head: this mechanism does not prove global freshness without a trusted newer
+build record.
+
+- [x] Discover channel candidates and bind them to verified release metadata.
+- [x] Require persistent build tracking for automatic channel discovery.
+- [ ] Expose the bootstrap release root through the website/control-plane
+  delivery contract with the required access policy.
+- [ ] Provision independent bootstrap trust, self-update and reviewed install.
+
+No public storage access or invented service endpoint is assumed. The configured
+HTTPS root must serve the existing publisher layout. Discovery fetches files
+only and does not execute the CLI, enroll a host or modify system services.
+
+## Expanded local hardware acceptance matrix
+
+These are planned test-box targets supplied by the owner, not claims that the
+product names, OS/runtime combinations, or configurations are certified.
+Record the actual CPU/GPU identifiers, firmware, OS and usable memory when each
+box arrives; refine profile names from measured hardware.
+
+| Planned target | Intended package family | Validation focus |
+| --- | --- | --- |
+| AGX 64 / AGX-1 | Linux arm64 | JetPack/L4T compatibility, UMA allocation, ARM bootstrap and reenrollment |
+| Seeed J4012 Jetson | Linux arm64 | Actual module/RAM, admission minimums, power/thermal constraints and vendor stack |
+| MINISFORUM N5 MAX, Ryzen AI Max+ 395, 128 GB | Linux amd64 (x86-64) | AMD GPU/runtime, UMA limits, preserve NAS storage and services |
+| Planned 495 system, 192 GB | Linux amd64 if detected x86-64 | Confirm exact processor/GPU and vendor-supported runtime before profile selection |
+| Intel x86-64 hosts | Linux amd64 | Actual GPU/backend and memory topology; CPU vendor alone does not establish accelerator support |
+| Planned Mac mini M5 Pro, 64 GB | macOS arm64 | Confirm hardware/OS, Metal allocation limits and headless operation |
+| Planned Mac mini M6, 32 GB | macOS arm64 | Confirm hardware/OS, OS/runtime memory reserve and practical model fit |
+| Larger Apple Silicon Mac Studios | macOS arm64 | Record exact model/RAM, Metal compatibility and sustained workload behavior |
+
+AMD and Intel x86-64 use the same `amd64` instruction-set package name;
+RAM capacity belongs in measured profiles, not separate binary names. Linux
+Jetsons and Apple Silicon both use ARM64 but require different OS binaries.
+
+Mac support needs its own complete task sequence:
+
+- [ ] Build and publish Darwin arm64 agent and deploy artifacts with signatures.
+- [ ] Add macOS resource admission and Metal allocation/headroom checks.
+- [ ] Define supported macOS versions, launchd service management, key storage,
+  headless behavior and approval/recovery steps without Linux systemd assumptions.
+- [ ] Implement installer signing/notarization and website delivery for macOS.
+- [ ] Validate enrollment, connectivity, benchmark, lease lifecycle and restart
+  recovery on each available Mac profile before advertising support.
+
+Current signed deploy downloads select Linux binaries only. Existing Mac
+inspection code is not a complete supported installer. New AMD/Intel and Jetson
+profiles also remain pending measured runtime and end-to-end acceptance.
