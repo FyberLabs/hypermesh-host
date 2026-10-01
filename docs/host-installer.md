@@ -439,3 +439,44 @@ Mac support needs its own complete task sequence:
 Current signed deploy downloads select Linux binaries only. Existing Mac
 inspection code is not a complete supported installer. New AMD/Intel and Jetson
 profiles also remain pending measured runtime and end-to-end acceptance.
+
+## First-install bootstrap without an existing CLI
+
+Implemented: `packaging/bootstrap.py` uses Python 3 standard libraries and
+GPG to download and verify the Linux deploy CLI. The publisher includes this
+script in new releases and their signed checksum manifests. No existing
+Hypermesh CLI or third-party Python packages are needed.
+
+Obtain the bootstrap script through a trusted distribution channel. Supply
+an independently approved public key and full fingerprint; the script never
+trusts a key merely because it accompanies a downloaded release. It checks
+the checksum signature, signed release identity/channel/build floor and binary
+hash, then atomically creates a new owner-executable output without overwriting
+files or symlinks. It never executes the binary or enrolls the host.
+
+```bash
+python3 bootstrap.py --release-url https://YOUR_RELEASE_SERVER/RELEASE_DIRECTORY \
+  --channel test --min-build 24 --arch arm64 \
+  --trusted-key /path/to/approved-release.pub --fingerprint APPROVED_FINGERPRINT \
+  --output ./hypermesh-deploy
+```
+
+Use `--arch amd64` for Linux AMD/Intel x86-64. This is a Linux CLI download,
+not the Mac installer. Python and GPG must already be installed; missing tools
+fail with a message and are not installed without approval. Initial downloads
+use the explicit minimum build; subsequent CLI downloads should use the
+persistent state file and channel discovery. The initial trusted script, key,
+fingerprint and release location still need to be delivered by the website.
+
+- [x] Standalone first-install verification without an existing CLI.
+- [x] Include bootstrap script in release checksums and assets.
+- [x] Real-GPG tests for trusted signatures, wrong keys, altered data and
+  signature failures, plus rollback/channel rejection and output preservation.
+- [ ] Provision the approved public key/fingerprint into bootstrap distribution.
+- [ ] Complete the hyperme.sh download page and release delivery endpoint.
+- [ ] Verify the first release containing bootstrap.py and perform AGX acceptance.
+
+At implementation time, the committed infra update-key and fingerprint lists
+are empty. Their approved independent source is pending operator input.
+Do not describe the website bootstrap as ready until those trust and delivery
+items are complete. Do not add the private signing key to a host package.

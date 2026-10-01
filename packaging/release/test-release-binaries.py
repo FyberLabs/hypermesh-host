@@ -20,7 +20,7 @@ class ReleaseBinaries(unittest.TestCase):
                 ["bash", "-euc",
                  'source "$1"; build_release_binaries "$2" "$3" 0.0.0 ""; write_release_checksums "$3" 0.0.0',
                  "test", str(LAYOUT), str(ROOT), str(dist)], check=True)
-            expected = {"release.json"}
+            expected = {"release.json", "bootstrap.py"}
             for program in ("agent", "deploy"):
                 for arch, machine in (("arm64", 183), ("amd64", 62)):
                     name = f"hypermesh-{program}_0.0.0_linux_{arch}"
