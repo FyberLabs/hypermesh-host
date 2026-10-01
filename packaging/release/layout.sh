@@ -508,7 +508,8 @@ read_index_build() {
     return 1
   fi
   tmp=$(mktemp)
-  if ! az_blob download --name "channels/${name}.json" --file "$tmp" --overwrite true --only-show-errors; then
+  # stdout is the function return value; Azure download metadata is not.
+  if ! az_blob download --name "channels/${name}.json" --file "$tmp" --overwrite true --only-show-errors > /dev/null; then
     rm -f "$tmp"
     echo "hypermesh release: download channels/${name}.json failed" >&2
     return 1
