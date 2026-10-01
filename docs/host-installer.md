@@ -317,10 +317,11 @@ recovery action. An owner-requested retirement archives the old device and
 revokes its access; re-adding the box creates fresh keys and a new server-assigned
 identity.
 
-This is the approved interaction and acceptance contract. The device-flow
-client, automatic registration endpoint, dashboard confirmation/status and
-installer integration remain implementation work; the inactive installed agent
-must not be advertised as having this flow yet.
+This is the approved interaction and acceptance contract. The bounded device-flow
+protocol client is implemented in `internal/deviceauth`; the automatic
+registration endpoint, dashboard confirmation/status and installer integration
+remain implementation work. The inactive installed agent must not be advertised
+as having this end-to-end flow yet.
 
 Implementation and acceptance tasks:
 
@@ -333,7 +334,8 @@ Implementation and acceptance tasks:
 - [ ] Implement and reconcile one-minute lease charges and token metering
   before advertising those options.
 - [x] Approve automatic dashboard registration through device authorization, without pre-created devices or name/UUID matching.
-- [ ] Add device authorization URL/code, browser tenant/host confirmation and bounded installer polling.
+- [x] Implement the bounded device-authorization protocol client, safe URL/code display and pending/slow-down polling.
+- [ ] Connect browser tenant/host confirmation and device authorization to the installer registration flow.
 - [ ] Register the host automatically under the server-authorized organization and display its onboarding state in the dashboard.
 - [ ] Make registration retry-safe across lost responses, restarts and concurrent requests; test tenant and public-key ownership checks.
 - [ ] Test pending, denied, expired, cancelled and replayed authorization.
@@ -871,3 +873,38 @@ Still to implement end to end:
 
 The dashboard/control-plane delivery and status contract are pending; the
 existing hourly checker is not a claim that dashboard push already works.
+
+
+## Device-authorization protocol client
+
+Implemented in `internal/deviceauth`: `Authorize` discovers the configured HTTPS
+issuer, requests an `openid` device grant for the existing public
+`hypermesh-native` client, displays the verification URL and user code, and
+returns an in-memory access token after approval. There is deliberately no
+standalone command that prints an access token or asks an operator to paste it.
+
+Discovery must match the configured issuer exactly; device, token and browser
+verification endpoints must use its HTTPS origin. Redirects are refused,
+response bodies are capped at 1 MiB, and each request has a 15-second deadline
+covering its entire body. Authorization is bounded by both a ten-minute overall
+deadline and the returned device-code lifetime. Cancellation interrupts requests
+and waits.
+
+The client waits before the first poll, honors the issuer interval (five seconds
+when omitted), permanently increases the interval for `slow_down`, and backs
+off exponentially on request or response-body timeouts. Denial, expiry, invalid
+grants and unexpected responses terminate the attempt. Only URL/code instructions
+are displayed; raw server responses, transport errors and credentials are not
+included in errors. Tokens have redacted default text/JSON formatting and are
+not persisted. The caller must keep the explicitly accessed bearer value private.
+
+TLS-backed tests exercise pending/slow-down approval, denial/expiry, cancellation,
+intervals, deadline-bounded trickle responses, timeout backoff, redirects,
+untrusted discovery, malformed/oversized responses and credential redaction.
+These are protocol tests, not a live Keycloak or physical-host acceptance run.
+
+**Remaining integration:** browser confirmation of the particular installation,
+server-derived tenant/organization authority, retry-safe automatic device
+creation, durable fresh-key enrollment and gated service activation. Identity
+provider sign-in alone does not authorize those operations. No pre-created
+dashboard device or manual UUID comparison is introduced by this component.
