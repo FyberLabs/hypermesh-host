@@ -59,13 +59,15 @@ func validateWorkloadShape(p workloadPlan,approved string)error{
 }
 func workloadNext(state string)string{
 	switch state{
-	case "verified":return "Dated pinned-model inference and cleanup succeeded. This is not full-context fit, sustained benchmarking, AIuditor certification, activation or permission to sell."
+	case "verified":return "Dated pinned-model inference and cleanup succeeded. Inspect receipt.context_fit for full-window evidence when requested. This is not sustained benchmarking, AIuditor certification, activation or permission to sell."
 	case "checking":return "Check may still be running or have been interrupted. Inspect the named temporary container before retrying; do not treat this journal as success."
 	default:return "Workload check failed or is unconfirmed. Inspect model pins, runtime health and temporary containers; preserve installer and enrollment state, then retry the reviewed plan."
 	}
 }
 func validWorkloadReceipt(p workloadPlan,r agent.WorkloadReceipt)bool{
-	return sameSetupJSON(r.Request,p.Request)&&r.CleanupComplete&&
+	fitOK:=r.ContextFit==nil
+	if p.Request.FullContext {fitOK=r.ContextFit!=nil&&r.ContextFit.ValidFor(p.Request.ContextTokens)}
+	return fitOK&&sameSetupJSON(r.Request,p.Request)&&r.CleanupComplete&&
 		strings.HasPrefix(r.HostImageHash,"sha256:")&&setupDigestRE.MatchString(strings.TrimPrefix(r.HostImageHash,"sha256:"))&&
 		r.SampleMS>0&&r.TokensPerSecond>0&&!math.IsInf(r.TokensPerSecond,0)&&!math.IsNaN(r.TokensPerSecond)
 }
@@ -157,14 +159,15 @@ func RunPlanWorkload(ctx context.Context,args []string,out,diagnostic io.Writer)
 	image:=f.String("image-digest","","reviewed OCI repo@sha256 runtime pin")
 	model:=f.String("model-file","","existing GGUF inside the reviewed models directory")
 	hash:=f.String("model-sha256","","reviewed sha256:hex model pin")
-	tokens:=f.Int("context-tokens",4096,"runtime context allocation; short inference does not prove full-context fit")
+	tokens:=f.Int("context-tokens",4096,"runtime context allocation")
+	full:=f.Bool("full-context",false,"approve a full token-window exercise in addition to short inference")
 	if err:=f.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
 	if f.NArg()!=0||*setup==""{fmt.Fprintln(diagnostic,"require --setup-plan and explicit model/runtime pins");return 2}
 	var p workloadPlan;p.Schema=1
 	raw,err:=readSetupRegular(*setup,false)
 	if err==nil{err=decodeSetupJSON(raw,&p.Setup)}
 	if err!=nil{fmt.Fprintln(diagnostic,"cannot read setup plan");return 1}
-	p.Request=agent.WorkloadPreflight{CatalogID:*catalog,ImageDigest:*image,ModelPath:*model,FileHash:*hash,ContextTokens:*tokens}
+	p.Request=agent.WorkloadPreflight{CatalogID:*catalog,ImageDigest:*image,ModelPath:*model,FileHash:*hash,ContextTokens:*tokens,FullContext:*full}
 	p.SHA256=workloadDigest(p);p.Request.PlanSHA256=p.SHA256
 	if err:=validateWorkloadPlan(p,p.SHA256);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
 	if json.NewEncoder(out).Encode(p)!=nil{return 1};return 0

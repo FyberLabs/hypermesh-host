@@ -68,11 +68,13 @@ func llamaOrDefault(v, def string) string {
 // is the catalog id. The image ref and `-c` command follow these.
 func llamaServerDockerOpts(spec Spec) []string {
 	alias := strings.TrimSpace(spec.CatalogID)
-	return []string{
+	args := []string{
 		"-e", "LLAMA_ARG_JINJA=" + llamaOrDefault(spec.LlamaJinja, DefaultLlamaJinja),
 		"-e", "LLAMA_ARG_CTX_SIZE=" + llamaOrDefault(spec.LlamaCtxSize, DefaultLlamaCtxSize),
 		"-e", "LLAMA_ARG_TIMEOUT=" + llamaOrDefault(spec.LlamaTimeout, DefaultLlamaTimeout),
 		"-e", ServeAliasEnv + "=" + alias,
 		"--entrypoint", "/bin/sh",
 	}
+	if spec.SingleSlot { args=append(args,"-e","LLAMA_ARG_N_PARALLEL=1","-e","LLAMA_ARG_CONTEXT_SHIFT=0") }
+	return args
 }

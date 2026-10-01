@@ -49,3 +49,31 @@ func TestLocalWorkloadPreflightRefusesAnyLeaseState(t *testing.T){
 		if _,err:=RunWorkloadPreflight(context.Background(),r,state,run);err==nil{t.Fatal("lease state ignored")}
 	}
 }
+
+func TestLocalFullContextFailureStillCleans(t *testing.T){
+	for _,pass:=range []bool{true,false}{
+		state:=t.TempDir();model,hash:=writeTestGGUF(t,state)
+		r:=WorkloadPreflight{PlanSHA256:strings.Repeat("a",64),CatalogID:"reviewed-model",
+			ImageDigest:certTestPin,ModelPath:model,FileHash:hash,ContextTokens:512,FullContext:true}
+		server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,req *http.Request){
+			switch req.URL.Path{
+			case "/tokenize":writeJSON(w,200,map[string]any{"tokens":[]int{123}})
+			case "/completion":
+				time.Sleep(2*time.Millisecond)
+				writeJSON(w,200,map[string]any{"model":"/models/model.gguf","tokens_evaluated":496,"tokens_predicted":16,
+					"truncated":!pass,"stop":true,"stop_type":"limit","generation_settings":map[string]int{"n_ctx":512}})
+			default:
+				time.Sleep(2*time.Millisecond)
+				writeJSON(w,200,map[string]any{"choices":[]map[string]any{{"message":map[string]string{"content":"ready"}}},"usage":map[string]int{"completion_tokens":4}})
+			}
+		}))
+		var calls []string
+		run:=func(_ context.Context,_ string,args ...string)([]byte,error){calls=append(calls,strings.Join(args," "));return []byte("context-container"),nil}
+		receipt,err:=runLocalWorkloadPreflight(context.Background(),r,state,run,server.URL)
+		server.Close()
+		if (err==nil)!=pass{t.Fatalf("pass=%v receipt=%+v err=%v",pass,receipt,err)}
+		if pass&&(receipt.ContextFit==nil||!receipt.ContextFit.ValidFor(512)){t.Fatal("context evidence missing")}
+		joined:=strings.Join(calls,"\n")
+		if !strings.Contains(joined,"LLAMA_ARG_N_PARALLEL=1")||!strings.Contains(joined,"stop context-container")||!strings.Contains(joined,"rm hypermesh-"){t.Fatalf("missing single-slot setup/cleanup: %s",joined)}
+	}
+}

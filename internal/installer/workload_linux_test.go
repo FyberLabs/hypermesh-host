@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/agent"
+	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 )
 
 func workloadFixture(t *testing.T)(workloadPlan,agent.WorkloadReceipt){
@@ -122,4 +123,18 @@ func TestWorkloadHistorySurvivesInstallerBuildChange(t *testing.T){
 	j:=workloadJournal{Schema:1,Plan:p,State:"verified",StartedAt:now,RecordedAt:now,Receipt:&r}
 	if !validWorkloadJournal(j){t.Fatal("historical evidence rejected")}
 	if validateWorkloadPlan(p,p.SHA256)==nil{t.Fatal("old-build approval accepted for fresh execution")}
+}
+
+func TestFullContextApprovalAndReceiptBinding(t *testing.T){
+	p,r:=workloadFixture(t)
+	old:=p.SHA256
+	p.Request.FullContext=true
+	if validateWorkloadPlan(p,old)==nil{t.Fatal("old short-check approval authorized full-context work")}
+	p.SHA256=workloadDigest(p);p.Request.PlanSHA256=p.SHA256;r.Request=p.Request
+	if validateWorkloadPlan(p,p.SHA256)!=nil{t.Fatal("valid full-context plan rejected")}
+	if validWorkloadReceipt(p,r){t.Fatal("short receipt accepted as full-context evidence")}
+	r.ContextFit=&pathb.ContextFit{Protocol:pathb.ContextFitProtocol,ContextTokens:4096,PromptTokens:4080,GeneratedTokens:16,ElapsedMS:100}
+	if !validWorkloadReceipt(p,r){t.Fatal("valid context evidence rejected")}
+	r.ContextFit.ContextTokens=8192
+	if validWorkloadReceipt(p,r){t.Fatal("another context size accepted")}
 }
