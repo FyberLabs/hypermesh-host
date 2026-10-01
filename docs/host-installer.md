@@ -628,7 +628,7 @@ exit 1 means blocked and exit 2 means invalid arguments.
   --profile auto --headless > setup-plan.json
 ```
 
-The revision-2 policies cover Ubuntu 22.04/24.04 with measured Jetson ARM64
+The revision-3 policies cover Ubuntu 22.04/24.04 with measured Jetson ARM64
 CUDA UMA, AMD x86-64 HIP UMA, or discrete CUDA on Linux ARM64/x86-64.
 These are **candidate policies**, not validated driver compatibility matrices.
 Names and installed RAM labels cannot override architecture/runtime matching.
@@ -686,7 +686,7 @@ and journaled application/resume against a freshly revalidated plan.
 
 ## Approved prerequisite application and resume
 
-Revision-2 profiles bind the constrained noninteractive application arguments.
+Revision-3 profiles bind the constrained noninteractive application arguments.
 Implemented: schema-2 setup plans record the readiness URL and headless intent
 as well as the exact prerequisite operations. Generate a fresh plan with the
 same installer build that will apply it. Older schema-1 plans must be
@@ -1333,7 +1333,7 @@ sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
 inactive-unit, resource and program checks still run first. Intent is durably
 recorded before allocating an idle peer. The plane refuses holds, active/selling
 or already-certified hosts, and reuses the registered public key and peer on
-retries. A new prerequisite plan includes iproute2 and iputils-ping; userspace
+retries. Revision-3 prerequisite plans add iproute2 and iputils-ping; userspace
 WireGuard additionally requires wireguard-go. Missing tools require reviewing
 and approving a new setup plan, not bypassing package approval.
 

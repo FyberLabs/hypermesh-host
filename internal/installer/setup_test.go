@@ -44,7 +44,7 @@ func setupFixture() (Plan, setupSource) {
 func TestSetupPlanPinsStateAndHeadlessIntent(t *testing.T) {
 	p, source := setupFixture()
 	a := buildSetupPlan(context.Background(), p, "auto", "kernel", true, source)
-	if !a.Reviewable || a.InstallAuthorized || a.Profile == nil || a.Profile.Revision != 2 {
+	if !a.Reviewable || a.InstallAuthorized || a.Profile == nil || a.Profile.Revision != 3 {
 		t.Fatalf("%+v",a)
 	}
 	if len(a.Changes) != 1 || a.Changes[0].ID != "headless-next-boot" || a.Changes[0].Required {
