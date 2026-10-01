@@ -210,7 +210,7 @@ func runCertificationCommand(ctx context.Context,args []string,out,diagnostic io
     },
     Workload:func(ctx context.Context)(hostregistration.CertificationEvidence,error){
      m:=p.Run.Manifest
-     request:=agent.WorkloadPreflight{PlanSHA256:p.SHA256,CatalogID:m.CatalogID,ImageDigest:m.ImageDigest,ModelPath:p.ModelPath,FileHash:m.FileHash,ContextTokens:m.ContextTokens,FullContext:true}
+     request:=agent.WorkloadPreflight{PlanSHA256:p.SHA256,CatalogID:m.CatalogID,ImageDigest:m.ImageDigest,ModelPath:p.ModelPath,FileHash:m.FileHash,ContextTokens:m.ContextTokens,FullContext:true,SuiteID:m.SuiteID}
      config,err:=os.MkdirTemp(defaultSetupState,".certification-docker-");if err!=nil{return hostregistration.CertificationEvidence{},err};defer os.RemoveAll(config)
      receipt,err:=agent.RunWorkloadPreflight(ctx,request,"/var/lib/hypermesh",func(ctx context.Context,_ string,args ...string)([]byte,error){return workloadDocker(ctx,config,args...)})
      if err!=nil||receipt.ContextFit==nil||!receipt.ContextFit.ValidFor(m.ContextTokens)||!receipt.CleanupComplete{return hostregistration.CertificationEvidence{},fmt.Errorf("workload evidence incomplete")}
@@ -274,6 +274,11 @@ func activateCertified(ctx context.Context,p certificationPlan,identity registra
  if _,e:=os.Lstat("/var/lib/hypermesh/lease.json");!os.IsNotExist(e){return fmt.Errorf("existing lease blocks activation")}
  if _,err=registrationPreflight(ctx,p.Agent,identity.Request.ClassID);err!=nil{return err}
  if err=verifyAcquiredModel(ctx,p.ModelPath,p.Run.Manifest.FileHash,p.Run.Manifest.SizeBytes);err!=nil{return err}
+ // A repeat command must not restart an already active installation.
+ if own&&j.State=="active"{
+  raw,e:=(setupSource{}).output(ctx,"systemctl","is-active","hypermesh-agent.service")
+  if e==nil&&strings.TrimSpace(string(raw))=="active"{return nil}
+ }
  // Retry after a crash first returns our previously started service to inactive.
  if own {
   if _,err=(setupSource{}).output(ctx,"systemctl","stop","hypermesh-agent.service");err!=nil{return fmt.Errorf("cannot stop previous activation")}

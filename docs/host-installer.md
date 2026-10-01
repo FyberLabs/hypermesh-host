@@ -1433,30 +1433,20 @@ and N5 GPU evidence must still be collected.
 
 ## Remaining installation-to-ready sequence
 
-Authenticated acquisition and controlled certification/activation are now implemented:
-see [the operator and host procedure](authenticated-certification.md). The numbered
-certification/start items below describe the original sequence and are superseded
-by that procedure; physical acceptance remains pending.
+Authenticated acquisition and controlled certification/activation are implemented;
+see [the operator and host procedure](authenticated-certification.md). Complete
+the remaining stages without treating simulated tests as hardware acceptance:
 
-Complete these stages in order; a green diagnostic must not skip later gates:
-
-1. Run an approved pinned model/runtime compatibility and context-fit workload,
-   then the authenticated AIuditor certification suite. Preserve exact workload
-   identity and measured results; do not treat memory allocation as certification.
-2. Implement the controlled certification execution/service-start transition,
-   with registration, current connectivity, workload and owner-approval checks.
-   Resolve the current dependency between inactive installation and the agent
-   job loop explicitly; do not manually create the activation marker.
-3. Add guided start/reboot/resume, unified live status and repair/uninstall.
+1. Provision reviewed catalog pins and a measured AIuditor class envelope, then
+   perform real AGX-1 download, registration, context certification and paused startup.
+2. Add guided start/reboot/resume, unified live status and repair/uninstall.
    Installer self-update still needs its own reviewed transition.
-4. Complete independent website bootstrap trust, public Test/Production
-   downloads, channel selection and specific-release promotion.
-5. Run the full automated recovery/installation acceptance suite, then perform
-   the real AGX-1 clean install through hyperme.sh. N5 hardware-class admission
-   and its own physical acceptance remain required.
+3. Complete independent website bootstrap trust and guided public download flow.
+4. Run the full recovery/installation acceptance suite and the AGX-1 clean install
+   through hyperme.sh. N5 hardware-class admission and physical acceptance remain
+   required, as do Renesas/Rockchip runtime support and physical tests.
 
-macOS and the additional workload operating modes remain deferred as approved.
-
+macOS and additional workload operating modes remain deferred as approved.
 
 ### Completed: pinned certification workload execution (2026-10-01)
 

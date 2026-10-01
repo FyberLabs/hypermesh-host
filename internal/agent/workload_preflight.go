@@ -27,6 +27,7 @@ type WorkloadPreflight struct {
 	FileHash string `json:"file_hash"`
 	ContextTokens int `json:"context_tokens"`
 	FullContext bool `json:"full_context,omitempty"`
+ SuiteID string `json:"suite_id,omitempty"`
 }
 
 type WorkloadReceipt struct {
@@ -47,7 +48,7 @@ func ValidateWorkloadPreflight(r WorkloadPreflight) error {
 	if !workloadPlanRE.MatchString(r.PlanSHA256)||!workloadCatalogRE.MatchString(r.CatalogID)||
 		!certImagePin.MatchString(r.ImageDigest)||err!=nil||pin!=r.FileHash||
 		!filepath.IsAbs(r.ModelPath)||filepath.Clean(r.ModelPath)!=r.ModelPath||
-		strings.ContainsAny(r.ModelPath,":\r\n\x00")||r.ContextTokens<512||r.ContextTokens>131072 {
+		strings.ContainsAny(r.ModelPath,":\r\n\x00")||r.ContextTokens<512||r.ContextTokens>131072 || (r.SuiteID!=""&&r.SuiteID!=pathb.SuitePackV1&&r.SuiteID!=pathb.SuiteThinV1) {
 		return fmt.Errorf("invalid pinned workload request")
 	}
 	return nil
@@ -80,8 +81,9 @@ func runLocalWorkloadPreflight(ctx context.Context,r WorkloadPreflight,state str
 		certModelPath:r.ModelPath,certEndpoint:endpoint,
 	}
 	if r.FullContext { a.certContextTokens=r.ContextTokens }
-	res:=a.runCertWorkload(ctx,api.Job{
-		JobID:r.PlanSHA256,Kind:api.KindCompactCert,SuiteID:pathb.SuitePackV1,
+	suite:=r.SuiteID;if suite==""{suite=pathb.SuitePackV1}
+ res:=a.runCertWorkload(ctx,api.Job{
+		JobID:r.PlanSHA256,Kind:api.KindCompactCert,SuiteID:suite,
 		CatalogID:r.CatalogID,ImageDigest:r.ImageDigest,FileHash:r.FileHash,
 		Runtime:"nvidia",Backend:"cuda-jetson",
 	},nil)
