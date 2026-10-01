@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Exercise first-install bootstrap with real GPG signatures and no cloud writes."""
 import hashlib
+import http.server
+import signal
+import threading
+import time
+from unittest import mock
 import importlib.util
 import json
 import os
@@ -78,6 +83,55 @@ class BootstrapTests(unittest.TestCase):
         for url in ("http://example.invalid", "https://user:pass@example.invalid", "https://example.invalid/?token=x"):
             with self.assertRaises(bootstrap.Rejected):
                 bootstrap.https_url(url)
+
+
+class TransferDeadlineTests(unittest.TestCase):
+    def test_trickling_body_hits_total_deadline(self):
+        stopped = threading.Event()
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "100000")
+                self.end_headers()
+                try:
+                    while not stopped.wait(0.02):
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+        # HTTP is sufficient to exercise urllib's body-read timeout semantics;
+        # public bootstrap URLs still require HTTPS before reaching fetch.
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_handler = signal.getsignal(signal.SIGALRM)
+        started = time.monotonic()
+        try:
+            with mock.patch.object(bootstrap, "TRANSFER_DEADLINE_SECONDS", 0.25):
+                with self.assertRaisesRegex(bootstrap.Rejected, "end-to-end deadline"):
+                    bootstrap.fetch(f"http://127.0.0.1:{server.server_port}/slow", 100000)
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertEqual(signal.getsignal(signal.SIGALRM), old_handler)
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL)[0], 0)
+        finally:
+            stopped.set()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_deadline_covers_open_and_restores_after_success(self):
+        class SlowOpener:
+            def open(self, *_args, **_kwargs):
+                time.sleep(5)
+        with mock.patch.object(bootstrap.urllib.request, "build_opener", return_value=SlowOpener()):
+            with mock.patch.object(bootstrap, "TRANSFER_DEADLINE_SECONDS", 0.1):
+                with self.assertRaisesRegex(bootstrap.Rejected, "end-to-end deadline"):
+                    bootstrap.fetch("https://example.invalid/slow-headers", 10)
+        with bootstrap.transfer_deadline(1):
+            pass
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL)[0], 0)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Download a verified Linux host CLI without an existing Hypermesh CLI."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import signal
+import threading
 import subprocess
 import tempfile
 import urllib.error
@@ -36,15 +39,40 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+# Unlike urllib's per-operation socket timeout, this covers DNS, redirects,
+# headers and the full body, including a peer that continuously trickles bytes.
+TRANSFER_DEADLINE_SECONDS = 120
+
+
+@contextmanager
+def transfer_deadline(seconds):
+    if (threading.current_thread() is not threading.main_thread()
+            or not hasattr(signal, "setitimer")):
+        raise Rejected("bootstrap transfers require a Unix main thread for deadline enforcement")
+    if signal.getitimer(signal.ITIMER_REAL)[0]:
+        raise Rejected("cannot enforce transfer deadline while another alarm is active")
+    previous = signal.getsignal(signal.SIGALRM)
+    def expired(_signum, _frame):
+        raise Rejected("artifact transfer exceeded its end-to-end deadline")
+    signal.signal(signal.SIGALRM, expired)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def fetch(address, limit):
     opener = urllib.request.build_opener(HTTPSRedirect())
-    try:
-        with opener.open(address, timeout=30) as response:
-            if response.status != 200:
-                raise Rejected("download returned non-success status")
-            data = response.read(limit + 1)
-    except (OSError, urllib.error.URLError, ValueError):
-        raise Rejected("HTTPS download failed; check connectivity and release directory") from None
+    with transfer_deadline(TRANSFER_DEADLINE_SECONDS):
+        try:
+            with opener.open(address, timeout=30) as response:
+                if response.status != 200:
+                    raise Rejected("download returned non-success status")
+                data = response.read(limit + 1)
+        except (OSError, urllib.error.URLError, ValueError):
+            raise Rejected("HTTPS download failed; check connectivity and release directory") from None
     if not data or len(data) > limit:
         raise Rejected("download is empty or exceeds size limit")
     return data
