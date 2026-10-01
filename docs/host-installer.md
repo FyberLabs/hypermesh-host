@@ -127,6 +127,8 @@ disabled with consent, not that other services are disabled.
 - [ ] Hardware validation of profiles and complete agent/service/apply plans.
 - [x] Exact-digest approval and journaled apply/resume for prerequisite packages and headless target.
 - [x] Approved first installation of verified agent, rollback helper, update trust, configuration and inactive systemd units; journaled retry/status.
+- [x] Device login and browser-approved registration CLI, fresh-key persistence, owner-bound recovery and redacted registration status.
+- [ ] Generic hardware-class admission for AMD/N5 and additional platform classes.
 - [ ] Enrollment-gated service activation, guided approval and automatic reboot/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
 - [ ] Recovery commands, redacted support bundle, and status presentation.
@@ -906,13 +908,12 @@ These are protocol tests, not a live Keycloak or physical-host acceptance run.
 **Control-plane progress:** identity-bound organization ownership is merged and
 deployed in [Panopticon #287](https://github.com/FyberLabs/panopticon/pull/287).
 [Panopticon #288](https://github.com/FyberLabs/panopticon/pull/288) implements the
-durable registration API and dashboard approval described below; deploy that
-change before wiring the installer to it. This library alone still does not
-register or activate a host.
+durable registration API and dashboard approval described below and is merged.
+The CLI integration below uses that API; deployment verification remains separate.
 
 ## Automatic registration integration status
 
-Implemented in Panopticon #288, pending merge/deployment:
+Implemented and merged in Panopticon #288:
 
 - A durable registration request binds the verified owner, selected tenant,
   actual reported host name, hardware report, WireGuard public key and hash of
@@ -930,29 +931,104 @@ Implemented in Panopticon #288, pending merge/deployment:
   server contract. These are not physical-host acceptance.
 
 The API contract and recovery rules are maintained in
-[Panopticon's host registration document](https://github.com/FyberLabs/panopticon/blob/codex/automatic-host-registration/products/hypermesh/docs/host-registration.md).
+[Panopticon's host registration document](https://github.com/FyberLabs/panopticon/blob/main/products/hypermesh/docs/host-registration.md).
 The registration API currently requires a platform-configured hardware class;
 a reported hardware profile does not create or certify a new class.
 
-Next complete host-package task: connect the existing authorization client and
-installed-but-inactive service to this protocol.
-
-1. Generate and privately, atomically persist the WireGuard key pair, random
-   agent credential and immutable registration request before the first write
-   to the control plane. Bind recovery to the approved installation/environment.
-2. Complete the host grant and tenant switch using the device-flow token in
-   memory. Submit the request, show the configured dashboard's approval URL,
-   and poll with bounded timeouts/backoff. Do not print or persist session
-   tokens or ask the owner to copy an enrollment secret or match a UUID.
-3. After approval, complete registration and persist the returned device UUID.
-   Resume after response loss/restart using the same request and local keys,
-   reauthenticating as needed. Never silently replace an existing identity.
-4. Finish authenticated connectivity, preflight and certification gates; show
-   blockers/remediation in installer status and the dashboard. Registration
-   alone does not authorize selling or claim compatibility.
-5. Activate the service only after the approved onboarding gates pass. Preserve
-   safe interruption/reboot recovery and test before the AGX-1 acceptance run.
+Completed host-package integration: `register-agent` connects device authorization,
+the installed inactive service and the registration protocol. The implementation
+and recovery contract are described below. Authenticated connectivity,
+certification and service activation are still pending.
 
 Repair/uninstall, redacted support bundles, requested agent updates and independent
 website/bootstrap acceptance also remain on the pre-AGX delivery checklist.
 Workload modes and macOS remain deferred.
+
+## Browser-approved agent registration and recovery
+
+Implemented: after `install-agent`, use the same release-built installer and
+approved agent plan. Obtain the issuer, dashboard origin and tenant from trusted
+environment configuration. The issuer is the complete HTTPS Keycloak realm URL,
+not the dashboard URL. Production uses the production origins.
+
+```bash
+sudo ./hypermesh-deploy register-agent \
+  --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256 \
+  --issuer https://AUTH_HOST/realms/REALM \
+  --dashboard-url https://test.hyperme.sh --class-id agx-large
+
+sudo ./hypermesh-deploy registration-status --plan-sha AGENT_PLAN_SHA256
+```
+
+The headless command displays the device-login URL and code on stderr. Sign in
+there, then open the separately displayed host approval URL. Review the host,
+tenant, measured hardware and key fingerprint and approve the installation.
+There is no pasted enrollment token or manual device-UUID comparison. stdout
+contains only redacted registration status; session tokens remain in memory.
+
+Before registration the CLI verifies all installed payload hashes/modes, the
+original install journal, inactive services, systemd search paths and the
+approved hardware fingerprint. New requests rerun the real resource, HTTPS,
+package and hardware checks. Completion reruns those checks after browser
+approval. A selected class cannot override incompatible measured hardware.
+
+Current class admission is deliberately limited to platform-configured
+`agx-large` on an AGX Orin with approximately 64 GiB installed RAM and
+`nx-volume` on an Orin NX with approximately 16 GiB. Reserved system memory is
+accounted for in those physical-memory ranges. Both require detected Tegra/CUDA.
+This identifies a candidate module class, not a certified carrier or throughput.
+Generic AMD/N5 class admission and other class mappings remain pending in the
+control plane; selecting a Jetson class on those machines fails before login.
+No host names, device UUIDs, serial numbers or operator keys are compiled in.
+
+Before any control-plane mutation, fresh WireGuard and agent keys plus the
+immutable request are atomically saved under the shared installer lock at
+`/var/lib/hypermesh/installer/registration-PLAN_SHA256.json` (0600 in private
+0700 state). The verified login subject is durably bound before the host grant.
+Retries require the same owner, plan, tenant, issuer, dashboard and class.
+Raw API errors and transport bodies are omitted from diagnostics.
+
+The API grants host membership, exchanges the login for a tenant session, and
+creates the pending request. Approval polling uses five-second intervals;
+individual requests have 15-second whole-response deadlines and 1 MiB limits,
+with a 25-minute command bound covering login and approval. Transient API errors
+stop with retained state; rerun the exact command to reauthenticate and recover.
+Redirects are refused. Every returned request, tenant, hardware report, key
+fingerprint, approval path and device identity must match the local request.
+Tenant UUIDs are canonicalized to lowercase on the wire, and configured API URL
+path prefixes are preserved, matching the installed agent plan.
+
+After approval the server assigns the device UUID. That UUID is journaled before
+the CLI publishes private `device.json` and a dedicated
+`registration-keys/REQUEST_ID/hypermesh.key`. The agent already consumes those
+files. Lost responses or an interrupted publication recover the same request,
+device and keys. Existing mismatched, linked or unsafe files are never replaced.
+A missing identity after a fully completed local registration requires repair;
+it is not silently regenerated. Completed registration recovery does not repeat
+resource admission, but still checks installed files, service and hardware
+identity. Archived hosts cannot be revived.
+
+Denial or expiry leaves the private journal intact and the service inactive.
+To start again, rerun the same command with `--restart-approval`. It verifies
+the original owner, confirms a denied/expired decision from the server, reruns
+preflight, archives the private request and generates fresh keys and a new
+request requiring another browser approval. Pending, completed or retired
+requests cannot be reset this way. If interrupted after the new journal was
+saved, rerun without that flag to resume it. Prior requests remain in private
+`registration-history-REQUEST_ID.json` files.
+
+Intentional retirement/reinstallation needs the separate fresh-key reinstall
+workflow still on the roadmap. Do not delete journals as a recovery shortcut.
+Preserve private journals locally and never upload them as support logs.
+
+Success is `registered-inactive`: the dashboard device is paused and
+uncertified. No activation marker, service enable/start, certification result or
+selling state is created. The next task is authenticated connectivity and
+certification gating before service activation. AGX-1 physical acceptance is
+still pending.
+
+Automated coverage includes TLS auth/session separation and response binding,
+owner mismatch before mutation, deadlines and redaction, measured class checks,
+lost completion recovery, durable-before-publication ordering, cancellation,
+terminal states, private file safety, interrupted identity publication and
+installed-payload tampering. CI results are recorded in the implementation PR.
