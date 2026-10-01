@@ -35,7 +35,7 @@ func TestCheckCommand(t *testing.T) {
 				called = true
 				if directory == "" || directory[0] != '/' { t.Fatal("directory must be absolute") }
 				return Resources{SystemBytes: 64*GiB, AvailableSystemBytes: 48*GiB,
-					UMA: mode == "uma", UMAAllocationBytes: allocation,
+					UMA: mode == "uma", UMARuntime: &UMARuntime{Backend: "cuda", FreeBytes: 48*GiB, TotalBytes: 64*GiB}, UMAAllocationBytes: allocation,
 					DiscreteVRAMBytes: 12*GiB, DiskFreeBytes: test.disk}, test.probeErr
 			}
 			code := runResourceCheck(context.Background(), test.args, &out, &diagnostic, probe)

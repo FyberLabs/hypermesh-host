@@ -11,7 +11,10 @@ import (
 
 func TestLinuxProbeUsesExistingFilesystem(t *testing.T) {
 	directory := t.TempDir()
-	r, err := probeResources(context.Background(), directory, "uma", 12*GiB)
+	runtimeProbe := func(context.Context) (*UMARuntime, error) {
+		return &UMARuntime{Backend: "cuda", FreeBytes: 16*GiB, TotalBytes: 32*GiB}, nil
+	}
+	r, err := probeResourcesWithRuntime(context.Background(), directory, "uma", 12*GiB, runtimeProbe)
 	if err != nil { t.Fatal(err) }
 	if r.SystemBytes <= 0 || r.AvailableSystemBytes <= 0 || r.DiskFreeBytes < 0 || !r.UMA {
 		t.Fatalf("invalid local measurements: %+v", r)

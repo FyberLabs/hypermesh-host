@@ -19,7 +19,7 @@ func TestPlanAggregatesBlockers(t *testing.T) {
 		resource := func(context.Context, string, string, int64) (Resources, error) {
 			if fail { return Resources{}, fmt.Errorf("disk unavailable") }
 			return Resources{SystemBytes: 64*GiB, AvailableSystemBytes: 48*GiB,
-				UMA: true, UMAAllocationBytes: 40*GiB, DiskFreeBytes: 88*GiB}, nil
+				UMA: true, UMARuntime: &UMARuntime{Backend: "cuda", FreeBytes: 100*GiB, TotalBytes: 128*GiB}, UMAAllocationBytes: 40*GiB, DiskFreeBytes: 88*GiB}, nil
 		}
 		detect := func(context.Context) hardware.Profile {
 			if fail { return hardware.Recommend(hardware.Facts{Arch: "unknown"}) }

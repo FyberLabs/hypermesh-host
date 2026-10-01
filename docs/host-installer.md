@@ -5,6 +5,31 @@ roadmap, not a claim that a guided installer already exists. The existing
 `hypermesh-deploy inspect` detects hardware; the existing `agx` deployment
 command retains its legacy preflight and configuration behavior.
 
+## Scope before AGX-1 acceptance
+
+Approved on 2026-09-30: finish the Linux onboarding and maintenance work before
+the operator attempts the AGX-1 installation. Workload operating modes and
+macOS support are deferred; device authorization is **not** deferred with the
+workload-mode section where it was originally recorded.
+
+Complete and validate each milestone before starting the next:
+
+1. UMA runtime capacity and OS/runtime reserves.
+2. Versioned Linux hardware profiles and exact package/driver/kernel plans.
+3. Plan-specific approval, unattended application, checkpoint/reboot resume,
+   headless configuration and systemd installation.
+4. Verified installer update, recovery/repair/uninstall, status and redacted
+   support bundles.
+5. Device authorization and fresh-key enrollment with authenticated AIuditor
+   compatibility, connectivity and benchmark gates before selling.
+6. Independent bootstrap trust and hyperme.sh download integration, then the
+   full automated installation/recovery acceptance suite.
+
+Physical AGX-1 installation is the final acceptance run, not something claimed
+complete before the machine is available. N5 MAX and other Linux targets need
+their own measured acceptance; no profile is certified by its product name.
+Website and control-plane dependencies stay on this delivery checklist.
+
 ## Approved behavior
 
 An operator downloads a signed host installer. Before enrollment or privileged
@@ -90,11 +115,13 @@ disabled with consent, not that other services are disabled.
   boundary, UMA, invalid-input, and overflow test cases.
 - [x] Connect resource admission to Linux RAM, GPU capacity and filesystem probes
   through the read-only CLI (operator explicitly selects memory topology).
-- [ ] Validate UMA runtime allocation limits and reserve OS/runtime headroom.
+- [x] Query integrated CUDA/HIP runtime capacity and enforce OS/runtime reserves.
+- [ ] Validate actual allocation and model/context fit on target hardware.
 - [x] Read-only CLI preflight plan with resource/hardware blockers and HTTPS
   endpoint reachability checks.
 - [ ] Authenticated AIuditor identity and protocol compatibility checks.
-- [ ] Signed bootstrap release discovery and installer self-update.
+- [x] Signed bootstrap verification, channel discovery and persistent build floor.
+- [ ] Reviewed installer self-update.
 - [ ] Versioned, validated hardware profiles and exact mutation plans.
 - [ ] Approval capture, unattended plan application, checkpoint/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
@@ -333,7 +360,7 @@ the new CLI, install packages, alter services or enroll a device.
 
 - [x] Verified, bounded CLI download with channel/build constraints and no-overwrite output.
 - [ ] Ship trusted bootstrap key material through an independently trusted channel.
-- [ ] Add latest-release discovery and persisted minimum-build state.
+- [x] Add latest-release discovery and persisted minimum-build state.
 - [ ] Add reviewed self-update/restart and rollback behavior.
 - [ ] Integrate website package delivery and full device authorization enrollment.
 
@@ -487,3 +514,41 @@ to the 30-second socket timeout and size limits. A Unix main-thread interval
 timer interrupts trickling responses; the timer and handler are restored after
 each transfer. Unsupported timer contexts fail closed. Regression tests cover
 a continuously trickling local server and delayed response setup.
+
+## Linux UMA capacity and headroom
+
+Implemented in both `check-resources` and `plan`: query a single integrated
+CUDA or HIP device through the installed driver, then resample Linux
+MemAvailable after runtime initialization. Python 3 with its standard-library
+ctypes module is required; the probe is embedded in the CLI and needs no
+separate script installation. The child runs in Python isolated mode with a
+ten-second deadline and bounded output. It creates only a temporary driver
+context; it does not allocate the proposed model budget or change system
+configuration.
+
+The preliminary UMA budget is the smaller of:
+
+- MemAvailable minus ceil(10% of OS-visible system RAM), with a 2 GiB minimum
+  host reserve.
+- Runtime-reported free device memory minus 1 GiB runtime reserve.
+
+These are conservative installer policy reserves, not vendor guarantees.
+The report includes the runtime/backend/device evidence, both reserves and the
+resulting maximum allocation. Disk still requires 2.2 times the proposed
+allocation. Firmware carve-outs are not added back to either memory reading.
+Missing drivers, query errors, discrete devices in UMA mode, ambiguous multiple
+integrated devices and insufficient capacity fail with remediation.
+
+CUDA uses the integrated-device attribute and driver memory query; HIP uses
+its own integrated-device attribute and memory query (the enum values differ).
+See the [CUDA device API](https://docs.nvidia.com/cuda/archive/12.0.1/cuda-driver-api/group__CUDA__DEVICE.html)
+and [HIP runtime API definitions](https://github.com/ROCm/HIP/blob/rocm-6.4.3/include/hip/hip_runtime_api.h).
+Driver initialization may consume transient memory. Queries are capacity
+snapshots, not a promise that a single allocation or a model with its context
+will fit. Actual allocation, benchmark and compatibility verification remain
+mandatory before enabling selling; Vulkan-only UMA is not yet measured by
+this probe.
+
+Automated coverage includes CUDA/HIP selection and errors, unknown/ambiguous
+hardware, context cleanup, reserve boundaries, CLI failure without runtime
+evidence, cancellation and output bounds. Physical AGX/N5 results are pending.
