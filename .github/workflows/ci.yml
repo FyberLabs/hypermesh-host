@@ -22,15 +22,22 @@ jobs:
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Isolate Go caches
+        run: |
+          echo "GOCACHE=$RUNNER_TEMP/go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$RUNNER_TEMP/go-mod" >> "$GITHUB_ENV"
+
       - name: Set up Go
         # actions/setup-go v7
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       - name: Test signing material loading
-        run: python3 packaging/release/test-signing-material.py
+        run: |
+          python3 packaging/release/test-signing-material.py
+          python3 packaging/release/test-upload-new.py
 
       - name: Vet
         run: go vet ./...
