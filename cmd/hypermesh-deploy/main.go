@@ -24,6 +24,15 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "plan-agent" || name == "install-agent" || name == "agent-install-status" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		run := installer.RunPlanAgent
+		if name == "install-agent" { run = installer.RunInstallAgent }
+		if name == "agent-install-status" { run = installer.RunAgentInstallStatus }
+		code := run(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	if name == "apply-setup" || name == "setup-status" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		run := installer.RunApplySetup
@@ -115,6 +124,11 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  agent-install-status  read persistent install status; --plan-sha SHA256
+  plan-agent  verify and plan agent, trust, rollback helper and systemd installation.
+               Use plan-agent --help; requires completed prerequisite plan.
+  install-agent  apply/resume reviewed first installation; leaves services inactive.
+               --plan FILE --approve-plan SHA256
   apply-setup  apply or resume reviewed Linux prerequisites; requires root.
                --plan FILE --approve-plan SHA256 [--state-dir DIR]
   setup-status show the persistent stage/error for a prerequisite application.
