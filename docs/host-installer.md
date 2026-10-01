@@ -1484,3 +1484,72 @@ activation transition. The short completion proves basic inference only. HIP
 and Metal remain blocked for pinned certification until their runners mount the
 verified model and configure its alias. This change does not enable selling or
 create the service activation marker.
+
+
+### Completed: approved local workload preflight (2026-10-01)
+
+The Linux NVIDIA installer now exposes the pinned runner without starting the
+agent or requiring enrollment. This is an operator-facing stage for a **local,
+reviewed model**; automatic discovery/acquisition of AIuditor's model pack is
+still pending. It does not replace the public website's eventual guided flow.
+
+1. Finish the prerequisite plan and place the reviewed GGUF in that plan's
+   models directory. Obtain the model SHA-256 and OCI runtime digest from the
+   reviewed catalog/release metadata. Do not derive a trusted pin from an
+   untrusted download and treat that as verification.
+2. Generate a read-only workload plan (no Docker invocation or download):
+
+   ```sh
+   hypermesh-deploy plan-workload \\
+     --setup-plan setup-plan.json \\
+     --catalog-id CATALOG_ID \\
+     --image-digest 'REGISTRY/IMAGE@sha256:REVIEWED_64_HEX_DIGEST' \\
+     --model-file /absolute/reviewed/models/model.gguf \\
+     --model-sha256 'sha256:REVIEWED_64_HEX_DIGEST' \\
+     --context-tokens 4096 > workload-plan.json
+   ```
+
+3. Review the complete plan, including the embedded hardware/setup plan, exact
+   paths/pins and context allocation. Approve its own `plan_sha256`:
+
+   ```sh
+   sudo hypermesh-deploy check-workload --plan workload-plan.json \\
+     --approve-plan WORKLOAD_PLAN_SHA256 --run
+   sudo hypermesh-deploy workload-status --plan-sha WORKLOAD_PLAN_SHA256
+   ```
+
+`--run` authorizes pulling the **pinned runtime image** into Docker and executing
+the already-present model. The runtime must be anonymously readable or that
+exact digest must already exist locally; this command does not read a user's
+registry credentials. It talks only to the local Docker socket with a private
+client configuration. Docker image layers occupy Docker's storage filesystem;
+model bytes remain on the reviewed models filesystem. This command does not
+implement a separate Docker image-storage capacity budget yet.
+
+Execution requires root, a current exact installer/setup approval, completed
+prerequisites, inactive Hypermesh services, no lease journal, and a regular model
+file with no symlink components inside the selected model directory. Hardware,
+resource/package state and inactivity are checked before and after execution.
+The model is hashed before and after a real timed completion. The temporary
+container uses loopback port **18080** and the name
+`hypermesh-cert-bench-WORKLOAD_PLAN_SHA256`; a conflicting listener/container
+causes failure rather than replacing another process. No agent/API client,
+credential exchange, heartbeat, scorecard submission, enrollment change,
+activation marker or sell-state change occurs.
+
+A private atomic `workload-WORKLOAD_PLAN_SHA256.json` journal in the installer
+state directory records `checking`, `failed`, or `verified`, timestamps, exact
+request and measured result. A retry invalidates earlier success before fresh
+work. A receipt requires successful container cleanup and postflight. Interrupted
+checks remain unconfirmed: inspect the named container and preserve enrollment
+state before retrying. Historical status remains readable after an installer
+upgrade, but a fresh execution requires a newly reviewed current-build plan.
+The command has an eight-minute context budget, the shared runner five minutes,
+and individual Docker operations two minutes, with a separate 30-second cleanup
+budget. Kernel/filesystem stalls retain normal OS limitations.
+
+**Limits:** this measures a short completion at the requested runtime context
+setting. It does not prove full-context fit, sustained throughput or AIuditor
+certification. These checks, authenticated model-pack acquisition, the controlled
+certification/service-start transition, recovery integration and physical AGX/N5
+acceptance remain pending. HIP and macOS workload preflight are not enabled.

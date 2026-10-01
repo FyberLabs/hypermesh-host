@@ -29,6 +29,7 @@ import (
 type Agent struct {
 	// certEndpoint is a test seam; production certification always uses loopback.
 	certEndpoint string
+	certModelPath string // installer approval binds an exact local file
 	cfg     Config
 	client  *api.Client
 	telem   telem.Source

@@ -46,7 +46,7 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	gguf := a.cfg.GGUFHostPath()
-	if cached, cacheErr := a.cacheDest(pin); cacheErr == nil {
+	if cached, cacheErr := a.cacheDest(pin); cacheErr == nil && a.certModelPath == "" {
 		if _, statErr := os.Stat(cached); statErr == nil { gguf = cached }
 	}
 	if err := runtime.RequireGGUFFile(gguf); err != nil {

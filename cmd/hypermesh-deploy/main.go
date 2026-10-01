@@ -24,6 +24,13 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "plan-workload" || name == "check-workload" || name == "workload-status" {
+		ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
+		run:=installer.RunPlanWorkload
+		if name=="check-workload"{run=installer.RunCheckWorkload}
+		if name=="workload-status"{run=installer.RunWorkloadStatus}
+		code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)
+	}
  if name == "check-runtime-memory" || name == "runtime-memory-status" {
   ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
   run:=installer.RunRuntimeMemory
@@ -152,6 +159,10 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan-workload  review explicit local model/runtime pins; use --help.
+  check-workload  run approved inference with host services inactive.
+                  --plan FILE --approve-plan SHA256 --run
+  workload-status  read historical workload evidence; --plan-sha SHA256
   check-runtime-memory  explicitly allocate/fill/sample/free the reviewed UMA budget (Linux, root).
                         --setup-plan FILE --approve-plan SHA256 --allocate
   runtime-memory-status  read dated allocation evidence; --setup-plan-sha SHA256
