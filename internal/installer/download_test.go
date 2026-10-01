@@ -2,6 +2,8 @@ package installer
 
 import (
 	"context"
+	"bytes"
+	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -14,10 +16,12 @@ import (
 )
 
 func TestVerifiedDownload(t *testing.T) {
+	for _, artifact := range []string{"deploy", "agent"} {
+	for _, arch := range []string{"arm64", "amd64"} {
 	for _, mode := range []string{"valid", "signature", "metadata", "payload", "rollback", "channel", "exists", "persisted-rollback", "discovery", "discovery-mismatch", "discovery-rollback"} {
-		t.Run(mode, func(t *testing.T) {
+		t.Run(artifact+"/"+arch+"/"+mode, func(t *testing.T) {
 			dir := t.TempDir()
-			opt := downloadOptions{BaseURL: "https://example.invalid/release", Channel: "test", Arch: "arm64",
+			opt := downloadOptions{BaseURL: "https://example.invalid/release", Channel: "test", Arch: arch, Artifact: artifact,
 				MinimumBuild: 21, Output: filepath.Join(dir, "deploy")}
 			meta := releaseMetadata{Channel: "test", Version: "0.0.0", Commit: strings.Repeat("a", 40),
 				Build: 21, ReleaseID: "21-"+strings.Repeat("a", 12)}
@@ -40,7 +44,7 @@ func TestVerifiedDownload(t *testing.T) {
 				}
 			}
 			payload := []byte("verified binary bytes")
-			name := "hypermesh-deploy_0.0.0_linux_arm64"
+			name := fmt.Sprintf("hypermesh-%s_0.0.0_linux_%s", artifact, arch)
 			sums := []byte(fmt.Sprintf("%x  release.json\n%x  %s\n", sha256.Sum256(raw), sha256.Sum256(payload), name))
 			switch mode {
 			case "metadata": raw = append(raw, ' ')
@@ -94,6 +98,9 @@ func TestVerifiedDownload(t *testing.T) {
 	}
 }
 
+}
+}
+
 func TestDownloadURLPolicy(t *testing.T) {
 	for _, address := range []string{"http://example.com", "https://u:p@example.com", "https://example.com/?secret=x", "https://example.com/#x"} {
 		if validateDownload(downloadOptions{BaseURL: address, Channel: "test", Arch: "arm64", Output: "x"}) == nil {
@@ -132,4 +139,62 @@ func TestDiscoveryRejectsUnsafePointers(t *testing.T) {
 			t.Fatalf("accepted pointer %s", raw)
 		}
 	}
+}
+
+func TestDownloadInstallerBinding(t *testing.T) {
+	oldCommit, oldVersion, oldBuild := buildinfo.Commit, buildinfo.Version, buildinfo.Build
+	defer func() { buildinfo.Commit, buildinfo.Version, buildinfo.Build = oldCommit, oldVersion, oldBuild }()
+	buildinfo.Commit, buildinfo.Version, buildinfo.Build = strings.Repeat("a",40), "0.0.0", "21"
+	for _, mode := range []string{"match", "commit", "version", "build", "development"} {
+		t.Run(mode,func(t *testing.T) {
+			buildinfo.Build = "21"
+			opt := downloadOptions{BaseURL:"https://example.invalid/release", Channel:"test",
+				Arch:"arm64", Artifact:"agent", MatchInstaller:true, MinimumBuild:0,
+				Output:filepath.Join(t.TempDir(),"agent")}
+			meta := releaseMetadata{Channel:"test", Version:"0.0.0", Commit:strings.Repeat("a",40), Build:21}
+			switch mode {
+			case "commit": meta.Commit = strings.Repeat("b",40)
+			case "version": meta.Version = "0.0.1"
+			case "build": meta.Build = 22
+			case "development": buildinfo.Build = ""
+			}
+			meta.ReleaseID = fmt.Sprintf("%d-%s",meta.Build,meta.Commit[:12])
+			raw,_ := json.Marshal(meta)
+			payload := []byte("agent")
+			name := fmt.Sprintf("hypermesh-agent_%s_linux_arm64",meta.Version)
+			sums := []byte(fmt.Sprintf("%x  release.json\n%x  %s\n",sha256.Sum256(raw),sha256.Sum256(payload),name))
+			payloadFetched := false
+			fetch := func(_ context.Context, address string,_ int64)([]byte,error) {
+				switch filepath.Base(address) {
+				case "checksums.txt": return sums,nil
+				case "checksums.txt.sig": return []byte("signature"),nil
+				case "release.json": return raw,nil
+				case name: payloadFetched=true; return payload,nil
+				}
+				return nil,fmt.Errorf("unexpected request")
+			}
+			_,err := downloadCLI(context.Background(),opt,fetch,func(_,_,_ []byte,_ []string)error{return nil})
+			if mode=="match" {
+				if err!=nil || !payloadFetched { t.Fatal(err) }
+			} else {
+				if err==nil || payloadFetched { t.Fatal("installer mismatch accepted or payload fetched") }
+				if _,err:=os.Stat(opt.Output); !os.IsNotExist(err) { t.Fatal("mismatched binary published") }
+			}
+		})
+	}
+}
+
+func TestDownloadArtifactArguments(t *testing.T) {
+	for _, artifact := range []string{"../agent", "AGENT", "rollback", "agent/extra"} {
+		var out,diagnostic bytes.Buffer
+		code:=RunDownload(context.Background(),[]string{
+			"--artifact",artifact,"--release-url","https://example.invalid/release",
+			"--channel","test","--min-build","0","--output","unused",
+			"--trusted-key","does-not-exist","--fingerprints",strings.Repeat("A",40),
+		},&out,&diagnostic)
+		if code!=2 || !strings.Contains(diagnostic.String(),"artifact must be") {
+			t.Fatalf("artifact=%q code=%d diagnostic=%s",artifact,code,diagnostic.String())
+		}
+	}
+	if downloadArtifact(downloadOptions{})!="deploy" {t.Fatal("legacy default changed")}
 }

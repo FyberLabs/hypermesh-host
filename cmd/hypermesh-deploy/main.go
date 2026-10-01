@@ -123,7 +123,8 @@ Commands:
               Resource/readiness flags plus --profile auto and optional --headless.
               --wireguard-mode kernel (default) or userspace; only userspace needs wireguard-go.
               --list-profiles lists candidate policies; this command applies nothing.
-  download  fetch a signed deploy CLI using independently trusted key material.
+  download  fetch a signed deploy CLI or agent using independently trusted key material.
+            --artifact deploy (default) or agent; --match-installer pins release identity.
             Use download --help for required release, channel and build constraints.
   plan      read-only resource, hardware and HTTPS reachability plan.
             Resource flags plus --aiuditor-check-url https://HOST/READINESS_PATH
