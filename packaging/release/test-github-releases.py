@@ -33,6 +33,7 @@ def fake_curl(args):
             code, body = 200, {"object": {"type": "commit", "sha": state["tags"][tag]}}
     elif path.startswith("git/refs/tags/") and method == "DELETE":
         tag = path.removeprefix("git/refs/tags/")
+        code = 422  # GitHub rejects deletion of a missing reference.
         if tag in state["tags"]:
             del state["tags"][tag]
             code = 204
@@ -179,6 +180,13 @@ class GithubReleaseTests(unittest.TestCase):
                 state["fail"] = [method, path]
                 self.write(state)
                 self.publish(ok=False)
+
+    def test_orphan_rolling_tag_is_replaced(self):
+        state = self.read()
+        state["tags"]["test"] = "c" * 40
+        self.write(state)
+        self.publish()
+        self.assertEqual(self.read()["tags"]["test"], "a" * 40)
 
     def test_prod_reuses_version_without_creating_test_alias(self):
         tag = self.publish(channel="prod")

@@ -524,9 +524,15 @@ if [ "$tag" = test ]; then
     exit 1
   fi
   # A previous interrupted publish can leave the tag without a release.
-  code=$(curl --connect-timeout 30 --max-time 600 -sS -o /dev/null -w '%{http_code}' -X DELETE "${auth[@]}" "${api}/git/refs/tags/test")
-  if [ "$code" != 204 ] && [ "$code" != 404 ]; then
-    echo "hypermesh release: delete rolling tag failed with HTTP ${code}" >&2
+  code=$(curl --connect-timeout 30 --max-time 600 -sS -o "${dist}/rolling-ref.json" -w '%{http_code}' "${auth[@]}" "${api}/git/ref/tags/test")
+  if [ "$code" = 200 ]; then
+    code=$(curl --connect-timeout 30 --max-time 600 -sS -o /dev/null -w '%{http_code}' -X DELETE "${auth[@]}" "${api}/git/refs/tags/test")
+    if [ "$code" != 204 ]; then
+      echo "hypermesh release: delete rolling tag failed with HTTP ${code}" >&2
+      exit 1
+    fi
+  elif [ "$code" != 404 ]; then
+    echo "hypermesh release: look up rolling tag failed with HTTP ${code}" >&2
     exit 1
   fi
 fi
