@@ -903,8 +903,56 @@ intervals, deadline-bounded trickle responses, timeout backoff, redirects,
 untrusted discovery, malformed/oversized responses and credential redaction.
 These are protocol tests, not a live Keycloak or physical-host acceptance run.
 
-**Remaining integration:** browser confirmation of the particular installation,
-server-derived tenant/organization authority, retry-safe automatic device
-creation, durable fresh-key enrollment and gated service activation. Identity
-provider sign-in alone does not authorize those operations. No pre-created
-dashboard device or manual UUID comparison is introduced by this component.
+**Control-plane progress:** identity-bound organization ownership is merged and
+deployed in [Panopticon #287](https://github.com/FyberLabs/panopticon/pull/287).
+[Panopticon #288](https://github.com/FyberLabs/panopticon/pull/288) implements the
+durable registration API and dashboard approval described below; deploy that
+change before wiring the installer to it. This library alone still does not
+register or activate a host.
+
+## Automatic registration integration status
+
+Implemented in Panopticon #288, pending merge/deployment:
+
+- A durable registration request binds the verified owner, selected tenant,
+  actual reported host name, hardware report, WireGuard public key and hash of
+  the locally generated agent credential. Organization/device IDs cannot be
+  supplied to claim another host.
+- The dashboard displays this installation and requires explicit approval or
+  denial. The native device-flow session cannot approve its own request.
+- Completion creates one paused, uncertified device and returns its assigned
+  UUID. Repeating the same immutable request recovers that device without
+  rotating credentials. Device creation and the enrollment event commit
+  together; optional Service Bus delivery has a durable retrying outbox.
+- Expired/denied requests cannot complete. Archived devices cannot be revived
+  through retry. Intentional reinstallation requires a fresh request and keys.
+- PostgreSQL concurrency/recovery tests and dashboard approval tests cover the
+  server contract. These are not physical-host acceptance.
+
+The API contract and recovery rules are maintained in
+[Panopticon's host registration document](https://github.com/FyberLabs/panopticon/blob/codex/automatic-host-registration/products/hypermesh/docs/host-registration.md).
+The registration API currently requires a platform-configured hardware class;
+a reported hardware profile does not create or certify a new class.
+
+Next complete host-package task: connect the existing authorization client and
+installed-but-inactive service to this protocol.
+
+1. Generate and privately, atomically persist the WireGuard key pair, random
+   agent credential and immutable registration request before the first write
+   to the control plane. Bind recovery to the approved installation/environment.
+2. Complete the host grant and tenant switch using the device-flow token in
+   memory. Submit the request, show the configured dashboard's approval URL,
+   and poll with bounded timeouts/backoff. Do not print or persist session
+   tokens or ask the owner to copy an enrollment secret or match a UUID.
+3. After approval, complete registration and persist the returned device UUID.
+   Resume after response loss/restart using the same request and local keys,
+   reauthenticating as needed. Never silently replace an existing identity.
+4. Finish authenticated connectivity, preflight and certification gates; show
+   blockers/remediation in installer status and the dashboard. Registration
+   alone does not authorize selling or claim compatibility.
+5. Activate the service only after the approved onboarding gates pass. Preserve
+   safe interruption/reboot recovery and test before the AGX-1 acceptance run.
+
+Repair/uninstall, redacted support bundles, requested agent updates and independent
+website/bootstrap acceptance also remain on the pre-AGX delivery checklist.
+Workload modes and macOS remain deferred.
