@@ -1226,8 +1226,8 @@ A passed gate proves the plane could authenticate and read its configured
 program. It does **not** prove the host's direct AIuditor/WireGuard path,
 runtime support for that suite, a benchmark result or certification. The
 AIuditor may still need program configuration before AGX-1 acceptance.
-Heartbeat, tunnel/workload verification and controlled activation remain
-the next onboarding execution tasks.
+The one-shot heartbeat and WireGuard stages are documented below. Workload
+verification and controlled activation remain subsequent execution tasks.
 
 ## Release channels and promotion (approved 2026-10-01)
 
@@ -1315,9 +1315,9 @@ GPU/model certification.
 Automated tests cover explicit opt-in, durable-before-send ordering, older
 planes, local/program failures, lost responses, cancellation, persistence
 failures, measured uptime bounds, protocol binding and redaction. Physical
-AGX-1 acceptance remains pending. The next complete task is the controlled
-WireGuard handshake/data-path stage, followed by certification execution and
-enrollment-gated service activation.
+AGX-1 acceptance remains pending. WireGuard handshake/data-path checks are now
+implemented below; certification execution and enrollment-gated service
+activation remain pending.
 
 ## Completed: explicit WireGuard connectivity probe
 

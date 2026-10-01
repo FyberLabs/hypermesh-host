@@ -20,6 +20,7 @@ import (
 
 // All command output stays private; wg may return key material.
 type wireguardProbe struct {
+ stagingDir string
  run func(context.Context,string,...string)([]byte,error)
  start func(context.Context,string)(func(),error)
  exists func(string)bool
@@ -28,6 +29,7 @@ type wireguardProbe struct {
 }
 func newWireguardProbe()wireguardProbe {
  return wireguardProbe{
+  stagingDir:defaultSetupState,
   run:func(ctx context.Context,name string,args ...string)([]byte,error){
    ctx,cancel:=context.WithTimeout(ctx,4*time.Second);defer cancel()
    return exec.CommandContext(ctx,name,args...).Output()
@@ -81,9 +83,12 @@ func(p wireguardProbe) check(ctx context.Context,allocation hostregistration.Onb
  }
  routes,e:=p.run(ctx,"ip","route","show","exact",allocation.ProbeAddress+"/32")
  if e!=nil||len(strings.TrimSpace(string(routes)))!=0{return observed,fmt.Errorf("WireGuard probe route already exists or cannot be inspected")}
- directory,e:=os.MkdirTemp("","hypermesh-wg-probe-")
+ if e=secureSetupDirectory(p.stagingDir,false);e!=nil{return observed,fmt.Errorf("WireGuard staging requires private owner-controlled installer state")}
+ directory,e:=os.MkdirTemp(p.stagingDir,".wireguard-probe-")
  if e!=nil{return observed,fmt.Errorf("cannot stage private WireGuard probe")}
- defer os.RemoveAll(directory)
+ defer func(){
+  if e:=os.RemoveAll(directory);e!=nil{err=fmt.Errorf("private WireGuard staging cleanup failed; inspect the local temporary directory");observed=time.Time{}}
+ }()
  keyPath:=filepath.Join(directory,"private")
  if e=os.WriteFile(keyPath,[]byte(private+"\n"),0600);e!=nil{return observed,fmt.Errorf("cannot stage WireGuard key")}
  created:=false
@@ -103,7 +108,6 @@ func(p wireguardProbe) check(ctx context.Context,allocation hostregistration.Onb
   if e!=nil{return observed,e}
   created=true
   for !p.exists(iface){if e=p.wait(ctx,100*time.Millisecond);e!=nil{return observed,fmt.Errorf("userspace WireGuard did not create its temporary interface")}}
-  created=true
  }
  command:=func(name string,args ...string)error{
   _,e:=p.run(ctx,name,args...);if e!=nil{return fmt.Errorf("temporary WireGuard configuration failed; inspect prerequisites and route conflicts")}

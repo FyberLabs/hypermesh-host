@@ -7,6 +7,7 @@ import (
  "encoding/base64"
  "fmt"
  "os"
+ "path/filepath"
  "strings"
  "testing"
  "time"
@@ -27,7 +28,10 @@ func TestWireGuardProbeRequiresHandshakeAndDataAndCleansUp(t *testing.T){
   live:=failure=="foreign";stopped:=false;deletes:=0
   clock:=time.Unix(1700000000,0)
   keyfile:=""
+  staging:=setupStateDir(t)
+  untrusted:=t.TempDir();t.Setenv("TMPDIR",untrusted)
   p:=wireguardProbe{
+   stagingDir:staging,
    exists:func(name string)bool{return name!="hypermesh"&&live},
    now:func()time.Time{return clock},
    wait:func(context.Context,time.Duration)error{return fmt.Errorf("deadline")},
@@ -39,7 +43,7 @@ func TestWireGuardProbeRequiresHandshakeAndDataAndCleansUp(t *testing.T){
     if name=="ip"&&strings.Contains(joined,"link add"){live=true}
     if name=="ip"&&strings.Contains(joined,"link delete"){deletes++;if failure=="cleanup"{return nil,fmt.Errorf("raw-private-error")};live=false}
     if name=="wg"&&len(args)>0&&args[0]=="set" {
-     for i,arg:=range args{if arg=="private-key"{keyfile=args[i+1];info,e:=os.Stat(keyfile);if e!=nil||info.Mode().Perm()!=0600{t.Fatal("unsafe key staging")}}}
+     for i,arg:=range args{if arg=="private-key"{keyfile=args[i+1];if filepath.Dir(filepath.Dir(keyfile))!=staging||strings.HasPrefix(keyfile,untrusted){t.Fatal("key staged outside trusted installer state")};info,e:=os.Stat(keyfile);if e!=nil||info.Mode().Perm()!=0600{t.Fatal("unsafe key staging")}}}
      if failure=="configure"{return nil,fmt.Errorf("raw-private-error")}
     }
     if name=="wg"&&strings.Contains(joined,"latest-handshakes"){
