@@ -13,7 +13,7 @@ import (
 func flagValue(value bool)*bool{return &value}
 func snapshotFixture(r Request,q onboardingRequest)OnboardingSnapshot {
  return OnboardingSnapshot{Protocol:"hypermesh-host-onboarding",ProtocolVersion:1,
- Capabilities:[]string{"device_identity_v1","readiness_snapshot_v1"},Nonce:q.Nonce,CheckedAt:time.Now().UTC(),
+ AIuditorProgramState:"ready",Capabilities:[]string{"device_identity_v1","readiness_snapshot_v1","aiuditor_program_v1"},Nonce:q.Nonce,CheckedAt:time.Now().UTC(),
  TenantID:testTenant,RequestID:r.RequestID,DeviceID:q.DeviceID,HostName:r.HostName,ClassID:r.ClassID,
  ClassAvailable:flagValue(true),KeyFingerprint:Fingerprint(r.WGPublicKey),PathAState:"pending",
  PathBState:"never-run",SellState:"paused",ScheduleHold:flagValue(false),
@@ -38,6 +38,9 @@ func TestOnboardingRejectsUnboundOrIncompleteResponses(t *testing.T){
  r:=fixture(t);q:=onboardingRequest{1,r.RequestID,r.RequestID,strings.Repeat("a",64)}
  c,_:=New("https://plane.example",testTenant)
  changes:=[]func(*OnboardingSnapshot){
+ func(s *OnboardingSnapshot){s.AIuditorProgramState=""},
+ func(s *OnboardingSnapshot){s.AIuditorProgramState="forged"},
+ func(s *OnboardingSnapshot){s.Capabilities=[]string{"device_identity_v1","readiness_snapshot_v1"}},
  func(s *OnboardingSnapshot){s.Protocol="health"},
  func(s *OnboardingSnapshot){s.ProtocolVersion=2},
  func(s *OnboardingSnapshot){s.Capabilities=[]string{"device_identity_v1"}},
@@ -83,4 +86,14 @@ func TestOnboardingAcceptsLongerRegisteredCredentials(t *testing.T){
  }));defer server.Close()
  c,_:=New(server.URL,testTenant);c.http=server.Client()
  if _,err:=c.CheckDevice(context.Background(),r,r.RequestID,secret);err!=nil{t.Fatal(err)}
+}
+
+func TestOnboardingProgramFailuresRemainBoundSnapshots(t *testing.T){
+ r:=fixture(t);q:=onboardingRequest{1,r.RequestID,r.RequestID,strings.Repeat("a",64)}
+ c,_:=New("https://plane.example",testTenant)
+ for _,state:=range []string{"unconfigured","unavailable","unauthorized","writer_mismatch","missing_suite","invalid_response"} {
+  s:=snapshotFixture(r,q);s.AIuditorProgramState=state
+  if err:=c.checkOnboarding(s,r,q);err!=nil{t.Fatal("lost actionable program state",state,err)}
+  if *s.ActivationAllowed||*s.SellingAllowed{t.Fatal("failed program authorized activation")}
+ }
 }

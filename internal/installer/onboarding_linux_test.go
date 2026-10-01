@@ -17,7 +17,7 @@ import (
 )
 func onboardingFixture()hostregistration.OnboardingSnapshot {
  yes,no:=true,false
- return hostregistration.OnboardingSnapshot{CheckedAt:time.Now().UTC(),ClassAvailable:&yes,
+ return hostregistration.OnboardingSnapshot{AIuditorProgramState:"ready",CheckedAt:time.Now().UTC(),ClassAvailable:&yes,
  PathAState:"pending",PathBState:"never-run",SellState:"paused",ScheduleHold:&no,
  ActivationAllowed:&no,SellingAllowed:&no,TunnelVerified:&no}
 }
@@ -42,9 +42,10 @@ func TestOnboardingSuccessRetainsPendingGatesAndCannotActivate(t *testing.T){
  if !j.ProtocolVerified||!j.LocalPreflightPassed||j.PlaneCheckedAt==nil||j.ReportedSellState!="paused"{t.Fatal("missing successful evidence")}
  gates:=map[string]onboardingGate{}
  for _,gate:=range j.Gates{gates[gate.ID]=gate}
- for _,id:=range []string{"path_a","path_b","heartbeat","aiuditor","tunnel","activation"}{
+ for _,id:=range []string{"path_a","path_b","heartbeat","tunnel","activation"}{
   if gates[id].State!="pending"{t.Fatal("unverified gate passed",id)}
  }
+ if gates["aiuditor"].State!="passed"{t.Fatal("authenticated program gate not recorded")}
  if gates["selling"].State!="blocked"{t.Fatal("selling allowed")}
 }
 func TestOnboardingFailuresReplaceStaleSuccessAndStopNextSteps(t *testing.T){
@@ -139,4 +140,28 @@ func TestOnboardingFinalSaveFailureNeverEmitsSuccess(t *testing.T){
   j.PlaneCheckedAt!=nil||len(j.Gates)!=0||j.ActivationAllowed||j.SellingAllowed{t.Fatal("success exposed after failed persistence")}
  raw,_:=json.Marshal(j)
  if strings.Contains(string(raw),"\"state\":\"checked\"")||strings.Contains(string(raw),"\"protocol_verified\":true"){t.Fatal("success on stdout")}
+}
+
+func TestOnboardingProgramFailureIsDurableActionableAndCannotActivate(t *testing.T){
+ for _,state:=range []string{"unconfigured","unavailable","unauthorized","writer_mismatch","missing_suite","invalid_response"}{t.Run(state,func(t *testing.T){
+  j:=onboardingJournal{State:"checked",ProtocolVerified:true}
+  var saved onboardingJournal
+  snapshot:=onboardingFixture();snapshot.AIuditorProgramState=state
+  deps:=onboardingDeps{
+   Verify:func(context.Context)error{return nil},
+   Preflight:func(context.Context)error{return nil},
+   Remote:func(context.Context)(hostregistration.OnboardingSnapshot,error){return snapshot,nil},
+   Save:func(value onboardingJournal)error{saved=value;return nil},
+  }
+  if performOnboardingCheck(context.Background(),&j,deps)==nil{t.Fatal("failed program returned success")}
+  if j.State!="failed"||j.FailureCode!="aiuditor_program"||!j.ProtocolVerified||!j.LocalPreflightPassed||
+   j.PlaneCheckedAt==nil||j.ActivationAllowed||j.SellingAllowed{t.Fatal("lost accurate failure evidence")}
+  if saved.State!=j.State||saved.FailureCode!=j.FailureCode||saved.NextAction==""{t.Fatal("failure not persisted")}
+  found:=false
+  for _,gate:=range saved.Gates{
+   if gate.ID=="aiuditor" {found=true;if gate.State!="blocked"||gate.NextAction!=j.NextAction{t.Fatal("missing recovery guidance")}}
+   if (gate.ID=="activation"||gate.ID=="selling")&&gate.State=="passed"{t.Fatal("program bypassed remaining gates")}
+  }
+  if !found{t.Fatal("program blocker omitted")}
+ })}
 }

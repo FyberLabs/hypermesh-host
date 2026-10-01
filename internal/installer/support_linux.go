@@ -139,7 +139,7 @@ func supportOnboarding(dir, sha string) supportStage {
 		return supportUnavailable("onboarding", "invalid")
 	}
 	code := j.FailureCode
-	if !supportOneOf(code, "", "local_identity", "local_preflight", "plane_check", "interrupted", "status_persistence") { code = "unknown" }
+	if !supportOneOf(code, "", "local_identity", "local_preflight", "plane_check", "interrupted", "status_persistence", "aiuditor_program") { code = "unknown" }
 	seen := map[string]bool{}
 	gates := []supportGate{}
 	for _, gate := range j.Gates {
@@ -156,6 +156,7 @@ func supportOnboarding(dir, sha string) supportStage {
 	case "local_identity": action = "Inspect changed installation or identity files locally; preserve registration and keys."
 	case "local_preflight": action = "Run plan-setup to inspect current hardware, resource and prerequisite blockers."
 	case "plane_check": action = "Check the deployed onboarding API and network connection; retry without deleting credentials."
+	case "aiuditor_program": action = "Check the plane AIuditor configuration, service authentication and tenant/class suite; rerun check-agent for a specific blocker."
 	case "status_persistence": action = "Check disk space and state-directory permissions, then rerun check-agent."
 	}
 	recorded := j.RecordedAt.UTC()
