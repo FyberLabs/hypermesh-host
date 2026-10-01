@@ -33,7 +33,7 @@ func setupFixture() (Plan, setupSource) {
 				if strings.Join(args," ") != "get-default" { return nil, fmt.Errorf("mutation attempted") }
 				return []byte("graphical.target\n"), nil
 			case "dpkg-query":
-				return []byte("ca-certificates\t1.0\tii \ngnupg\t2.0\tii \npython3\t3.12\tii \nwireguard-go\t1.0\tii \nwireguard-tools\t1.0\tii \ndocker.io\t26.0\tii \nnvidia-l4t-core\t36.4.0\tii \n"), nil
+				return []byte("iproute2\t6.0\tii \niputils-ping\t1.0\tii \nca-certificates\t1.0\tii \ngnupg\t2.0\tii \npython3\t3.12\tii \nwireguard-go\t1.0\tii \nwireguard-tools\t1.0\tii \ndocker.io\t26.0\tii \nnvidia-l4t-core\t36.4.0\tii \n"), nil
 			}
 			return nil, fmt.Errorf("unexpected command %s",name)
 		},
