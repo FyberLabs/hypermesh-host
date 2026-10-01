@@ -37,7 +37,11 @@ func supportFixture(t *testing.T)(string, string, string, []string) {
 		ProtocolVerified:true,LocalPreflightPassed:true,ReportedSellState:secret,NextAction:secret,
 		Gates:[]onboardingGate{{"schedule","blocked",secret},{"activation","pending",secret},{"selling","blocked",secret}}}
 	if err=saveOnboarding(onboardingPath(dir,p.SHA256),j);err!=nil{t.Fatal(err)}
-	return dir,p.SHA256,p.Setup.PlanSHA256,[]string{secret,r.PrivateKey,r.DeviceSecret,r.Owner,r.Request.RequestID,
+	request,err:=memoryRequest(p.Setup);if err!=nil{t.Fatal(err)}
+ memory:=runtimeMemoryJournal{Schema:1,SetupPlanSHA256:p.Setup.PlanSHA256,State:"failed",StartedAt:stamp,RecordedAt:stamp,
+  Request:request,FailureCode:"runtime",NextAction:secret}
+ if err=saveMemoryJournal(memoryJournalPath(dir,p.Setup.PlanSHA256),memory);err!=nil{t.Fatal(err)}
+ return dir,p.SHA256,p.Setup.PlanSHA256,[]string{secret,r.PrivateKey,r.DeviceSecret,r.Owner,r.Request.RequestID,
 		r.Request.WGPublicKey,r.Request.DeviceSecretHash,r.Request.CredentialPrefix,r.Issuer}
 }
 
@@ -47,7 +51,7 @@ func TestSupportBundleAllowlistAndNoMutation(t *testing.T) {
 	before:=map[string][]byte{}
 	for _,entry:=range entries {before[entry.Name()],err=os.ReadFile(filepath.Join(dir,entry.Name()));if err!=nil{t.Fatal(err)}}
 	bundle,err:=collectSupport(context.Background(),dir,agentSHA,setupSHA);if err!=nil{t.Fatal(err)}
-	if !bundle.CollectionComplete || !bundle.HistoricalOnly || len(bundle.Stages)!=4 {t.Fatal("incomplete summary")}
+	if !bundle.CollectionComplete || !bundle.HistoricalOnly || len(bundle.Stages)!=5 {t.Fatal("incomplete summary")}
 	if bundle.Stages[0].State!="failed" || !bundle.Stages[0].ErrorRecorded ||
 		bundle.Stages[1].CompletedFiles!=5 || bundle.Stages[2].State!="registered-inactive" ||
 		bundle.Stages[3].Gates[0].State!="blocked" {t.Fatal("lost useful diagnostics")}
@@ -175,6 +179,6 @@ func TestSupportSetupOnlyDoesNotCollectPrivateAgentState(t *testing.T) {
 	// Unsafe agent state is irrelevant to a setup-only request.
 	if err:=os.Chmod(registrationPath(dir,sha),0o644);err!=nil{t.Fatal(err)}
 	bundle,err:=collectSupport(context.Background(),dir,"",setupSHA);if err!=nil{t.Fatal(err)}
-	if !bundle.CollectionComplete || bundle.Stages[0].Collection!="collected" {t.Fatal("setup-only collection failed")}
-	for _,stage:=range bundle.Stages[1:] {if stage.Collection!="not-requested"{t.Fatal("collected an unrequested stage")}}
+	if !bundle.CollectionComplete || bundle.Stages[0].Collection!="collected" || bundle.Stages[4].Collection!="collected" {t.Fatal("setup-only collection failed")}
+	for _,stage:=range bundle.Stages[1:4] {if stage.Collection!="not-requested"{t.Fatal("collected an unrequested stage")}}
 }
