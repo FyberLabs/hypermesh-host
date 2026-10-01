@@ -24,6 +24,12 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "download" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := installer.RunDownload(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	if name == "plan" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		code := installer.RunPlan(ctx, os.Args[2:], os.Stdout, os.Stderr)
@@ -95,6 +101,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  download  fetch a signed deploy CLI using independently trusted key material.
+            Use download --help for required release, channel and build constraints.
   plan      read-only resource, hardware and HTTPS reachability plan.
             Resource flags plus --aiuditor-check-url https://HOST/READINESS_PATH
   check-resources  read-only Linux RAM, accelerator capacity and model-filesystem check.
