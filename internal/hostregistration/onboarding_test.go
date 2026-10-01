@@ -72,3 +72,15 @@ func TestOnboardingOldPlaneAndCredentialFailuresStayRedacted(t *testing.T){
   if err==nil||strings.Contains(err.Error(),"private-response-secret"){t.Fatal("failure accepted or leaked",err)}
  })}
 }
+
+func TestOnboardingAcceptsLongerRegisteredCredentials(t *testing.T){
+ r:=fixture(t);secret:="hm_dev_"+strings.Repeat("s",43)
+ server:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,req *http.Request){
+  if req.Header.Get("Authorization")!="Bearer "+secret{t.Error("changed longer credential")}
+  var q onboardingRequest
+  if json.NewDecoder(req.Body).Decode(&q)!=nil{t.Error("invalid request")}
+  json.NewEncoder(w).Encode(snapshotFixture(r,q))
+ }));defer server.Close()
+ c,_:=New(server.URL,testTenant);c.http=server.Client()
+ if _,err:=c.CheckDevice(context.Background(),r,r.RequestID,secret);err!=nil{t.Fatal(err)}
+}

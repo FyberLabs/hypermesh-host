@@ -5,7 +5,7 @@ import (
  "crypto/rand"
  "encoding/hex"
  "fmt"
- "strings"
+ "regexp"
  "time"
 )
 
@@ -33,6 +33,8 @@ type OnboardingSnapshot struct {
  SellingAllowed *bool `json:"selling_allowed"`
  TunnelVerified *bool `json:"tunnel_verified"`
 }
+var onboardingSecretRE = regexp.MustCompile("^hm_dev_[A-Za-z0-9_-]{32,}$")
+
 type onboardingRequest struct {
  ProtocolVersion int `json:"protocol_version"`
  RequestID string `json:"request_id"`
@@ -45,7 +47,7 @@ type onboardingRequest struct {
 func (c *Client) CheckDevice(ctx context.Context,r Request,deviceID,secret string)(OnboardingSnapshot,error) {
  var out OnboardingSnapshot
  if err:=r.Validate();err!=nil{return out,err}
- if !UUID.MatchString(deviceID)||!strings.HasPrefix(secret,"hm_dev_")||len(secret)!=39 {
+ if !UUID.MatchString(deviceID)||!onboardingSecretRE.MatchString(secret) {
   return out,fmt.Errorf("saved device identity is invalid")
  }
  challenge:=make([]byte,32)
