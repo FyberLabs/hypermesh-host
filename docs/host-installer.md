@@ -126,7 +126,8 @@ disabled with consent, not that other services are disabled.
 - [x] Versioned candidate Linux profiles and exact prerequisite package/headless plans.
 - [ ] Hardware validation of profiles and complete agent/service/apply plans.
 - [x] Exact-digest approval and journaled apply/resume for prerequisite packages and headless target.
-- [ ] Complete agent/service installation, guided approval and automatic reboot/resume.
+- [x] Approved first installation of verified agent, rollback helper, update trust, configuration and inactive systemd units; journaled retry/status.
+- [ ] Enrollment-gated service activation, guided approval and automatic reboot/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
 - [ ] Recovery commands, redacted support bundle, and status presentation.
 - [ ] Enrollment plus benchmark/connectivity gates before selling.
@@ -736,3 +737,89 @@ The remaining installation task must bind this verified agent, the rollback
 helper, environment configuration and mode-specific systemd units into the
 approved plan and journal. Agent/service installation is still incomplete;
 this acquisition step does not make AGX-1 ready for acceptance.
+
+## Agent first installation
+
+Implemented: `plan-agent` and `install-agent` complete the file-installation
+stage after approved prerequisites. They do not replace an existing enrolled
+host; repair/upgrade orchestration remains separate.
+
+Use a release-built installer and its immutable release URL, independent public
+key and fingerprint. Complete `apply-setup` first. The plan contains the public
+trust key, public host configuration, signed release identity and every
+destination file's SHA-256 and mode; it contains no enrollment credential.
+
+```bash
+./hypermesh-deploy plan-agent \
+  --setup-plan setup-plan.json \
+  --release-url https://RELEASE_HOST/test/BUILD-COMMIT_PREFIX --channel test \
+  --trusted-key /trusted/release-public.asc --fingerprints TRUSTED_FINGERPRINT \
+  --control-plane-url https://api.test.hyperme.sh \
+  --tenant-id TENANT_UUID --host-name REPORTED_HOST_NAME > agent-plan.json
+
+# Review agent-plan.json, including public trust, destinations and configuration.
+sudo ./hypermesh-deploy install-agent --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256
+sudo ./hypermesh-deploy agent-install-status --plan-sha AGENT_PLAN_SHA256
+```
+
+For production, select the immutable production release, `--channel prod` and
+the production control-plane URL. The release must match this installer's
+version, build and commit. Planning and applying verify its signature, metadata
+and agent checksum independently. Applying rechecks approved prerequisites
+after downloading, reconstructs all payloads and compares them with the approved
+manifest before installation. Rebuilding the installer requires new plans.
+
+Installed files are the agent (0755), embedded rollback helper (0755), public
+update key (0644), agent environment (0600), and systemd units (0644).
+The helper comes from the signed installer itself. Kernel WireGuard installs
+no userspace unit or dependency. Userspace mode installs the existing tunnel
+unit and makes the agent depend on it. Both modes explicitly set the matching
+agent environment value.
+
+Application uses the prerequisite install lock and a private atomic journal at
+`/var/lib/hypermesh/installer/agent-PLAN_SHA256.json`. The agent state directory
+must be root-owned 0700. Existing files with different bytes, permissions or
+ownership, symlinks, enrolled identity, activation marker, vendor units and
+service overrides block first installation. No existing file is replaced.
+Resume with the same command: matching installed files are reconciled even if
+their completion was not journaled. File publication is atomic and directories
+are fsynced. A crash between publication and temporary-link removal can require
+operator cleanup of the leftover `.agent-install-*` link; unsafe multiple-link
+files are deliberately not adopted automatically.
+
+Success is `installed-awaiting-enrollment`. Units are not enabled, started or
+reloaded. Their activation condition requires
+`/var/lib/hypermesh/activation-approved`, which this command never creates.
+Do not manually create it to skip onboarding. Device authorization, fresh-key
+enrollment, authenticated connectivity/benchmark gating and activation remain
+the next task; this stage alone is not an AGX-1 acceptance run.
+
+Tests cover kernel/userspace payloads, exact plan binding, unsafe inputs,
+private journal persistence, interruption/retry, changed existing files,
+symlink paths, existing host/service conflicts and cancellation before writes.
+
+## Agent update policy and dashboard requests
+
+Approved: support periodic update checks and host-dashboard update requests
+through one verified updater. The existing agent checks its configured channel
+hourly (`HYPERMESH_UPDATE_EVERY`), verifies signed manifests and checksums,
+refuses older builds, defers during a lease or unacknowledged job result, and
+uses heartbeat confirmation plus rollback. First-install configuration now
+sets the channel, hourly interval, public key and allowed fingerprints.
+Checks begin only when the enrolled agent is activated.
+
+Still to implement end to end:
+
+- An authenticated, tenant/host-authorized dashboard request to check and update
+  when idle, delivered through the existing outbound agent/control-plane path.
+  No inbound management port or arbitrary binary URL.
+- One serialized update path for periodic and requested checks, with deduplication,
+  retry/backoff and jitter. A dashboard request must not bypass signed trust,
+  channel/build rules, bad-build suppression or lease safety.
+- Visible current/target build and requested, checking, deferred (with reason),
+  installing, confirmed, rolled-back or failed state. Show the next action.
+- Drain coordination before restarting so new leases cannot race the final idle
+  check. Do not interrupt paid work or treat a dashboard click as force permission.
+
+The dashboard/control-plane delivery and status contract are pending; the
+existing hourly checker is not a claim that dashboard push already works.
