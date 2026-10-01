@@ -108,11 +108,22 @@ func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboar
  snapshot,err:=deps.Remote(ctx)
  if err!=nil{return fail("plane_check","Verify the deployed onboarding API, connection and device registration; retry without deleting credentials.",err)}
  if err=ctx.Err();err!=nil{return fail("interrupted","Check interrupted; rerun with the same approved plan.",fmt.Errorf("onboarding check interrupted"))}
- j.State="checked";j.RecordedAt=time.Now().UTC();j.ProtocolVerified=true
- j.PlaneCheckedAt=&snapshot.CheckedAt;j.LastHeartbeatAt=snapshot.LastHeartbeatAt
- j.Gates=onboardingGates(snapshot);j.ReportedSellState=snapshot.SellState
- j.NextAction="Authenticated API and local preflight checks passed. Complete the listed onboarding gates before activation or selling."
- return deps.Save(*j)
+ candidate:=*j
+ candidate.State="checked";candidate.RecordedAt=time.Now().UTC();candidate.ProtocolVerified=true
+ candidate.PlaneCheckedAt=&snapshot.CheckedAt;candidate.LastHeartbeatAt=snapshot.LastHeartbeatAt
+ candidate.Gates=onboardingGates(snapshot);candidate.ReportedSellState=snapshot.SellState
+ candidate.NextAction="Authenticated API and local preflight checks passed. Complete the listed onboarding gates before activation or selling."
+ if err:=deps.Save(candidate);err!=nil {
+  // Do not emit a checked result unless its durable write succeeded. A failed
+  // rename/fsync has an uncertain outcome; the caller must retry the check.
+  j.State="failed";j.FailureCode="status_persistence";j.RecordedAt=time.Now().UTC()
+  j.ProtocolVerified=false;j.LocalPreflightPassed=false
+  j.PlaneCheckedAt=nil;j.LastHeartbeatAt=nil;j.ReportedSellState="";j.Gates=nil
+  j.NextAction="Status persistence failed; check disk space and installer-state permissions, then rerun check-agent."
+  return fmt.Errorf("cannot persist completed onboarding check; success is not confirmed")
+ }
+ *j=candidate
+ return nil
 }
 
 func RunCheckAgent(ctx context.Context,args []string,out,diagnostic io.Writer)int {

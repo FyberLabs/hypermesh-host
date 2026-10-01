@@ -117,3 +117,26 @@ func TestCheckAgentArgumentValidation(t *testing.T){
  if RunCheckAgent(context.Background(),[]string{"--help"},&out,&diagnostic)!=0{t.Fatal("help failed")}
  if RunOnboardingStatus(context.Background(),[]string{"--plan-sha","../../device.json"},&out,&diagnostic)!=2{t.Fatal("accepted unsafe status path")}
 }
+
+func TestOnboardingFinalSaveFailureNeverEmitsSuccess(t *testing.T){
+ var j onboardingJournal
+ var durable onboardingJournal
+ saves:=0
+ deps:=onboardingDeps{
+  Verify:func(context.Context)error{return nil},
+  Preflight:func(context.Context)error{return nil},
+  Remote:func(context.Context)(hostregistration.OnboardingSnapshot,error){return onboardingFixture(),nil},
+  Save:func(value onboardingJournal)error{
+   saves++
+   if value.State=="checked"{return fmt.Errorf("rename or fsync failed")}
+   durable=value
+   return nil
+  },
+ }
+ if performOnboardingCheck(context.Background(),&j,deps)==nil{t.Fatal("ignored final save failure")}
+ if saves!=2||durable.State!="checking"{t.Fatal("unexpected durable state",durable.State)}
+ if j.State!="failed"||j.FailureCode!="status_persistence"||j.ProtocolVerified||j.LocalPreflightPassed||
+  j.PlaneCheckedAt!=nil||len(j.Gates)!=0||j.ActivationAllowed||j.SellingAllowed{t.Fatal("success exposed after failed persistence")}
+ raw,_:=json.Marshal(j)
+ if strings.Contains(string(raw),"\"state\":\"checked\"")||strings.Contains(string(raw),"\"protocol_verified\":true"){t.Fatal("success on stdout")}
+}
