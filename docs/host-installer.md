@@ -1451,3 +1451,36 @@ Complete these stages in order; a green diagnostic must not skip later gates:
    and its own physical acceptance remain required.
 
 macOS and the additional workload operating modes remain deferred as approved.
+
+
+### Completed: pinned certification workload execution (2026-10-01)
+
+Catalog-scoped `path_b` and `compact_cert` jobs now require the plane's
+explicit catalog ID, OCI `repo@sha256`, GGUF `file_hash`, and NVIDIA runtime.
+The agent hashes the selected cached/configured model before and after the
+sample, starts that exact image with that catalog alias on loopback, and removes
+the temporary container before accepting a measured result. Existing leases,
+missing pins/models, unsupported backends, failed readiness/inference and
+uncertain cleanup fail the job. This stage downloads no weights automatically:
+the existing approved `lab_pull`/model-cache path must supply the pinned file.
+
+One measured execution produces at most one catalog scorecard. A mutable image
+tag, the default Llama catalog, and an unrelated running endpoint are no longer
+used to manufacture benchmark identity. Compact certification reports failure
+if the plane does not accept its scorecard. An unscoped legacy `path_b` job
+retains its telemetry behavior but cannot publish a catalog benchmark.
+
+Deploy the matching Panopticon job response extension before this host release.
+It adds current catalog `file_hash`, `size_bytes` and the admitted Jetson backend
+to authenticated dispatch. Null source pins stay null; populate reviewed catalog
+metadata rather than inventing a seed hash. This is a dispatch snapshot, not an
+immutable per-job attestation across retries. Hardware tests remain pending.
+
+**Still pending before installation-to-ready is complete:** an approved installer
+entry point to pull and execute the pinned workload while services remain
+inactive; full advertised-context fit and sustained benchmark testing; a frozen
+per-run evidence contract with AIuditor; and the guarded certification/service
+activation transition. The short completion proves basic inference only. HIP
+and Metal remain blocked for pinned certification until their runners mount the
+verified model and configure its alias. This change does not enable selling or
+create the service activation marker.

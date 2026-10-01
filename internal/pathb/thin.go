@@ -41,6 +41,8 @@ const probeText = "Reply with the single word ready."
 // Measured / SampleMs / DecodeTokS are a separate scorecard report.
 // They stay unset unless the completion body included usage.completion_tokens.
 type Result struct {
+	// WorkloadVerified is set only by the agent after pinned execution and cleanup.
+	WorkloadVerified bool
 	Passed     bool
 	ImageHash  string
 	Reason     string
@@ -73,6 +75,8 @@ type Collector interface {
 
 // Runner executes thin-v1 for path_b or instance_check jobs.
 type Runner struct {
+	// Model is the exact catalog alias served by a certification container.
+	Model string
 	Collector Collector
 	// Endpoint is the completions URL. Empty uses DefaultCompletionsURL.
 	Endpoint string
@@ -220,7 +224,7 @@ func (r Runner) Probe(ctx context.Context) bool {
 
 func (r Runner) complete(ctx context.Context) (bool, error, int, int) {
 	body, err := json.Marshal(completionRequest{
-		Model: "local",
+		Model: r.model(),
 		Messages: []map[string]string{
 			{"role": "user", "content": probeText},
 		},
@@ -259,4 +263,9 @@ func (r Runner) complete(ctx context.Context) (bool, error, int, int) {
 		tokens = 0
 	}
 	return true, nil, sampleMs, tokens
+}
+
+func (r Runner) model() string {
+	if r.Model != "" { return r.Model }
+	return "local"
 }
