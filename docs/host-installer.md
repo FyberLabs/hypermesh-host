@@ -91,7 +91,9 @@ disabled with consent, not that other services are disabled.
 - [x] Connect resource admission to Linux RAM, GPU capacity and filesystem probes
   through the read-only CLI (operator explicitly selects memory topology).
 - [ ] Validate UMA runtime allocation limits and reserve OS/runtime headroom.
-- [ ] Read-only CLI plan with structured blockers and AIuditor checks.
+- [x] Read-only CLI preflight plan with resource/hardware blockers and HTTPS
+  endpoint reachability checks.
+- [ ] Authenticated AIuditor identity and protocol compatibility checks.
 - [ ] Signed bootstrap release discovery and installer self-update.
 - [ ] Versioned, validated hardware profiles and exact mutation plans.
 - [ ] Approval capture, unattended plan application, checkpoint/resume.
@@ -170,3 +172,38 @@ Consult vendor compatibility documentation when selecting candidate versions:
 [MINISFORUM N5 MAX](https://store.minisforum.com/products/minisforum-n5-max-ai-nas).
 Do not copy a version from a moving documentation page into a certified profile
 without testing it on the target machine.
+
+## Read-only preflight plan milestone
+
+Implemented: `hypermesh-deploy plan` combines measured resource admission,
+hardware inspection/recommendations, and a bounded HTTPS readiness request.
+It reports all preliminary blockers together plus the remaining installation
+gates. Exit 0 means preliminary checks passed; it does not authorize installation.
+Exit 1 means a check failed, and exit 2 means invalid arguments.
+
+```bash
+./hypermesh-deploy plan --memory-mode uma --uma-gib 40 \
+  --model-dir /existing/model/cache \
+  --aiuditor-check-url https://YOUR_AIUDITOR/ITS_READINESS_PATH > preflight.json
+```
+
+Replace the URL with the selected deployment's actual readiness endpoint;
+there is deliberately no invented default path. Requests require trusted TLS,
+time out after ten seconds, reject redirects, and require HTTP 2xx. URLs with
+credentials, query parameters or fragments are rejected. Response bodies are
+not stored. The command changes no packages, keys, disks or system services.
+
+The JSON includes hardware recommendations, resource evidence, blockers,
+`preliminary_checks_passed`, and `install_authorized: false`. A detected
+accelerator backend is a preliminary signal; it does not certify the GPU
+architecture, driver version or workload compatibility. Missing drivers are
+reported as blockers to investigate before creating a mutation plan.
+Endpoint reachability is not authenticated AIuditor identity. Those checks,
+validated profiles, exact change approval and runtime memory validation remain
+explicit pending gates. This plan is diagnostic evidence, not an unattended
+installation approval file.
+
+Automated tests cover aggregated failures, pass/blocked exit status, protected
+URL rejection, trusted/untrusted TLS, HTTP errors, redirects and cancellation.
+Physical AGX 64 and N5 MAX acceptance remains pending. Complete runtime memory
+validation and authenticated discovery before starting installation mutations.
