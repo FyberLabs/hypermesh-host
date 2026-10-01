@@ -355,10 +355,12 @@ upload_new() {
   if blob_exists "$name"; then
     echo "hypermesh release: ${name} already stored; leaving those bytes in place" >&2
     return 0
-  fi
-  local rc=$?
-  if [ "$rc" -ne 1 ]; then
-    exit 1
+  else
+    local rc=$?
+    if [ "$rc" -ne 1 ]; then
+      echo "hypermesh release: checking artifact existence failed" >&2
+      return "$rc"
+    fi
   fi
   az_blob upload --name "$name" --file "$file" --overwrite false --only-show-errors
 }
