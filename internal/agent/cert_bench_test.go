@@ -161,3 +161,34 @@ func TestCertHashHonorsCancellation(t *testing.T) {
 	ctx,cancel:=context.WithCancel(context.Background());cancel()
 	if _,err:=certFileHash(ctx,a.cfg.GGUFPath);err==nil{t.Fatal("cancelled hash accepted")}
 }
+
+func TestCertEgressObservationPrecedesCleanup(t *testing.T) {
+	a,job,_:=certFixture(t,200)
+	job.Kind=api.KindPathB
+	alive,observed:=false,false
+	base:=a.runtime.Run
+	a.runtime.Run=func(ctx context.Context,name string,args ...string)([]byte,error){
+		if args[0]=="run"{alive=true}
+		if args[0]=="stop"{if !observed{t.Error("cleanup preceded observation")};alive=false}
+		return base(ctx,name,args...)
+	}
+	a.dockerRun=func(context.Context,...string)([]byte,error){
+		if !alive{t.Error("observed an absent certification container")}
+		return []byte(`[{"Internal":true,"Containers":{"cert-container":{"Name":"hypermesh-cert-bench","IPv4Address":"172.30.0.2/24"}}}]`),nil
+	}
+	a.egressSample=func(context.Context)([]string,bool){
+		observed=true
+		return []string{"172.30.0.2:1234 8.8.8.8:443"},true
+	}
+	got:=a.runJob(context.Background(),job)
+	if !observed||alive||got.EgressOk==nil||*got.EgressOk||got.EgressReason!=runtime.EgressUnexpected{
+		t.Fatalf("observation lost: alive=%v observed=%v result=%+v",alive,observed,got)
+	}
+}
+
+func TestCertEmptySuiteUsesThinV1Identity(t *testing.T) {
+	a,job,_:=certFixture(t,200)
+	job.SuiteID=""
+	got:=a.runJob(context.Background(),job)
+	if !got.Passed||got.Reason!="thin-v1"||certSuite(job.SuiteID)!="thin-v1"{t.Fatalf("%+v",got)}
+}

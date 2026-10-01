@@ -673,7 +673,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	}()
 
 	res := a.runJob(ctx, *job)
-	if job.Kind == api.KindPathB {
+	if job.Kind == api.KindPathB && strings.TrimSpace(job.CatalogID) == "" {
 		a.attachEgressObservation(ctx, &res)
 	}
 	// Compact-cert band check on the plane needs the scorecard before the
@@ -710,7 +710,7 @@ func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Resu
 	}
 	return a.client.PostScorecard(ctx, api.ScorecardReport{
 		DeviceID: a.state.DeviceID, CatalogID: job.CatalogID,
-		ImageHash: res.ImageHash, Runtime: job.Runtime, PromptPack: job.SuiteID,
+		ImageHash: res.ImageHash, Runtime: job.Runtime, PromptPack: certSuite(job.SuiteID),
 		ImageDigest: job.ImageDigest, SampleMs: res.SampleMs,
 		DecodeTokS: res.DecodeTokS, ThermalC: res.ThermalC, Sustained: false,
 	})
@@ -792,7 +792,11 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 			return jobOutcome{Result: res}
 		}
 		if job.Kind == api.KindCompactCert || (job.Kind == api.KindPathB && strings.TrimSpace(job.CatalogID) != "") {
-			return jobOutcome{Result: a.runCertWorkload(ctx, job)}
+			out := jobOutcome{}
+			out.Result = a.runCertWorkload(ctx, job, func(observation context.Context) {
+				if job.Kind == api.KindPathB { a.attachEgressObservation(observation, &out) }
+			})
+			return out
 		}
 		res := a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))
 		// Legacy telemetry-only path_b and instance checks are not catalog benchmarks.

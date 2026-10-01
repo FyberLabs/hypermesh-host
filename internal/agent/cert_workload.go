@@ -21,7 +21,8 @@ var certImagePin = regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{6
 // Missing pins, an existing lease, failed inference or uncertain cleanup
 // cannot be turned into a certification sample. No service activation,
 // model download, lease creation or sell-state change happens here.
-func (a *Agent) runCertWorkload(ctx context.Context, job api.Job) (result pathb.Result) {
+func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(context.Context)) (result pathb.Result) {
+	job.SuiteID = certSuite(job.SuiteID)
 	fail := func(reason string) pathb.Result { return pathb.Result{Reason: reason} }
 	if strings.TrimSpace(job.JobID) == "" || (job.SuiteID != pathb.SuitePackV1 && job.SuiteID != pathb.SuiteThinV1) {
 		return fail("certification requires job identity and a supported suite")
@@ -96,6 +97,9 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job) (result pathb.
 	// Do not accept a measurement if the mounted bytes changed during execution.
 	after, err := certFileHash(ctx, gguf)
 	if err != nil || after != pin { return fail("certification model changed during execution") }
+	// Admission must observe the workload before deferred cleanup removes it.
+	if observe != nil { observe(ctx) }
+	if ctx.Err() != nil { return fail("certification observation timed out") }
 	result.WorkloadVerified = true
 	return result
 }
@@ -117,4 +121,9 @@ func certFileHash(ctx context.Context, path string) (string, error) {
 	}
 	if err := ctx.Err(); err != nil { return "", err }
 	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
+}
+
+func certSuite(suite string) string {
+	if strings.TrimSpace(suite) == "" { return pathb.SuiteThinV1 }
+	return strings.TrimSpace(suite)
 }
