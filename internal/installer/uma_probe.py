@@ -82,9 +82,123 @@ def probe(loader=c.CDLL):
     return value
 
 
+
+def system_memory():
+    """Resample OS memory immediately before allocating; never trust CLI free RAM."""
+    values = {}
+    with open("/proc/meminfo", encoding="ascii") as source:
+        for line in source:
+            fields = line.split()
+            if fields and fields[0] in ("MemTotal:", "MemAvailable:"):
+                if len(fields) != 3 or fields[2] != "kB" or fields[0] in values:
+                    raise RuntimeError("invalid system memory")
+                values[fields[0]] = int(fields[1]) * 1024
+    total, available = values["MemTotal:"], values["MemAvailable:"]
+    if not 0 < available <= total <= (1 << 63) - 1:
+        raise RuntimeError("invalid system memory")
+    return total, available
+
+
+def allocation_request(value):
+    fields = {"schema", "backend", "device", "allocation_bytes", "total_bytes", "system_bytes"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise RuntimeError("invalid allocation request")
+    if any(type(value[k]) is not int for k in fields - {"backend"}):
+        raise RuntimeError("invalid allocation request")
+    if (value["schema"] != 1 or value["backend"] not in ("cuda", "hip")
+            or not 0 <= value["device"] < 64
+            or not 12 << 30 <= value["allocation_bytes"] < value["total_bytes"] <= (1 << 63) - 1
+            or not 16 << 30 <= value["system_bytes"] <= (1 << 63) - 1):
+        raise RuntimeError("invalid allocation request")
+    return value
+
+
+def allocate_memory(value, loader=c.CDLL, memory=system_memory):
+    """Explicit opt-in: a single UMA allocation, full fill and sampled readback.
+
+    This proves memory operations, not model/context fit or compute performance.
+    No success is returned until allocation and retained context are released.
+    """
+    value = allocation_request(value)
+    found = probe(loader)
+    if any(found[k] != value[k] for k in ("backend", "device", "total_bytes")):
+        raise RuntimeError("runtime device changed")
+    cuda_mode = value["backend"] == "cuda"
+    lib = loader("libcuda.so.1" if cuda_mode else "libamdhip64.so")
+    device = c.c_int()
+    context = c.c_void_p()
+    retained = False
+    pointer = c.c_uint64() if cuda_mode else c.c_void_p()
+    size = value["allocation_bytes"]
+    try:
+        if cuda_mode:
+            call(lib, "cuDeviceGet", [c.POINTER(c.c_int), c.c_int],
+                 c.byref(device), value["device"])
+            call(lib, "cuDevicePrimaryCtxRetain", [c.POINTER(c.c_void_p), c.c_int],
+                 c.byref(context), device)
+            retained = True
+            call(lib, "cuCtxSetCurrent", [c.c_void_p], context)
+        else:
+            call(lib, "hipSetDevice", [c.c_int], value["device"])
+        free, total = c.c_size_t(), c.c_size_t()
+        call(lib, "cuMemGetInfo_v2" if cuda_mode else "hipMemGetInfo",
+             [c.POINTER(c.c_size_t), c.POINTER(c.c_size_t)], c.byref(free), c.byref(total))
+        system, available = memory()
+        reserve = max(2 << 30, (system + 9) // 10)
+        if (system != value["system_bytes"] or not 0 < available <= system
+                or total.value != value["total_bytes"] or free.value > total.value
+                or size > min(available - reserve, free.value - (1 << 30))):
+            raise RuntimeError("insufficient current memory headroom")
+        if cuda_mode:
+            call(lib, "cuMemAlloc_v2", [c.POINTER(c.c_uint64), c.c_size_t],
+                 c.byref(pointer), size)
+        else:
+            call(lib, "hipMalloc", [c.POINTER(c.c_void_p), c.c_size_t],
+                 c.byref(pointer), size)
+        if not pointer.value:
+            raise RuntimeError("runtime returned a null allocation")
+        try:
+            if cuda_mode:
+                call(lib, "cuMemsetD8_v2", [c.c_uint64, c.c_ubyte, c.c_size_t],
+                     pointer, 0xA5, size)
+            else:
+                call(lib, "hipMemset", [c.c_void_p, c.c_int, c.c_size_t],
+                     pointer, 0xA5, size)
+            call(lib, "cuCtxSynchronize" if cuda_mode else "hipDeviceSynchronize", [])
+            # The entire allocation is written; sample both ends and its middle.
+            for offset in (0, size // 2, size - 4096):
+                sample = (c.c_ubyte * 4096)()
+                source = (c.c_uint64 if cuda_mode else c.c_void_p)(pointer.value + offset)
+                call(lib, "cuMemcpyDtoH_v2" if cuda_mode else "hipMemcpyDtoH",
+                     [c.c_void_p, c.c_uint64 if cuda_mode else c.c_void_p, c.c_size_t],
+                     sample, source, len(sample))
+                if bytes(sample) != bytes([0xA5]) * len(sample):
+                    raise RuntimeError("runtime readback mismatch")
+        finally:
+            call(lib, "cuMemFree_v2" if cuda_mode else "hipFree",
+                 [c.c_uint64 if cuda_mode else c.c_void_p], pointer)
+    finally:
+        if retained:
+            call(lib, "cuDevicePrimaryCtxRelease", [c.c_int], device)
+    return dict(schema=1, backend=value["backend"], device=value["device"],
+                allocation_bytes=size, touched_bytes=size, sampled_bytes=3 * 4096,
+                cleanup_complete=True)
+
+
+def main():
+    if sys.argv[1:] == []:
+        return probe()
+    if sys.argv[1:] != ["--allocate"]:
+        raise RuntimeError("unsupported mode")
+    raw = sys.stdin.read(4097)
+    if len(raw) > 4096:
+        raise RuntimeError("allocation request too large")
+    return allocate_memory(json.loads(raw))
+
+
 if __name__ == "__main__":
     try:
-        print(json.dumps(probe()))
-    except (OSError, AttributeError, RuntimeError):
+        print(json.dumps(main()))
+    except (OSError, AttributeError, RuntimeError, ValueError, KeyError, TypeError):
         # Driver diagnostics may include local details. Parent emits remediation.
         sys.exit(1)

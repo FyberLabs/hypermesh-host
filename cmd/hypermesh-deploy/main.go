@@ -24,6 +24,12 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+ if name == "check-runtime-memory" || name == "runtime-memory-status" {
+  ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
+  run:=installer.RunRuntimeMemory
+  if name=="runtime-memory-status"{run=installer.RunRuntimeMemoryStatus}
+  code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)
+ }
 	if name == "support-bundle" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		code := installer.RunSupportBundle(ctx, os.Args[2:], os.Stdout, os.Stderr)
@@ -146,11 +152,14 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  check-runtime-memory  explicitly allocate/fill/sample/free the reviewed UMA budget (Linux, root).
+                        --setup-plan FILE --approve-plan SHA256 --allocate
+  runtime-memory-status  read dated allocation evidence; --setup-plan-sha SHA256
   support-bundle  export redacted, historical installer diagnostics (Linux, root).
                   --plan-sha SHA256 [--setup-plan-sha SHA256] --output /absolute/new.json
                   A setup digest alone also works; use support-bundle --help.
   check-agent  verify saved device identity, plane protocol and local preflight.
-               --plan FILE --approve-plan SHA256 [--heartbeat]; does not activate services.
+               --plan FILE --approve-plan SHA256 [--heartbeat] [--wireguard]; does not activate services.
                --heartbeat records one HTTPS heartbeat, not a verified tunnel.
   onboarding-status  read the dated readiness snapshot; --plan-sha SHA256
   register-agent  device login and browser-approved registration; leaves service inactive.

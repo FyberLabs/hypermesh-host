@@ -44,6 +44,9 @@ type supportStage struct {
 	PlaneCheckedAt *time.Time `json:"plane_checked_at,omitempty"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 	HeartbeatRecordedAt *time.Time `json:"heartbeat_recorded_at,omitempty"`
+	MemoryAllocationBytes int64 `json:"memory_allocation_bytes,omitempty"`
+	MemoryBackend string `json:"memory_backend,omitempty"`
+	MemoryVerified bool `json:"memory_verified,omitempty"`
 	Gates []supportGate `json:"gates,omitempty"`
 	NextAction string `json:"next_action"`
 }
@@ -188,6 +191,19 @@ func supportLock(dir string) (func(), error) {
 	return func(){ _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }
 
+func supportRuntimeMemory(dir,sha string)supportStage {
+ if sha==""{return supportUnavailable("runtime-memory","not-requested")}
+ var j runtimeMemoryJournal
+ state:=supportRead(dir,"runtime-memory-"+sha+".json",&j)
+ if state!="collected"{return supportUnavailable("runtime-memory",state)}
+ if j.SetupPlanSHA256!=sha||!validMemoryJournal(j){return supportUnavailable("runtime-memory","invalid")}
+ at:=j.RecordedAt.UTC()
+ return supportStage{Component:"runtime-memory",Collection:"collected",State:j.State,
+  RecordedAt:&at,ErrorRecorded:j.FailureCode!="",FailureCode:j.FailureCode,
+  MemoryAllocationBytes:j.Request.AllocationBytes,MemoryBackend:j.Request.Backend,
+  MemoryVerified:j.State=="verified",NextAction:memoryNextAction(j.State)}
+}
+
 func collectSupport(ctx context.Context, dir, agentSHA, setupSHA string) (supportBundle, error) {
 	var bundle supportBundle
 	if (agentSHA=="" && setupSHA=="") || (agentSHA!="" && !setupDigestRE.MatchString(agentSHA)) ||
@@ -200,7 +216,7 @@ func collectSupport(ctx context.Context, dir, agentSHA, setupSHA string) (suppor
 	if !regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(commit) { commit = "unknown" }
 	bundle = supportBundle{Schema:1, GeneratedAt:time.Now().UTC(), CollectorCommit:commit, CollectorBuild:buildinfo.CurrentBuild(),
 		Architecture:runtime.GOARCH, AgentPlanSHA256:agentSHA, SetupPlanSHA256:setupSHA, HistoricalOnly:true, CollectionComplete:true}
-	bundle.Stages = []supportStage{supportSetup(dir,setupSHA), supportAgent(dir,agentSHA), supportRegistration(dir,agentSHA), supportOnboarding(dir,agentSHA)}
+	bundle.Stages = []supportStage{supportSetup(dir,setupSHA), supportAgent(dir,agentSHA), supportRegistration(dir,agentSHA), supportOnboarding(dir,agentSHA), supportRuntimeMemory(dir,setupSHA)}
 	for _, stage := range bundle.Stages {
 		if stage.Collection!="collected" && stage.Collection!="not-requested" { bundle.CollectionComplete=false }
 	}

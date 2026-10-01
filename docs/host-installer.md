@@ -116,7 +116,8 @@ disabled with consent, not that other services are disabled.
 - [x] Connect resource admission to Linux RAM, GPU capacity and filesystem probes
   through the read-only CLI (operator explicitly selects memory topology).
 - [x] Query integrated CUDA/HIP runtime capacity and enforce OS/runtime reserves.
-- [ ] Validate actual allocation and model/context fit on target hardware.
+- [x] Explicit approved CUDA/HIP UMA allocation, full fill, sampled readback and release check, with bounded execution and dated recovery evidence.
+- [ ] Validate model/context fit and record actual allocation results on target hardware.
 - [x] Read-only CLI preflight plan with resource/hardware blockers and HTTPS
   endpoint reachability checks.
 - [x] Device-authenticated control-plane protocol and registration identity check, with a redacted readiness snapshot.
@@ -1363,3 +1364,80 @@ retirement. A later ordinary check clears the saved connectivity success.
 Protocol, allocation/retry, failure, cleanup, timestamp and journal checks are
 automated. Physical AGX-1/N5 validation, AIuditor inference and workload
 compatibility, certification execution, and service activation remain pending.
+
+
+## Completed: approved UMA runtime memory check
+
+After `apply-setup` has completed the reviewed prerequisites, explicitly test
+the UMA allocation from that same setup plan:
+
+```bash
+sudo ./hypermesh-deploy check-runtime-memory \
+  --setup-plan setup-plan.json --approve-plan SETUP_PLAN_SHA256 --allocate
+sudo ./hypermesh-deploy runtime-memory-status --setup-plan-sha SETUP_PLAN_SHA256
+```
+
+The digest approves the exact installer build, machine/profile, package state and
+selected allocation. The separate `--allocate` opt-in approves using that memory
+for this check; ordinary resource inspection and planning remain read-only.
+This stage works before device enrollment, including on candidate AMD UMA
+systems whose generic hardware-class admission is still pending. It currently
+requires exactly one visible integrated CUDA or HIP accelerator. Discrete and
+multi-GPU runtime validation remain pending; aggregate VRAM is not proof of fit.
+
+The command requires inactive Hypermesh units and completed approved
+prerequisites. It saves `checking` before running fresh preflight, checks current
+OS/runtime reserves immediately before allocation, then allocates exactly the
+reviewed UMA byte budget. It fills the entire allocation, synchronizes the
+runtime, reads back 4 KiB samples at the beginning, middle and end, and releases
+the allocation and retained CUDA context before accepting success. It rechecks
+preflight and service inactivity afterward. There is no model download,
+container start, package/driver change, enrollment, certification or selling
+operation.
+
+The Python child uses isolated mode, a fixed environment, bounded output and a
+45-second whole-process deadline inside the three-minute command budget.
+Timeout/cancellation terminates its process group. A killed child, driver error,
+readback mismatch, failed free/context release or failed journal write cannot
+produce verified evidence. A driver stuck in the kernel can still require
+operator recovery; inspect driver health and confirm the old process has exited
+before retrying. Headroom is remeasured but cannot reserve memory against
+unrelated applications allocating concurrently; perform this check on an idle
+machine.
+
+The private atomic `runtime-memory-<setup-plan-sha>.json` journal records the
+request, timestamps, fixed failure code and bounded receipt. Repeated runs
+invalidate old success before allocation; interrupted checks remain unconfirmed.
+`runtime-memory-status` reads dated evidence and performs no allocation.
+`support-bundle --setup-plan-sha ...` includes an allowlisted runtime-memory
+stage; a missing journal is explicitly reported as missing, not a successful
+check. No raw child output, credentials or inherited environment is exported.
+
+Passing proves allocation, a full memory fill and sampled readback at that time.
+It does not prove exhaustive memory integrity, GPU compute correctness, actual
+model/context fit, AIuditor inference, certification or readiness to sell.
+The runtime calls follow the [CUDA driver memory API](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__MEM.html)
+and [HIP memory API](https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/group___memory.html).
+Tests use simulated drivers and bounded CPU-only child processes; actual AGX-1
+and N5 GPU evidence must still be collected.
+
+## Remaining installation-to-ready sequence
+
+Complete these stages in order; a green diagnostic must not skip later gates:
+
+1. Run an approved pinned model/runtime compatibility and context-fit workload,
+   then the authenticated AIuditor certification suite. Preserve exact workload
+   identity and measured results; do not treat memory allocation as certification.
+2. Implement the controlled certification execution/service-start transition,
+   with registration, current connectivity, workload and owner-approval checks.
+   Resolve the current dependency between inactive installation and the agent
+   job loop explicitly; do not manually create the activation marker.
+3. Add guided start/reboot/resume, unified live status and repair/uninstall.
+   Installer self-update still needs its own reviewed transition.
+4. Complete independent website bootstrap trust, public Test/Production
+   downloads, channel selection and specific-release promotion.
+5. Run the full automated recovery/installation acceptance suite, then perform
+   the real AGX-1 clean install through hyperme.sh. N5 hardware-class admission
+   and its own physical acceptance remain required.
+
+macOS and the additional workload operating modes remain deferred as approved.
