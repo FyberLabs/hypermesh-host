@@ -1,4 +1,4 @@
-"""Read-only UMA runtime capacity probe; executed as an isolated bounded child."""
+"""UMA capacity query and explicitly requested allocation check; isolated child."""
 import ctypes as c
 import json
 import sys

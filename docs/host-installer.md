@@ -43,9 +43,16 @@ Resource minimums use **GiB (2^30 bytes)** consistently:
 - At least 16 GiB installed system memory.
 - At least 12 GiB total discrete VRAM, or a proposed UMA allocation of at least
   12 GiB backed by currently available system RAM.
-- Free space on the chosen model-cache filesystem at least **2.2 times**
+- Free space on the filesystem containing the explicitly selected Hypermesh
+  models directory at least **2.2 times**
   discrete VRAM or the proposed UMA allocation, rounded up to whole bytes.
-  This is disk capacity, not an additional system-RAM requirement.
+  This is disk capacity, not an additional system-RAM requirement. Apply this
+  large-storage budget to the models filesystem, not separately to root or
+  `/boot`. Root is measured for it only when the models directory actually
+  resides on that same filesystem. Libraries/drivers and any boot artifacts
+  need a separate, comparatively small prerequisite-space allowance; their
+  installation is not charged another 2.2-times-model budget. Future workload
+  storage locations need their own named filesystem budgets.
 - UMA allocation must respect measured runtime limits and leave the OS and
   other services adequate headroom. Never infer allocatable memory solely
   from the 64/128 GB product label or double-count firmware-reserved VRAM.
@@ -1386,7 +1393,10 @@ requires exactly one visible integrated CUDA or HIP accelerator. Discrete and
 multi-GPU runtime validation remain pending; aggregate VRAM is not proof of fit.
 
 The command requires inactive Hypermesh units and completed approved
-prerequisites. It saves `checking` before running fresh preflight, checks current
+prerequisites. Its fresh disk admission check targets the selected Hypermesh
+models directory from the setup plan; it does not substitute the process working
+directory, root or `/boot`. Libraries/driver prerequisites remain separate from
+this model-storage requirement. It saves `checking` before running fresh preflight, checks current
 OS/runtime reserves immediately before allocation, then allocates exactly the
 reviewed UMA byte budget. It fills the entire allocation, synchronizes the
 runtime, reads back 4 KiB samples at the beginning, middle and end, and releases
