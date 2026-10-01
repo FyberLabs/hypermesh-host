@@ -127,6 +127,8 @@ disabled with consent, not that other services are disabled.
 - [ ] Hardware validation of profiles and complete agent/service/apply plans.
 - [x] Exact-digest approval and journaled apply/resume for prerequisite packages and headless target.
 - [x] Approved first installation of verified agent, rollback helper, update trust, configuration and inactive systemd units; journaled retry/status.
+- [x] Device login and browser-approved registration CLI, fresh-key persistence, owner-bound recovery and redacted registration status.
+- [ ] Generic hardware-class admission for AMD/N5 and additional platform classes.
 - [ ] Enrollment-gated service activation, guided approval and automatic reboot/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
 - [ ] Recovery commands, redacted support bundle, and status presentation.

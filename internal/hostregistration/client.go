@@ -87,7 +87,19 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
  resp,err:=client.Do(req)
  if err!=nil{return fmt.Errorf("registration transport failed or timed out; rerun to recover")}
  defer resp.Body.Close()
- if resp.StatusCode<200 || resp.StatusCode>=300 {return fmt.Errorf("registration API returned HTTP %d; request and keys retained",resp.StatusCode)}
+ if resp.StatusCode<200 || resp.StatusCode>=300 {
+  action:="request failed; retry the same command after checking the plane"
+  switch resp.StatusCode {
+  case 401:action="session expired or invalid; rerun and sign in again"
+  case 403:action="access denied; verify the original owner, tenant and host membership"
+  case 404:action="registration API or owned request unavailable; verify deployment and environment"
+  case 409:action="class, host name, key or state conflict; inspect the dashboard and platform class configuration"
+  case 410:action="host retired; use the explicit fresh-key reinstall workflow"
+  case 429:action="rate limited; wait before retrying the same command"
+  case 503:action="plane temporarily unavailable; retry the same command"
+  }
+  return fmt.Errorf("registration API returned HTTP %d: %s; request and keys retained",resp.StatusCode,action)
+ }
  raw,err=io.ReadAll(io.LimitReader(resp.Body,(1<<20)+1))
  if err!=nil || len(raw)>1<<20 || ctx.Err()!=nil {return fmt.Errorf("registration response unavailable, too large or timed out")}
  if json.Unmarshal(raw,dest)!=nil {return fmt.Errorf("invalid registration response")}

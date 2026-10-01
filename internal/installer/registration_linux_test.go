@@ -152,3 +152,10 @@ func TestRegistrationInstalledManifest(t *testing.T){
  if err:=os.WriteFile(binary,[]byte("changed executable"),0o755);err!=nil{t.Fatal(err)}
  if verifyRegistrationInstallation(context.Background(),root,p)==nil{t.Fatal("changed executable accepted")}
 }
+
+func TestRegistrationPreflightBlocksCompletion(t *testing.T){
+ _,j:=registrationFixture(t)
+ remote:=&fakeRegistrationRemote{states:[]string{"completed"},deviceID:"12345678-1234-4234-8234-123456789aaa"}
+ checked:=preflightRegistrationRemote{remote,func(context.Context)error{return fmt.Errorf("hardware changed")}}
+ if _,err:=checked.Complete(context.Background(),j.Request);err==nil||remote.completes!=0{t.Fatal("completion bypassed preflight")}
+}

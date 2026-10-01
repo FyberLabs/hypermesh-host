@@ -39,6 +39,10 @@ func TestLoginAndBoundRegistration(t *testing.T) {
   default:
    if q.Header.Get("Authorization")!="Bearer session-private"{t.Error("raw token used for registration")}
    s:=status(r,"pending")
+   if q.URL.Path=="/api/v1/hypermesh/host-registrations"{
+    var submitted Request
+    if json.NewDecoder(q.Body).Decode(&submitted)!=nil||submitted!=r{t.Error("registration body changed")}
+   }
    if strings.HasSuffix(q.URL.Path,"/complete"){s=status(r,"completed")}
    json.NewEncoder(w).Encode(s)
   }
