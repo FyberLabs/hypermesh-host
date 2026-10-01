@@ -25,7 +25,7 @@ func TestBuildStatePersistsAndLocks(t *testing.T) {
 }
 
 func TestBuildStateFailsClosed(t *testing.T) {
-	for _, content := range []string{"", "broken", "{}", "{\"schema\":2,\"build\":22}", "{\"schema\":1,\"build\":-1}"} {
+	for _, content := range []string{"", "broken", "{}", "{\"build\":22}", "{\"schema\":2,\"build\":22}", "{\"schema\":1,\"build\":-1}"} {
 		path := filepath.Join(t.TempDir(), "state")
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil { t.Fatal(err) }
 		if _, _, _, err := lockBuildState(path); err == nil { t.Fatalf("accepted %q", content) }

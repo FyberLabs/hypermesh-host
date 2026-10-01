@@ -35,6 +35,7 @@ func lockBuildState(path string) (int64, func(int64) error, func(), error) {
 		data, readErr := io.ReadAll(io.LimitReader(file, 16385))
 		_ = file.Close()
 		if readErr != nil || len(data) > 16384 { return fail() }
+		state = buildState{}
 		if err := json.Unmarshal(data, &state); err != nil || state.Schema != 1 || state.Build <= 0 { return fail() }
 	} else if !os.IsNotExist(err) { return fail() }
 	commit := func(build int64) error {
