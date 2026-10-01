@@ -46,7 +46,9 @@ func TestSellPauseAppliesAndHeartbeatReports(t *testing.T) {
 	})
 	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		done := results > 0
+		// Observe the initial selling heartbeat before issuing the pause.
+		// Heartbeats and job polling run independently.
+		done := results > 0 || len(hbBodies) == 0
 		mu.Unlock()
 		if done {
 			w.WriteHeader(http.StatusNoContent)
