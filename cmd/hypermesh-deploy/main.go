@@ -24,6 +24,14 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "apply-setup" || name == "setup-status" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		run := installer.RunApplySetup
+		if name == "setup-status" { run = installer.RunSetupStatus }
+		code := run(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	if name == "plan-setup" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		code := installer.RunSetupPlan(ctx, os.Args[2:], os.Stdout, os.Stderr)
@@ -107,6 +115,10 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  apply-setup  apply or resume reviewed Linux prerequisites; requires root.
+               --plan FILE --approve-plan SHA256 [--state-dir DIR]
+  setup-status show the persistent stage/error for a prerequisite application.
+               --plan-sha SHA256 [--state-dir DIR]
   plan-setup  review versioned Linux prerequisite package and headless changes.
               Resource/readiness flags plus --profile auto and optional --headless.
               --wireguard-mode kernel (default) or userspace; only userspace needs wireguard-go.

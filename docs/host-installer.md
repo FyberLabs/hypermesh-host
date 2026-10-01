@@ -124,7 +124,8 @@ disabled with consent, not that other services are disabled.
 - [ ] Reviewed installer self-update.
 - [x] Versioned candidate Linux profiles and exact prerequisite package/headless plans.
 - [ ] Hardware validation of profiles and complete agent/service/apply plans.
-- [ ] Approval capture, unattended plan application, checkpoint/resume.
+- [x] Exact-digest approval and journaled apply/resume for prerequisite packages and headless target.
+- [ ] Complete agent/service installation, guided approval and automatic reboot/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
 - [ ] Recovery commands, redacted support bundle, and status presentation.
 - [ ] Enrollment plus benchmark/connectivity gates before selling.
@@ -570,7 +571,7 @@ exit 1 means blocked and exit 2 means invalid arguments.
   --profile auto --headless > setup-plan.json
 ```
 
-The revision-1 policies cover Ubuntu 22.04/24.04 with measured Jetson ARM64
+The revision-2 policies cover Ubuntu 22.04/24.04 with measured Jetson ARM64
 CUDA UMA, AMD x86-64 HIP UMA, or discrete CUDA on Linux ARM64/x86-64.
 These are **candidate policies**, not validated driver compatibility matrices.
 Names and installed RAM labels cannot override architecture/runtime matching.
@@ -624,3 +625,74 @@ intent, system-state digest changes and CLI output. Actual profile validation
 and complete approved application are still pending. Next: bind verified agent,
 rollback helper, configuration and systemd payloads, then implement approval
 and journaled application/resume against a freshly revalidated plan.
+
+## Approved prerequisite application and resume
+
+Revision-2 profiles bind the constrained noninteractive application arguments.
+Implemented: schema-2 setup plans record the readiness URL and headless intent
+as well as the exact prerequisite operations. Generate a fresh plan with the
+same installer build that will apply it. Older schema-1 plans must be
+regenerated; they did not bind all revalidation inputs.
+
+Review the JSON, including package versions, maintainer-script implications,
+WireGuard mode and any headless change. Then provide its exact
+`plan_sha256` explicitly:
+
+```bash
+sudo ./hypermesh-deploy apply-setup --plan setup-plan.json --approve-plan REVIEWED_PLAN_SHA256
+sudo ./hypermesh-deploy setup-status --plan-sha REVIEWED_PLAN_SHA256
+```
+
+The approval digest is not a secret or signature. Root access plus this exact
+reviewed digest authorizes only these prerequisite operations. There is no
+blanket yes flag, implicit acceptance of a revised plan, shell evaluation or
+arbitrary command execution from JSON. Unknown/duplicate JSON fields, altered
+content, stale profile/installer versions and blocked proposals are rejected.
+This command does not install the agent, write enrollment credentials, enroll,
+enable selling, restart services directly, or reboot.
+
+Before applying, the installer reruns resource/hardware/HTTPS preflight,
+checks OS/kernel/boot settings, compares installed package state and simulates
+the exact remaining package pins. Free-memory readings may fluctuate but must
+still pass admission; hardware/runtime identity and allocation must match.
+Unrelated package drift or a changed dependency closure requires a newly
+reviewed plan. An approved package already installed at its exact version is
+recognized on resume rather than installed again.
+
+APT runs with exact pins, no removals/upgrades/recommends, authenticated
+packages, a noninteractive frontend and preservation of existing configuration
+files. Root's configured APT repositories remain authoritative. Do not run
+other package managers or change APT metadata concurrently: the installer lock
+serializes Hypermesh applications, while APT manages its own package locks.
+Post-install inventory must contain exactly the approved additions; unexpected
+state stops before any headless change. Maintainer scripts can have service
+side effects even though the installer itself does not restart those services.
+
+The default private journal directory is
+`/var/lib/hypermesh/installer` (0700); each plan has an atomically replaced,
+fsynced 0600 JSON journal. The journal records stage, state, original boot
+target and remediation on failure. An OS file lock prevents overlapping
+applications and releases on process exit, including crashes. Symlinked or
+loosely writable state paths are refused. `setup-status` reads without creating
+state. Keep the plan and journal together for support/recovery.
+
+Run the same apply command to resume after interruption or an operator-managed
+reboot. It checks the actual machine state, including work completed just
+before a journal-write failure. A partly configured dpkg database blocks with
+instructions to repair it manually; the installer does not run an unrestricted
+`dpkg --configure -a` or lower approval requirements. Interrupted commands are
+bounded and their process group is stopped. Raw child output is omitted from
+the JSON journal; inspect system package logs locally for details.
+
+The original boot target is retained in the journal. A headless proposal only
+sets the next default target after explicit plan approval; it never isolates
+the target or triggers a reboot. Restoring the original target remains an
+operator action until repair/uninstall orchestration is implemented.
+
+Automated tests cover exact approval and command tampering, changed host and
+package/dependency state, partial/completed install reconciliation, successful
+work followed by interruption, failed journal persistence, postcondition
+checks, no-op reruns, concurrent locks, private atomic journals and status.
+Physical AGX/N5 acceptance remains pending. Next: bind verified agent and
+rollback-helper payloads and install configuration/systemd units while retaining
+the selected WireGuard mode, then extend the journal to that complete flow.
