@@ -24,6 +24,14 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+ if name == "check-agent" || name == "onboarding-status" {
+  ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+  run := installer.RunCheckAgent
+  if name == "onboarding-status" { run = installer.RunOnboardingStatus }
+  code := run(ctx, os.Args[2:], os.Stdout, os.Stderr)
+  stop()
+  os.Exit(code)
+ }
  if name == "register-agent" || name == "registration-status" {
   ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
   run := installer.RunRegisterAgent
@@ -132,6 +140,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  check-agent  verify saved device identity, plane protocol and local preflight.
+               --plan FILE --approve-plan SHA256; does not activate services.
+  onboarding-status  read the dated readiness snapshot; --plan-sha SHA256
   register-agent  device login and browser-approved registration; leaves service inactive.
                   --plan FILE --approve-plan SHA256 --issuer HTTPS_REALM
                   --dashboard-url HTTPS_ORIGIN --class-id CLASS

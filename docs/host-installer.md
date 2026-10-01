@@ -119,7 +119,8 @@ disabled with consent, not that other services are disabled.
 - [ ] Validate actual allocation and model/context fit on target hardware.
 - [x] Read-only CLI preflight plan with resource/hardware blockers and HTTPS
   endpoint reachability checks.
-- [ ] Authenticated AIuditor identity and protocol compatibility checks.
+- [x] Device-authenticated control-plane protocol and registration identity check, with a redacted readiness snapshot.
+- [ ] Authenticated AIuditor program, WireGuard and workload compatibility checks.
 - [x] Signed bootstrap verification, channel discovery and persistent build floor.
 - [x] Signed agent download for both Linux architectures, with optional exact installer-release binding.
 - [ ] Reviewed installer self-update.
@@ -1023,8 +1024,8 @@ Preserve private journals locally and never upload them as support logs.
 
 Success is `registered-inactive`: the dashboard device is paused and
 uncertified. No activation marker, service enable/start, certification result or
-selling state is created. The next task is authenticated connectivity and
-certification gating before service activation. AGX-1 physical acceptance is
+selling state is created. The authenticated control-plane check is implemented below. AIuditor program,
+WireGuard and certification gating still precede service activation. AGX-1 physical acceptance is
 still pending.
 
 Automated coverage includes TLS auth/session separation and response binding,
@@ -1032,3 +1033,72 @@ owner mismatch before mutation, deadlines and redaction, measured class checks,
 lost completion recovery, durable-before-publication ordering, cancellation,
 terminal states, private file safety, interrupted identity publication and
 installed-payload tampering. CI results are recorded in the implementation PR.
+
+## Completed: authenticated pre-activation check
+
+After `register-agent` reports `registered-inactive`, run:
+
+```bash
+sudo ./hypermesh-deploy check-agent \
+  --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256
+sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
+```
+
+This is an identity, protocol and local preflight check. It requires the same
+release-built installer and exact approved agent plan. It reads the saved private
+device identity under the shared installer lock, verifies installed payloads,
+inactive units and key/state files, then reruns current hardware, resource and
+approved prerequisite checks. It never rotates keys or writes enrollment state.
+
+The plane must implement
+[the onboarding protocol](https://github.com/FyberLabs/panopticon/pull/289).
+The CLI sends a freshly generated 32-byte nonce and the saved registration/device
+IDs to `POST /api/v1/hypermesh/agent/onboarding/check`, authenticated with the
+saved device secret. No browser login or copied UUID is required for this check.
+The response must match protocol version/capabilities, nonce, tenant,
+registration, device, reported name, class and WireGuard key fingerprint.
+Missing fields, unsupported versions, replayed/mismatched responses, redirects
+and old deployments without the route fail closed. The shared HTTPS transport
+caps responses at 1 MiB and applies a 15-second deadline through the whole body;
+the command has a three-minute overall limit.
+
+A successful response proves the configured plane accepted this saved device
+credential and supports this application protocol. The plane reads fresh SQL
+state; inactive tenants, retired hosts, device bans and changed registration
+bindings cannot be hidden behind the marketplace read cache. The check does not
+publish a heartbeat or make an offline machine appear alive.
+
+Output lists class availability, reported Path A/Path B state, scheduling holds,
+and the remaining heartbeat, AIuditor program, tunnel, activation and selling
+gates, with a next action for each. Current hardware intake or certification
+problems remain visible even when the HTTPS check succeeds. A reported green
+certificate does not skip remaining gates. The last heartbeat timestamp is
+historical evidence, not a fresh liveness claim.
+
+`check-agent` exits 0 when device-authenticated API compatibility and the
+implemented local checks pass, 1 when a local/remote check or persistence fails,
+and 2 for invalid arguments. **Exit 0 does not mean installation is complete or
+selling is allowed.** `activation_allowed` and `selling_allowed` remain false.
+Neither command creates an activation marker, starts/enables a service, runs a
+benchmark, queues a job, clears a hold or changes the host's sell posture.
+
+The dated redacted status is stored at
+`/var/lib/hypermesh/installer/onboarding-PLAN_SHA256.json`, mode 0600. A new check
+replaces prior success with `checking` before probing; interruption therefore
+cannot leave an old success presented as the newest check. Failures store a
+fixed failure code and recovery action, not raw errors or credentials.
+`onboarding-status` reads this historical observation without contacting the
+plane. Rerun `check-agent` for current evidence. Registration/key files are
+preserved on all check failures.
+
+Tests cover TLS device authentication and fresh nonces, protocol and response
+binding, unknown/omitted fields, old-plane/error behavior, local-before-remote
+gating, cancellation and failed persistence, private journals, identity-file
+preservation and the impossibility of promoting a snapshot into activation.
+The companion product change is limited to Hypermesh paths so Panopticon CI
+selects the Hypermesh-family suites. Physical AGX/N5 acceptance remains pending.
+
+Next complete task: an approved, recoverable onboarding execution path for
+authenticated AIuditor/heartbeat/tunnel checks and certification while keeping
+paid workload admission disabled, followed by service activation. This check
+does not stand in for that execution or benchmark evidence.
