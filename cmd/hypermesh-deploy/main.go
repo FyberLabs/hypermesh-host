@@ -150,7 +150,8 @@ Commands:
                   --plan-sha SHA256 [--setup-plan-sha SHA256] --output /absolute/new.json
                   A setup digest alone also works; use support-bundle --help.
   check-agent  verify saved device identity, plane protocol and local preflight.
-               --plan FILE --approve-plan SHA256; does not activate services.
+               --plan FILE --approve-plan SHA256 [--heartbeat]; does not activate services.
+               --heartbeat records one HTTPS heartbeat, not a verified tunnel.
   onboarding-status  read the dated readiness snapshot; --plan-sha SHA256
   register-agent  device login and browser-approved registration; leaves service inactive.
                   --plan FILE --approve-plan SHA256 --issuer HTTPS_REALM

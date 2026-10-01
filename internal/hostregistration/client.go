@@ -105,6 +105,9 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
   case 429:action="rate limited; wait before retrying the same command"
   case 503:action="plane temporarily unavailable; retry the same command"
   }
+  if resp.StatusCode==401&&strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/") {
+   action="saved device credential rejected; verify registration in the dashboard and preserve local identity"
+  }
   return fmt.Errorf("registration API returned HTTP %d: %s; request and keys retained",resp.StatusCode,action)
  }
  raw,err=io.ReadAll(io.LimitReader(resp.Body,(1<<20)+1))
