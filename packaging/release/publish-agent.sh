@@ -319,6 +319,9 @@ PY
     --output "${dist}/checksums.txt.asc" \
     --detach-sign "${dist}/checksums.txt"
   verify_detached "${dist}/checksums.txt" "${dist}/checksums.txt.sig"
+  if [ "$channel" = test ]; then
+    reuse_test_signatures "$release_id" "$dist"
+  fi
   gpg --batch --export --armor --output "${dist}/hypermesh-release.pub" "$fpr"
   artifact_names=(
     "hypermesh-agent_${version}_linux_arm64"

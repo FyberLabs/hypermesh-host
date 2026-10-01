@@ -295,3 +295,13 @@ The approved guided installation flow, resource rules, implementation checklist,
 and AGX 64 / MINISFORUM N5 MAX acceptance plan are tracked in
 [Host installer](docs/host-installer.md). The first implementation increment is
 the resource admission policy; guided installation is not yet available.
+
+### Retrying an interrupted test release
+
+Test publishing preserves existing artifact bytes. On retry, the publisher verifies
+stored binary and armored checksum signatures against the freshly built checksum
+file and the configured signing keyring, then reuses those signatures. GPG creation
+timestamps make newly generated signatures differ even for identical checksums.
+Missing signatures are uploaded from the new build; changed checksums, invalid
+signatures, and storage errors stop publication before the channel pointer moves.
+Release CI exercises retries with real GPG signatures and partial uploads.

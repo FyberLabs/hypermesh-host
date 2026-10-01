@@ -1092,3 +1092,31 @@ write_release_checksums() {
       release.json > checksums.txt
   )
 }
+
+# GPG signatures include creation time. Verify stored signatures against the
+# freshly built checksums before reusing their original bytes on a test retry.
+reuse_test_signatures() {
+  local release_id=$1 dist=$2 name tmp rc
+  for name in checksums.txt.sig checksums.txt.asc; do
+    if blob_exists "test/${release_id}/${name}"; then
+      tmp=$(mktemp "${dist}/signature.XXXXXX")
+      if ! az_blob download --name "test/${release_id}/${name}" --file "$tmp" --overwrite true --only-show-errors; then
+        rm -f "$tmp"
+        echo "hypermesh release: download stored ${name} failed" >&2
+        return 1
+      fi
+      if ! verify_detached "${dist}/checksums.txt" "$tmp"; then
+        rm -f "$tmp"
+        return 1
+      fi
+      mv "$tmp" "${dist}/${name}"
+      echo "hypermesh release: verified and reused stored ${name}" >&2
+    else
+      rc=$?
+      if [ "$rc" -ne 1 ]; then
+        echo "hypermesh release: checking stored ${name} failed" >&2
+        return "$rc"
+      fi
+    fi
+  done
+}
