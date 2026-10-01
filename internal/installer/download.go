@@ -29,6 +29,7 @@ type releaseMetadata struct {
 type downloadOptions struct {
 	BaseURL, Channel, Arch, Output string
 	StateFile string
+	ChannelRoot string
 	MinimumBuild int64
 	Key []byte
 	Fingerprints []string
@@ -46,6 +47,7 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 	var opt downloadOptions
 	var keyPath, fingerprints string
 	flags.StringVar(&opt.BaseURL, "release-url", "", "HTTPS directory containing release assets")
+	flags.StringVar(&opt.ChannelRoot, "channel-root", "", "discover channels/<channel>.json under this HTTPS root; requires --state-file")
 	flags.StringVar(&opt.Channel, "channel", "", "expected channel: test or prod")
 	flags.StringVar(&opt.Arch, "arch", runtime.GOARCH, "target Linux architecture: arm64 or amd64")
 	flags.StringVar(&opt.Output, "output", "", "new output path; existing files are never overwritten")
@@ -88,7 +90,14 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 }
 
 func validateDownload(opt downloadOptions) error {
-	u, err := url.Parse(opt.BaseURL)
+	address := opt.BaseURL
+	if opt.ChannelRoot != "" {
+		if opt.BaseURL != "" || opt.StateFile == "" {
+			return fmt.Errorf("channel discovery requires --state-file and cannot be combined with --release-url")
+		}
+		address = opt.ChannelRoot
+	}
+	u, err := url.Parse(address)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
 		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
 		return fmt.Errorf("release URL must be HTTPS without credentials, query or fragment")
@@ -117,6 +126,12 @@ func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, 
 		if floor > opt.MinimumBuild { opt.MinimumBuild = floor }
 	}
 	base := strings.TrimRight(opt.BaseURL, "/") + "/"
+	var advertised *releaseMetadata
+	if opt.ChannelRoot != "" {
+		var err error
+		base, advertised, err = discoverRelease(ctx, opt, fetch)
+		if err != nil { return meta, err }
+	}
 	sums, err := fetch(ctx, base+"checksums.txt", 1<<20)
 	if err != nil { return meta, err }
 	sig, err := fetch(ctx, base+"checksums.txt.sig", 1<<20)
@@ -135,6 +150,9 @@ func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, 
 	expectedID := meta.Version
 	if meta.Channel == "test" { expectedID = fmt.Sprintf("%d-%s", meta.Build, meta.Commit[:12]) }
 	if meta.ReleaseID != expectedID { return meta, fmt.Errorf("signed release ID is inconsistent") }
+	if advertised != nil && meta != *advertised {
+		return meta, fmt.Errorf("signed release metadata does not match the discovered channel head")
+	}
 	name := fmt.Sprintf("hypermesh-deploy_%s_linux_%s", meta.Version, opt.Arch)
 	payload, err := fetch(ctx, base+name, 128<<20)
 	if err != nil { return meta, err }
@@ -188,4 +206,26 @@ func fetchWithClient(ctx context.Context, address string, limit int64, client *h
 		return nil, fmt.Errorf("artifact empty, unreadable or exceeds size limit")
 	}
 	return data, nil
+}
+
+// Channel pointers locate a candidate; only signed metadata authorizes it.
+// Derive paths from validated identity fields, never URLs in the pointer.
+func discoverRelease(ctx context.Context, opt downloadOptions, fetch artifactFetch) (string, *releaseMetadata, error) {
+	root := strings.TrimRight(opt.ChannelRoot, "/") + "/"
+	raw, err := fetch(ctx, root+"channels/"+opt.Channel+".json", 1<<20)
+	if err != nil { return "", nil, err }
+	var candidate releaseMetadata
+	if err := json.Unmarshal(raw, &candidate); err != nil {
+		return "", nil, fmt.Errorf("invalid channel discovery document")
+	}
+	if candidate.Channel != opt.Channel || candidate.Build <= 0 || candidate.Build < opt.MinimumBuild ||
+		!releaseVersion.MatchString(candidate.Version) || !releaseCommit.MatchString(candidate.Commit) {
+		return "", nil, fmt.Errorf("channel head does not meet channel, build or metadata requirements")
+	}
+	expected := candidate.Version
+	if candidate.Channel == "test" {
+		expected = fmt.Sprintf("%d-%s", candidate.Build, candidate.Commit[:12])
+	}
+	if candidate.ReleaseID != expected { return "", nil, fmt.Errorf("invalid channel release ID") }
+	return root+opt.Channel+"/"+candidate.ReleaseID+"/", &candidate, nil
 }

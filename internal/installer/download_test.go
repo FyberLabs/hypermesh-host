@@ -14,7 +14,7 @@ import (
 )
 
 func TestVerifiedDownload(t *testing.T) {
-	for _, mode := range []string{"valid", "signature", "metadata", "payload", "rollback", "channel", "exists", "persisted-rollback"} {
+	for _, mode := range []string{"valid", "signature", "metadata", "payload", "rollback", "channel", "exists", "persisted-rollback", "discovery", "discovery-mismatch", "discovery-rollback"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			opt := downloadOptions{BaseURL: "https://example.invalid/release", Channel: "test", Arch: "arm64",
@@ -22,6 +22,23 @@ func TestVerifiedDownload(t *testing.T) {
 			meta := releaseMetadata{Channel: "test", Version: "0.0.0", Commit: strings.Repeat("a", 40),
 				Build: 21, ReleaseID: "21-"+strings.Repeat("a", 12)}
 			raw, _ := json.Marshal(meta)
+			pointer := append([]byte(nil), raw...)
+			if strings.HasPrefix(mode, "discovery") {
+				opt.ChannelRoot = "https://example.invalid/root"
+				opt.BaseURL = ""
+				opt.StateFile = filepath.Join(dir, "build-state.json")
+				if mode == "discovery-mismatch" {
+					other := meta
+					other.Version = "0.0.1"
+					pointer, _ = json.Marshal(other)
+				}
+				if mode == "discovery-rollback" {
+					_, commit, unlock, err := lockBuildState(opt.StateFile)
+					if err != nil { t.Fatal(err) }
+					if err := commit(22); err != nil { t.Fatal(err) }
+					unlock()
+				}
+			}
 			payload := []byte("verified binary bytes")
 			name := "hypermesh-deploy_0.0.0_linux_arm64"
 			sums := []byte(fmt.Sprintf("%x  release.json\n%x  %s\n", sha256.Sum256(raw), sha256.Sum256(payload), name))
@@ -42,6 +59,7 @@ func TestVerifiedDownload(t *testing.T) {
 			verified := false
 			fetch := func(_ context.Context, address string, _ int64) ([]byte, error) {
 				switch filepath.Base(address) {
+				case "test.json": return pointer, nil
 				case "checksums.txt": return sums, nil
 				case "checksums.txt.sig": return []byte("signature"), nil
 				case "release.json":
@@ -57,7 +75,7 @@ func TestVerifiedDownload(t *testing.T) {
 				return nil
 			}
 			_, err := downloadCLI(context.Background(), opt, fetch, verify)
-			if mode == "valid" {
+			if mode == "valid" || mode == "discovery" {
 				if err != nil { t.Fatal(err) }
 				got, err := os.ReadFile(opt.Output)
 				if err != nil || string(got) != string(payload) { t.Fatal("wrong output") }
@@ -99,4 +117,19 @@ func TestDownloadTransferLimits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := fetchWithClient(ctx, server.URL, 5, server.Client()); err == nil { t.Fatal("ignored cancellation") }
+}
+
+func TestDiscoveryRejectsUnsafePointers(t *testing.T) {
+	opt := downloadOptions{ChannelRoot: "https://example.invalid/root", Channel: "test", MinimumBuild: 10}
+	for _, raw := range []string{
+		"{}",
+		"{\"channel\":\"test\",\"build\":true}",
+		"{\"channel\":\"prod\",\"build\":20}",
+		"{\"channel\":\"test\",\"build\":20,\"version\":\"0.0.0\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"release_id\":\"../../elsewhere\"}",
+	} {
+		fetch := func(context.Context, string, int64) ([]byte, error) { return []byte(raw), nil }
+		if _, _, err := discoverRelease(context.Background(), opt, fetch); err == nil {
+			t.Fatalf("accepted pointer %s", raw)
+		}
+	}
 }
