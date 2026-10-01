@@ -28,6 +28,7 @@ type supportBundle struct {
 	Architecture string `json:"architecture"`
 	AgentPlanSHA256 string `json:"agent_plan_sha256,omitempty"`
 	SetupPlanSHA256 string `json:"setup_plan_sha256,omitempty"`
+	WorkloadPlanSHA256 string `json:"workload_plan_sha256,omitempty"`
 	HistoricalOnly bool `json:"historical_only"`
 	CollectionComplete bool `json:"collection_complete"`
 	Stages []supportStage `json:"stages"`
@@ -47,6 +48,7 @@ type supportStage struct {
 	MemoryAllocationBytes int64 `json:"memory_allocation_bytes,omitempty"`
 	MemoryBackend string `json:"memory_backend,omitempty"`
 	MemoryVerified bool `json:"memory_verified,omitempty"`
+	Workload *supportWorkloadEvidence `json:"workload,omitempty"`
 	Gates []supportGate `json:"gates,omitempty"`
 	NextAction string `json:"next_action"`
 }
@@ -204,10 +206,78 @@ func supportRuntimeMemory(dir,sha string)supportStage {
   MemoryVerified:j.State=="verified",NextAction:memoryNextAction(j.State)}
 }
 
+
+type supportWorkloadEvidence struct {
+ ContextTokens int `json:"context_tokens"`
+ FullContextRequested bool `json:"full_context_requested"`
+ InferenceVerified bool `json:"inference_verified"`
+ CleanupComplete bool `json:"cleanup_complete"`
+ SampleMS int `json:"sample_ms,omitempty"`
+ TokensPerSecond float64 `json:"tokens_per_second,omitempty"`
+ FullContextVerified bool `json:"full_context_verified"`
+ PromptTokens int `json:"prompt_tokens,omitempty"`
+ GeneratedTokens int `json:"generated_tokens,omitempty"`
+ ContextElapsedMS int64 `json:"context_elapsed_ms,omitempty"`
+}
+
+// Export measurements only. Plans contain local paths, catalog names and
+// registry addresses that must not enter a shareable support artifact.
+func supportWorkload(dir, sha, setupSHA string) supportStage {
+ if sha == "" { return supportUnavailable("workload", "not-requested") }
+ var j workloadJournal
+ state := supportRead(dir, "workload-"+sha+".json", &j)
+ if state != "collected" { return supportUnavailable("workload", state) }
+ if j.Plan.SHA256 != sha || !validWorkloadJournal(j) {
+  return supportUnavailable("workload", "invalid")
+ }
+ if setupSHA != "" && j.Plan.Setup.PlanSHA256 != setupSHA {
+  stage := supportUnavailable("workload", "invalid")
+  stage.NextAction = "The selected workload belongs to a different prerequisite plan. Select matching plan digests; preserve the original journals."
+  return stage
+ }
+ at := j.RecordedAt.UTC()
+ evidence := &supportWorkloadEvidence{
+  ContextTokens:j.Plan.Request.ContextTokens,
+  FullContextRequested:j.Plan.Request.FullContext,
+ }
+ if j.State == "verified" {
+  r := j.Receipt
+  evidence.InferenceVerified = true
+  evidence.CleanupComplete = r.CleanupComplete
+  evidence.SampleMS = r.SampleMS
+  evidence.TokensPerSecond = r.TokensPerSecond
+  if r.ContextFit != nil {
+   evidence.FullContextVerified = true
+   evidence.PromptTokens = r.ContextFit.PromptTokens
+   evidence.GeneratedTokens = r.ContextFit.GeneratedTokens
+   evidence.ContextElapsedMS = r.ContextFit.ElapsedMS
+  }
+ }
+ action := workloadNext(j.State)
+ switch j.FailureCode {
+ case "preflight":
+  action = "Inspect current prerequisites, models-filesystem space, service inactivity and existing lease state. Preserve enrollment and rerun the reviewed workload after resolving blockers."
+ case "runtime":
+  action = "Inspect the approved model hash, runtime image, drivers and temporary container locally. Cleanup is unconfirmed; reconcile the named container before retrying the reviewed workload."
+ case "interrupted":
+  action = "Execution was interrupted. Confirm the prior process has exited and reconcile its temporary container before retrying; preserve installer and enrollment state."
+ case "status_persistence":
+  action = "Check installer-state disk space and permissions, then reconcile temporary containers and retry the reviewed workload. No successful receipt was saved."
+ }
+ return supportStage{Component:"workload", Collection:"collected", State:j.State,
+  ErrorRecorded:j.State=="failed", FailureCode:j.FailureCode, RecordedAt:&at,
+  Workload:evidence, NextAction:action}
+}
+
 func collectSupport(ctx context.Context, dir, agentSHA, setupSHA string) (supportBundle, error) {
+ return collectSupportWithWorkload(ctx,dir,agentSHA,setupSHA,"")
+}
+
+func collectSupportWithWorkload(ctx context.Context, dir, agentSHA, setupSHA, workloadSHA string) (supportBundle, error) {
 	var bundle supportBundle
-	if (agentSHA=="" && setupSHA=="") || (agentSHA!="" && !setupDigestRE.MatchString(agentSHA)) ||
-		(setupSHA!="" && !setupDigestRE.MatchString(setupSHA)) { return bundle, fmt.Errorf("select valid installer plan digests") }
+	if (agentSHA=="" && setupSHA=="" && workloadSHA=="") || (agentSHA!="" && !setupDigestRE.MatchString(agentSHA)) ||
+		(setupSHA!="" && !setupDigestRE.MatchString(setupSHA)) ||
+        (workloadSHA!="" && !setupDigestRE.MatchString(workloadSHA)) { return bundle, fmt.Errorf("select valid installer plan digests") }
 	unlock, err := supportLock(dir)
 	if err != nil { return bundle, err }
 	defer unlock()
@@ -215,8 +285,8 @@ func collectSupport(ctx context.Context, dir, agentSHA, setupSHA string) (suppor
 	commit := buildinfo.Current()
 	if !regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(commit) { commit = "unknown" }
 	bundle = supportBundle{Schema:1, GeneratedAt:time.Now().UTC(), CollectorCommit:commit, CollectorBuild:buildinfo.CurrentBuild(),
-		Architecture:runtime.GOARCH, AgentPlanSHA256:agentSHA, SetupPlanSHA256:setupSHA, HistoricalOnly:true, CollectionComplete:true}
-	bundle.Stages = []supportStage{supportSetup(dir,setupSHA), supportAgent(dir,agentSHA), supportRegistration(dir,agentSHA), supportOnboarding(dir,agentSHA), supportRuntimeMemory(dir,setupSHA)}
+		Architecture:runtime.GOARCH, AgentPlanSHA256:agentSHA, SetupPlanSHA256:setupSHA, WorkloadPlanSHA256:workloadSHA, HistoricalOnly:true, CollectionComplete:true}
+	bundle.Stages = []supportStage{supportSetup(dir,setupSHA), supportAgent(dir,agentSHA), supportRegistration(dir,agentSHA), supportOnboarding(dir,agentSHA), supportRuntimeMemory(dir,setupSHA),supportWorkload(dir,workloadSHA,setupSHA)}
 	for _, stage := range bundle.Stages {
 		if stage.Collection!="collected" && stage.Collection!="not-requested" { bundle.CollectionComplete=false }
 	}
@@ -257,14 +327,15 @@ func runSupportBundle(ctx context.Context,args []string,out,diagnostic io.Writer
 	flags.SetOutput(diagnostic)
 	agentSHA:=flags.String("plan-sha","","agent plan digest; includes install, registration and onboarding")
 	setupSHA:=flags.String("setup-plan-sha","","optional prerequisite plan digest")
+	workloadSHA:=flags.String("workload-plan-sha","","optional workload plan digest; includes pinned inference and context evidence")
 	output:=flags.String("output","","new absolute output file in an owner-controlled directory (0600)")
 	if err:=flags.Parse(args);err!=nil { if err==flag.ErrHelp{return 0};return 2 }
-	if flags.NArg()!=0 || *output=="" || (*agentSHA=="" && *setupSHA=="") ||
-		(*agentSHA!="" && !setupDigestRE.MatchString(*agentSHA)) || (*setupSHA!="" && !setupDigestRE.MatchString(*setupSHA)) {
-		fmt.Fprintln(diagnostic,"require --output and --plan-sha and/or --setup-plan-sha");return 2
+	if flags.NArg()!=0 || *output=="" || (*agentSHA=="" && *setupSHA=="" && *workloadSHA=="") ||
+		(*agentSHA!="" && !setupDigestRE.MatchString(*agentSHA)) || (*setupSHA!="" && !setupDigestRE.MatchString(*setupSHA)) || (*workloadSHA!="" && !setupDigestRE.MatchString(*workloadSHA)) {
+		fmt.Fprintln(diagnostic,"require --output and at least one of --plan-sha, --setup-plan-sha or --workload-plan-sha");return 2
 	}
 	if !root { fmt.Fprintln(diagnostic,"support-bundle requires root to read private installer journals");return 1 }
-	bundle,err:=collectSupport(ctx,stateDir,*agentSHA,*setupSHA)
+	bundle,err:=collectSupportWithWorkload(ctx,stateDir,*agentSHA,*setupSHA,*workloadSHA)
 	if err==nil { err=writeSupport(ctx,*output,bundle) }
 	if err!=nil { fmt.Fprintln(diagnostic,err);return 1 }
 	if !bundle.CollectionComplete { fmt.Fprintln(diagnostic,"Partial redacted bundle saved; see each stage's collection status. Preserve the original journals locally.");return 1 }

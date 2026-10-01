@@ -51,7 +51,7 @@ func TestSupportBundleAllowlistAndNoMutation(t *testing.T) {
 	before:=map[string][]byte{}
 	for _,entry:=range entries {before[entry.Name()],err=os.ReadFile(filepath.Join(dir,entry.Name()));if err!=nil{t.Fatal(err)}}
 	bundle,err:=collectSupport(context.Background(),dir,agentSHA,setupSHA);if err!=nil{t.Fatal(err)}
-	if !bundle.CollectionComplete || !bundle.HistoricalOnly || len(bundle.Stages)!=5 {t.Fatal("incomplete summary")}
+	if !bundle.CollectionComplete || !bundle.HistoricalOnly || len(bundle.Stages)!=6 {t.Fatal("incomplete summary")}
 	if bundle.Stages[0].State!="failed" || !bundle.Stages[0].ErrorRecorded ||
 		bundle.Stages[1].CompletedFiles!=5 || bundle.Stages[2].State!="registered-inactive" ||
 		bundle.Stages[3].Gates[0].State!="blocked" {t.Fatal("lost useful diagnostics")}
