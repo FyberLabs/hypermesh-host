@@ -65,7 +65,7 @@ func (Client) MarshalJSON() ([]byte,error) { return []byte("\"[redacted registra
 func BaseURL(s string) bool {
  u,e:=url.Parse(s)
  if e!=nil || u.Scheme!="https" || u.Hostname()=="" || u.User!=nil || u.Opaque!="" || u.RawQuery!="" || u.ForceQuery || u.Fragment!="" {return false}
- for _,r:=range s {if r<33 || r>126 {return false}}
+ for _,r:=range s {if r<32 || r>126 {return false}}
  return true
 }
 // Dashboard links are relative to an explicitly configured origin.

@@ -108,3 +108,8 @@ func TestInstalledPlanPrefixAndUppercaseTenant(t *testing.T){
  sentinel:=fmt.Errorf("stop before mutation")
  if err=c.Login(context.Background(),"private",func(string)error{return sentinel});err!=sentinel||!seen{t.Fatal(err,seen)}
 }
+
+func TestBaseURLMatchesApprovedPrintablePath(t *testing.T){
+ c,err:=New("https://plane.example/gateway/with space/",strings.ToUpper(testTenant))
+ if err!=nil||c.base!="https://plane.example/gateway/with space"{t.Fatal("rejected printable path accepted by agent plan",err)}
+}
