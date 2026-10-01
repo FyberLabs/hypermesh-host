@@ -96,3 +96,15 @@ func TestOriginAndRequestValidation(t *testing.T){
  for _,s:=range []string{"http://plane.example","https://user:pass@plane.example","https://plane.example/path","https://plane.example?","https://plane.example/#frag","https://plane.example/\n"}{if Origin(s){t.Fatal(s)}}
  r:=fixture(t);r.WGPublicKey=strings.Repeat("A",43)+"=";if r.Validate()==nil{t.Fatal("zero public key")}
 }
+
+func TestInstalledPlanPrefixAndUppercaseTenant(t *testing.T){
+ seen:=false
+ server:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  if r.URL.Path!="/gateway/prefix/api/v1/auth/me"||r.Header.Get("X-Tenant-ID")!=testTenant{t.Error("lost prefix or noncanonical tenant")}
+  seen=true;fmt.Fprint(w,`{"sub":"owner"}`)
+ }));defer server.Close()
+ c,err:=New(server.URL+"/gateway/prefix/",strings.ToUpper(testTenant))
+ if err!=nil{t.Fatal(err)};c.http=server.Client()
+ sentinel:=fmt.Errorf("stop before mutation")
+ if err=c.Login(context.Background(),"private",func(string)error{return sentinel});err!=sentinel||!seen{t.Fatal(err,seen)}
+}

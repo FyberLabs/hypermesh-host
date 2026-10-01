@@ -61,15 +61,22 @@ func (Client) String() string { return "[redacted registration client]" }
 func (Client) GoString() string { return "[redacted registration client]" }
 func (Client) MarshalJSON() ([]byte,error) { return []byte("\"[redacted registration client]\""),nil }
 
-// Origin rejects credentials, paths, queries, fragments and terminal controls.
-func Origin(s string) bool {
+// BaseURL preserves the path prefix accepted by installed agent plans.
+func BaseURL(s string) bool {
  u,e:=url.Parse(s)
- if e!=nil || u.Scheme!="https" || u.Hostname()=="" || u.User!=nil || u.Opaque!="" || u.RawQuery!="" || u.ForceQuery || u.Fragment!="" || (u.Path!="" && u.Path!="/") || u.RawPath!="" {return false}
+ if e!=nil || u.Scheme!="https" || u.Hostname()=="" || u.User!=nil || u.Opaque!="" || u.RawQuery!="" || u.ForceQuery || u.Fragment!="" {return false}
  for _,r:=range s {if r<33 || r>126 {return false}}
  return true
 }
+// Dashboard links are relative to an explicitly configured origin.
+func Origin(s string) bool {
+ if !BaseURL(s){return false}
+ u,_:=url.Parse(s)
+ return (u.Path==""||u.Path=="/")&&u.RawPath==""
+}
 func New(base,tenant string)(*Client,error) {
- if !Origin(base) || !UUID.MatchString(tenant) {return nil,fmt.Errorf("registration requires an HTTPS origin and tenant UUID")}
+ tenant=strings.ToLower(tenant)
+ if !BaseURL(base) || !UUID.MatchString(tenant) {return nil,fmt.Errorf("registration requires an HTTPS base URL and tenant UUID")}
  return &Client{base:strings.TrimRight(base,"/"),tenant:tenant,http:&http.Client{},timeout:15*time.Second},nil
 }
 func (c *Client) request(ctx context.Context,method,path,token string,body,dest any) error {

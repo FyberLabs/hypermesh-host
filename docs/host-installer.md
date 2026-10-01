@@ -995,6 +995,8 @@ with a 25-minute command bound covering login and approval. Transient API errors
 stop with retained state; rerun the exact command to reauthenticate and recover.
 Redirects are refused. Every returned request, tenant, hardware report, key
 fingerprint, approval path and device identity must match the local request.
+Tenant UUIDs are canonicalized to lowercase on the wire, and configured API URL
+path prefixes are preserved, matching the installed agent plan.
 
 After approval the server assigns the device UUID. That UUID is journaled before
 the CLI publishes private `device.json` and a dedicated
@@ -1007,10 +1009,17 @@ resource admission, but still checks installed files, service and hardware
 identity. Archived hosts cannot be revived.
 
 Denial or expiry leaves the private journal intact and the service inactive.
-Starting a different request after either state, or intentional retirement and
-reinstallation, needs the explicit fresh-key reinstall workflow still on the
-roadmap; do not delete journals as a recovery shortcut. Preserve private
-journals locally and never upload them as support logs.
+To start again, rerun the same command with `--restart-approval`. It verifies
+the original owner, confirms a denied/expired decision from the server, reruns
+preflight, archives the private request and generates fresh keys and a new
+request requiring another browser approval. Pending, completed or retired
+requests cannot be reset this way. If interrupted after the new journal was
+saved, rerun without that flag to resume it. Prior requests remain in private
+`registration-history-REQUEST_ID.json` files.
+
+Intentional retirement/reinstallation needs the separate fresh-key reinstall
+workflow still on the roadmap. Do not delete journals as a recovery shortcut.
+Preserve private journals locally and never upload them as support logs.
 
 Success is `registered-inactive`: the dashboard device is paused and
 uncertified. No activation marker, service enable/start, certification result or

@@ -51,7 +51,7 @@ type registrationStatus struct {
 func publicRegistration(j registrationJournal)registrationStatus {
  next:="Rerun register-agent with the same plan and login to recover; do not delete the private journal."
  switch j.State {
- case "denied","expired":next="Approval ended. Preserve the journal; a new registration requires an explicit reinstall workflow."
+ case "denied","expired":next="Approval ended. Rerun with --restart-approval to archive this request and require new browser approval with fresh keys."
  case "retired":next="Host was retired. Do not restore its identity; use a fresh reinstall workflow."
  case "registered-inactive":next="Host registered and paused. Compatibility, certification and service activation remain pending."
  }
@@ -249,6 +249,31 @@ func finishRegistration(ctx context.Context,j *registrationJournal,remote regist
   if err!=nil{return err}
  }
 }
+// Restart requires a terminal server decision, fresh preflight and explicit
+// operator intent. Archive the old private request before replacing its journal.
+func restartRegistration(j registrationJournal,state hostregistration.Status,p agentInstallPlan,fresh Plan,archive func(registrationJournal)error,save func(registrationJournal)error)(registrationJournal,error) {
+ if (state.State!="expired"&&state.State!="denied")||state.DeviceID!=nil||j.DeviceID!="" {
+  return j,fmt.Errorf("only an expired or denied approval can restart; rerun without --restart-approval to resume the current request")
+ }
+ if j.Owner==""{return j,fmt.Errorf("verified owner required before restarting approval")}
+ old:=j;old.State=state.State
+ next,err:=newRegistration(p,j.Issuer,j.Dashboard,j.Request.ClassID,fresh)
+ if err!=nil{return j,err}
+ next.Owner=j.Owner
+ if err=archive(old);err!=nil{return j,err}
+ if err=save(next);err!=nil{return j,err}
+ return next,nil
+}
+func archiveRegistration(state string,j registrationJournal)error {
+ path:=filepath.Join(state,"registration-history-"+j.Request.RequestID+".json")
+ raw,err:=json.Marshal(j);if err!=nil{return fmt.Errorf("cannot encode private registration history")}
+ payload:=agentPayload{agentFile{path,digestSetupBytes(raw),0o600},raw}
+ exists,err:=agentFileMatches(path,payload)
+ if err!=nil{return fmt.Errorf("registration history differs; preserve files for recovery")}
+ if exists{return nil}
+ if err=writeAgentFile(path,payload);err!=nil{return fmt.Errorf("cannot preserve private registration history")}
+ return nil
+}
 func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer)int {
  flags:=flag.NewFlagSet("register-agent",flag.ContinueOnError);flags.SetOutput(diagnostic)
  path:=flags.String("plan","","installed, reviewed agent plan")
@@ -256,6 +281,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  issuer:=flags.String("issuer","","trusted HTTPS Keycloak realm issuer")
  dashboard:=flags.String("dashboard-url","","trusted HTTPS dashboard origin")
  class:=flags.String("class-id","","candidate platform class; checked against measured hardware")
+ restart:=flags.Bool("restart-approval",false,"explicitly replace a denied/expired approval with fresh keys; preserves private history")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0||*path==""||!setupDigestRE.MatchString(*approved)||validateEndpoint(*issuer)!=nil||!hostregistration.Origin(*dashboard)||*class==""{fmt.Fprintln(diagnostic,"require --plan, --approve-plan, --issuer, --dashboard-url and --class-id");return 2}
  *dashboard=strings.TrimRight(*dashboard,"/")
@@ -298,6 +324,18 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
   if j.Owner==""{j.Owner=owner;return save(j)}
   return nil
  })}
+ if err==nil&&*restart {
+  var status hostregistration.Status
+  status,err=remote.Get(ctx,j.Request)
+  if err==nil {
+   var fresh Plan
+   fresh,err=registrationPreflight(ctx,p,*class)
+   if err==nil {err=checkRegistrationIdentity("",j,false)}
+   if err==nil {
+    j,err=restartRegistration(j,status,p,fresh,func(old registrationJournal)error{return archiveRegistration(defaultSetupState,old)},save)
+   }
+  }
+ }
  if err==nil{
   checked:=preflightRegistrationRemote{remote,func(ctx context.Context)error{
    if err:=verifyRegistrationService(ctx,p);err!=nil{return err}

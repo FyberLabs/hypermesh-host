@@ -159,3 +159,28 @@ func TestRegistrationPreflightBlocksCompletion(t *testing.T){
  checked:=preflightRegistrationRemote{remote,func(context.Context)error{return fmt.Errorf("hardware changed")}}
  if _,err:=checked.Complete(context.Background(),j.Request);err==nil||remote.completes!=0{t.Fatal("completion bypassed preflight")}
 }
+
+func TestRestartApprovalRequiresTerminalDecisionAndPreservesHistory(t *testing.T){
+ p,j:=registrationFixture(t);j.Owner="owner"
+ fresh:=p.Setup.Preflight
+ fresh.Hardware=hardware.Recommend(hardware.Facts{Arch:"arm64",Model:"NVIDIA Jetson AGX Orin",Tegra:true,CUDA:true})
+ fresh.Resources.Resources.SystemBytes=64*GiB;fresh.Resources.Admission.AcceleratorBytes=32*GiB
+ for _,state:=range []string{"pending","approved","completed","retired"}{
+  called:=false
+  sideEffect:=func(registrationJournal)error{called=true;return nil}
+  if _,err:=restartRegistration(j,hostregistration.Status{State:state},p,fresh,sideEffect,sideEffect);err==nil||called{t.Fatal("restarted nonterminal request",state)}
+ }
+ archived:=false
+ next,err:=restartRegistration(j,hostregistration.Status{State:"expired"},p,fresh,func(old registrationJournal)error{
+  if old.Request!=j.Request||old.PrivateKey!=j.PrivateKey||old.State!="expired"{t.Fatal("archive lost old identity")}
+  archived=true;return nil
+ },func(next registrationJournal)error{
+  if !archived{t.Fatal("replacement before archive")}
+  return nil
+ })
+ if err!=nil{t.Fatal(err)}
+ if next.Owner!=j.Owner||next.Request.RequestID==j.Request.RequestID||next.PrivateKey==j.PrivateKey||next.DeviceSecret==j.DeviceSecret||next.State!="prepared"{t.Fatal("restart did not preserve owner and rotate request/keys")}
+ called:=false
+ old,err:=restartRegistration(j,hostregistration.Status{State:"denied"},p,fresh,func(registrationJournal)error{return fmt.Errorf("disk full")},func(registrationJournal)error{called=true;return nil})
+ if err==nil||called||old.Request!=j.Request{t.Fatal("archive failure replaced active journal")}
+}
