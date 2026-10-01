@@ -24,6 +24,12 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "plan-setup" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := installer.RunSetupPlan(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	if name == "download" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		code := installer.RunDownload(ctx, os.Args[2:], os.Stdout, os.Stderr)
@@ -101,6 +107,10 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan-setup  review versioned Linux prerequisite package and headless changes.
+              Resource/readiness flags plus --profile auto and optional --headless.
+              --wireguard-mode kernel (default) or userspace; only userspace needs wireguard-go.
+              --list-profiles lists candidate policies; this command applies nothing.
   download  fetch a signed deploy CLI using independently trusted key material.
             Use download --help for required release, channel and build constraints.
   plan      read-only resource, hardware and HTTPS reachability plan.

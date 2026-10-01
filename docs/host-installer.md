@@ -122,7 +122,8 @@ disabled with consent, not that other services are disabled.
 - [ ] Authenticated AIuditor identity and protocol compatibility checks.
 - [x] Signed bootstrap verification, channel discovery and persistent build floor.
 - [ ] Reviewed installer self-update.
-- [ ] Versioned, validated hardware profiles and exact mutation plans.
+- [x] Versioned candidate Linux profiles and exact prerequisite package/headless plans.
+- [ ] Hardware validation of profiles and complete agent/service/apply plans.
 - [ ] Approval capture, unattended plan application, checkpoint/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
 - [ ] Recovery commands, redacted support bundle, and status presentation.
@@ -552,3 +553,74 @@ this probe.
 Automated coverage includes CUDA/HIP selection and errors, unknown/ambiguous
 hardware, context cleanup, reserve boundaries, CLI failure without runtime
 evidence, cancellation and output bounds. Physical AGX/N5 results are pending.
+
+## Versioned Linux prerequisite plans
+
+Implemented: `hypermesh-deploy plan-setup` runs the existing resource/hardware
+and readiness checks, then builds a reviewable JSON proposal for prerequisite
+packages and optional headless boot configuration. It makes no system changes
+and never sets `install_authorized`. Exit 0 means the proposal is reviewable;
+exit 1 means blocked and exit 2 means invalid arguments.
+
+```bash
+./hypermesh-deploy plan-setup --list-profiles
+./hypermesh-deploy plan-setup --memory-mode uma --uma-gib 40 \
+  --model-dir /existing/model/cache \
+  --aiuditor-check-url https://YOUR_AIUDITOR/ITS_READINESS_PATH \
+  --profile auto --headless > setup-plan.json
+```
+
+The revision-1 policies cover Ubuntu 22.04/24.04 with measured Jetson ARM64
+CUDA UMA, AMD x86-64 HIP UMA, or discrete CUDA on Linux ARM64/x86-64.
+These are **candidate policies**, not validated driver compatibility matrices.
+Names and installed RAM labels cannot override architecture/runtime matching.
+Manual profile selection must match the same measured facts as automatic
+selection. Other OS/runtime combinations stop with a blocker.
+
+The planner records the running kernel, detected hardware, installer commit/
+version/build, profile revision, package-state digest and exact installed
+protected package versions. A SHA-256 digest binds those facts, resource
+evidence, proposed changes and blockers. It is an integrity identifier for
+future approval handling, not a signature or authorization. Regeneration can
+change it when resource measurements or system state change.
+
+The first policy preserves the package-managed vendor stack: Jetson requires
+an installed nvidia-l4t-core package, AMD requires hip-runtime-amd, and discrete
+CUDA requires a nvidia-driver package. Docker must already be supplied by
+docker.io or docker-ce. Manual/vendor installations outside those packages
+need an explicit future policy; the planner does not replace them.
+No OS, kernel, driver, power-mode or GPU-clock upgrade is proposed. The old
+AGX command's fixed version pins are not reused as certification evidence.
+
+Shared prerequisites are ca-certificates, gnupg, python3 and wireguard-tools.
+The explicit \`--wireguard-mode kernel\` default matches the agent\'s kernel path.
+Only \`--wireguard-mode userspace\` adds wireguard-go. Mode is recorded in the
+plan and its digest; the later apply stage must render the same mode into
+agent/service configuration. Profile names do not force userspace mode, so
+kernel-capable Jetson/J4012, AMD and discrete hosts do not need wireguard-go.
+Kernel module/tunnel readiness still needs verification before enrollment. Installed native packages remain unchanged. Local APT metadata
+supplies candidates; the planner does not refresh sources or download packages.
+It simulates required versions, pins the complete dependency closure, and
+simulates again to confirm that the displayed version-pinned argv reproduces
+the same transaction. This uses APT's documented
+[simulation operations](https://manpages.debian.org/testing/apt/apt-get.8.en.html).
+Removals, changes to already installed packages, partial dpkg state, protected
+kernel/driver/network/boot/storage changes and changing dependency resolution
+block planning. Fix those separately, then generate a new proposal.
+Package versions are pinned here; artifact trust and apply-time revalidation
+still belong to the apply stage.
+
+The only proposed headless change is `systemctl set-default multi-user.target`
+when `--headless` was requested and the current target is graphical. It is
+optional and requires later explicit approval. No target isolation, reboot,
+SSH change, storage operation or service shutdown runs during planning.
+APT maintainer scripts can restart services when packages are eventually
+installed; the apply/recovery stage must account for that effect.
+
+Automated tests cover profile matching, rejecting operator overrides and
+unsupported OS/runtime combinations, exact dependency closure, installed/
+protected package preservation, malformed metadata, no-op plans, headless
+intent, system-state digest changes and CLI output. Actual profile validation
+and complete approved application are still pending. Next: bind verified agent,
+rollback helper, configuration and systemd payloads, then implement approval
+and journaled application/resume against a freshly revalidated plan.
