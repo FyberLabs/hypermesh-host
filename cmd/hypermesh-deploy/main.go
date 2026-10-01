@@ -24,6 +24,12 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "support-bundle" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := installer.RunSupportBundle(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
  if name == "check-agent" || name == "onboarding-status" {
   ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
   run := installer.RunCheckAgent
@@ -140,6 +146,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  support-bundle  export redacted, historical installer diagnostics (Linux, root).
+                  --plan-sha SHA256 [--setup-plan-sha SHA256] --output /absolute/new.json
+                  A setup digest alone also works; use support-bundle --help.
   check-agent  verify saved device identity, plane protocol and local preflight.
                --plan FILE --approve-plan SHA256; does not activate services.
   onboarding-status  read the dated readiness snapshot; --plan-sha SHA256

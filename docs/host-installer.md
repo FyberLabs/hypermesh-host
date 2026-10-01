@@ -132,7 +132,8 @@ disabled with consent, not that other services are disabled.
 - [ ] Generic hardware-class admission for AMD/N5 and additional platform classes.
 - [ ] Enrollment-gated service activation, guided approval and automatic reboot/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
-- [ ] Recovery commands, redacted support bundle, and status presentation.
+- [x] Redacted installer support bundle with stage summaries and recovery guidance.
+- [ ] Repair/uninstall recovery commands and unified live status presentation.
 - [ ] Enrollment plus benchmark/connectivity gates before selling.
 - [ ] Hardware acceptance runs below.
 
@@ -941,7 +942,7 @@ the installed inactive service and the registration protocol. The implementation
 and recovery contract are described below. Authenticated connectivity,
 certification and service activation are still pending.
 
-Repair/uninstall, redacted support bundles, requested agent updates and independent
+Repair/uninstall, requested agent updates and independent
 website/bootstrap acceptance also remain on the pre-AGX delivery checklist.
 Workload modes and macOS remain deferred.
 
@@ -1102,3 +1103,78 @@ Next complete task: an approved, recoverable onboarding execution path for
 authenticated AIuditor/heartbeat/tunnel checks and certification while keeping
 paid workload admission disabled, followed by service activation. This check
 does not stand in for that execution or benchmark evidence.
+
+## Completed: redacted installer support bundle
+
+`support-bundle` exports one JSON file covering the selected prerequisite,
+agent installation, registration and onboarding journals. Use it after an
+interrupted or failed installation, or to share progress during AGX-1 acceptance.
+It is a **historical journal summary**, not a fresh hardware/network/service
+check, proof of valid credentials, or authorization to activate/sell.
+
+```bash
+sudo ./hypermesh-deploy support-bundle \
+  --plan-sha AGENT_PLAN_SHA256 \
+  --setup-plan-sha SETUP_PLAN_SHA256 \
+  --output /root/hypermesh-support-01.json
+```
+
+Use `--setup-plan-sha` alone if agent planning has not happened yet. The two
+digests are explicitly selected references, not a verified relationship between
+plans. Omit the setup digest to collect only the three agent stages. No plan
+file, browser login, network access or operational hardware is needed. An older
+installer may collect its known journal schema even when its build differs
+from the installed release; unknown future fields/schemas are marked invalid
+instead of being copied or misinterpreted. The collector's own build/commit is
+recorded separately, not represented as the installed agent version.
+
+The command reads only the named journals in
+`/var/lib/hypermesh/installer`. It requires the existing private state directory
+and installer lock, acquires a nonblocking shared lock, and refuses collection
+while a cooperating installer command is changing state. It does not create
+missing state/locks, traverse the state directory, run subprocesses, query the
+plane, read container/system logs, or modify installation, enrollment or keys.
+Symlinks, multiple hard links, unsafe ownership/permissions, nonregular files,
+files larger than 2 MiB, duplicate JSON keys and unknown schemas are not read
+as valid journals. Each source has a separate collection status.
+
+The export is built from an allowlist: selected plan digests, collector build
+and architecture, collection time, fixed stage/state values, a completed-file
+count, onboarding timestamps normalized to UTC, fixed gate IDs/states, and
+locally generated next actions. Raw journal errors, gate messages, host names,
+tenant/device/request IDs, owner accounts, hardware descriptions, URLs,
+environment/configuration, public/private keys, device secrets and their
+hashes/prefixes are omitted. No heuristic secret-pattern replacement is used.
+Unknown failure codes become `unknown`; unknown states/gates invalidate that
+section. The artifact still reveals installation timing, plan digests and
+operational state, so review it before sharing.
+
+`--output` must be a new absolute filename in an existing root-controlled
+directory. Publication is atomic, uses mode 0600, and never overwrites an
+existing file or follows a destination symlink. Choose a new filename for each
+export. Only this output artifact is created; private source journals stay
+local and must not be uploaded as a substitute.
+
+Exit codes:
+
+- **0:** every requested journal was safely summarized and the artifact saved.
+  A journal can record a failed installation/check and collection still succeeds.
+- **1:** collection/export failed, or a **partial artifact** was saved because
+  a requested journal is missing, unreadable or invalid. Inspect
+  `collection_complete` and each stage's `collection` field; missing stages
+  can simply mean they have not started. Directory/lock failures produce no
+  artifact. Publication/durability failures are reported explicitly.
+- **2:** invalid command arguments.
+
+A saved `checked` onboarding result remains dated evidence. Run
+`check-agent` for a current check; the bundle cannot turn old evidence into
+readiness. Recovery guidance preserves registration/keys and never recommends
+deleting journals, creating an activation marker, or bypassing certification.
+
+Automated coverage includes secret canaries throughout free-text/identity
+fields, historical blocked/failed summaries, source-file preservation,
+partial/missing/corrupt/future journals, size/type/permission/link checks,
+writer-lock exclusion, cancellation, private atomic output and refusal to
+overwrite. Physical AGX/N5 acceptance remains pending. Repair/uninstall,
+authenticated AIuditor/tunnel execution, certification, activation, and live
+status presentation remain separate roadmap tasks.
