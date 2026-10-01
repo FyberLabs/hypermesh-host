@@ -26,6 +26,7 @@ type WorkloadPreflight struct {
 	ModelPath string `json:"model_path"`
 	FileHash string `json:"file_hash"`
 	ContextTokens int `json:"context_tokens"`
+	FullContext bool `json:"full_context,omitempty"`
 }
 
 type WorkloadReceipt struct {
@@ -34,6 +35,7 @@ type WorkloadReceipt struct {
 	SampleMS int `json:"sample_ms"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
 	CleanupComplete bool `json:"cleanup_complete"`
+	ContextFit *pathb.ContextFit `json:"context_fit,omitempty"`
 }
 
 var workloadCatalogRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
@@ -76,6 +78,7 @@ func runLocalWorkloadPreflight(ctx context.Context,r WorkloadPreflight,state str
 		log:slog.New(slog.NewTextHandler(io.Discard,nil)),
 		certModelPath:r.ModelPath,certEndpoint:endpoint,
 	}
+	if r.FullContext { a.certContextTokens=r.ContextTokens }
 	res:=a.runCertWorkload(ctx,api.Job{
 		JobID:r.PlanSHA256,Kind:api.KindCompactCert,SuiteID:pathb.SuitePackV1,
 		CatalogID:r.CatalogID,ImageDigest:r.ImageDigest,FileHash:r.FileHash,
@@ -84,5 +87,5 @@ func runLocalWorkloadPreflight(ctx context.Context,r WorkloadPreflight,state str
 	if !res.Passed||!res.WorkloadVerified||!res.Measured {
 		return WorkloadReceipt{},fmt.Errorf("pinned workload preflight failed: %s",res.Reason)
 	}
-	return WorkloadReceipt{r,res.ImageHash,res.SampleMs,res.DecodeTokS,true},nil
+	return WorkloadReceipt{Request:r,HostImageHash:res.ImageHash,SampleMS:res.SampleMs,TokensPerSecond:res.DecodeTokS,CleanupComplete:true,ContextFit:res.ContextFit},nil
 }

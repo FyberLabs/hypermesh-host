@@ -65,6 +65,7 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		BindAddress: "127.0.0.1",
 		LlamaJinja: a.cfg.LlamaJinja, LlamaCtxSize: a.cfg.LlamaCtxSize,
 		LlamaTimeout: a.cfg.LlamaTimeout,
+		SingleSlot: a.certContextTokens > 0,
 	})
 	if err != nil { return fail("certification runtime start failed") }
 	defer func() {
@@ -90,7 +91,14 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		case <-timer.C:
 		}
 	}
+	var fit *pathb.ContextFit
+	if a.certContextTokens > 0 {
+		var err error
+		fit,err=runner.CheckContextFit(ctx,a.certContextTokens)
+		if err!=nil{return fail("full-context check failed or evidence unavailable")}
+	}
 	result = a.requireImageHash(job.Kind, runner.Run(ctx, job))
+	result.ContextFit = fit
 	if !result.Passed || !result.Measured || ctx.Err() != nil {
 		return fail("certification requires a real timed completion")
 	}

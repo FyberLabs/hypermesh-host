@@ -1553,3 +1553,40 @@ setting. It does not prove full-context fit, sustained throughput or AIuditor
 certification. These checks, authenticated model-pack acquisition, the controlled
 certification/service-start transition, recovery integration and physical AGX/N5
 acceptance remain pending. HIP and macOS workload preflight are not enabled.
+
+
+### Completed: opt-in full-context exercise (2026-10-01)
+
+Generate a new workload plan with `plan-workload --full-context` and the desired
+`--context-tokens N`, retaining the explicit model/runtime pins from the prior
+section. Review and approve its new digest with `check-workload --run`.
+An earlier short-check plan does not authorize this additional work. Requests
+without `--full-context` retain their short-inference behavior and no context-fit
+claim; existing historical journal hashes remain compatible.
+
+For this mode the temporary NVIDIA runtime has one slot and context shifting
+disabled. The installer tokenizes fixed synthetic text, submits exactly
+`N - 16` token IDs, disables prompt-cache reuse, and requests 16 generated tokens
+with EOS stopping disabled. Success requires the runtime's response to report
+the exact model alias, exact context size, all requested prompt/generated tokens,
+completed generation at the limit, and explicit `truncated=false`. Missing or
+incompatible native API evidence fails closed. The short timed completion,
+model rehash, container cleanup and fresh postflight must also succeed.
+
+The receipt's optional `context_fit` records protocol, requested context size,
+prompt/generated token counts and elapsed milliseconds. A full-context plan
+cannot become verified using a short-only receipt or evidence for another size.
+No prompt or generated content is saved. HTTP responses are size-bounded;
+redirects and non-loopback endpoints are refused. The context exercise has a
+three-minute whole-operation deadline and two-minute request deadlines within
+the existing workload deadline. Timeout is failure, never reduced-context success.
+
+This proves one synthetic token-window exercise for the pinned runtime/model.
+It is not a model-quality test, sustained benchmark, GPU-residency measurement,
+certification verdict or authorization to start selling. Physical AGX/N5 checks,
+authenticated model acquisition and controlled certification/activation remain
+pending. Older runtime images missing the required native response fields must
+be upgraded through a reviewed digest; there is no silent short-check fallback.
+
+Native API references: [llama.cpp server protocol](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+and [native completion response](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-task.cpp).

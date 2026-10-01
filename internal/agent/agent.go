@@ -28,6 +28,7 @@ import (
 // Agent is the host process.
 type Agent struct {
 	// certEndpoint is a test seam; production certification always uses loopback.
+	certContextTokens int // nonzero only for an explicitly approved full-context check
 	certEndpoint string
 	certModelPath string // installer approval binds an exact local file
 	cfg     Config

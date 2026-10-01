@@ -46,6 +46,8 @@ const ContainerGGUFPath = "/models/model.gguf"
 // Spec is a leased workload from a lease_start job.
 // ImageDigest must be repo@digest (the locked job field). No extra CP fields.
 type Spec struct {
+	// SingleSlot reserves the approved context for one preflight sequence.
+	SingleSlot bool
 	LeaseID     string
 	CatalogID   string
 	ImageDigest string
