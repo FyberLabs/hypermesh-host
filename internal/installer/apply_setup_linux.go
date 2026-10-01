@@ -138,7 +138,7 @@ func privateSetupFile(info os.FileInfo)bool {
 func readSetupRegular(path string,private bool)([]byte,error) {
 	before,err:=os.Lstat(path)
 	if err!=nil || !before.Mode().IsRegular() || (private && !privateSetupFile(before)) {return nil,fmt.Errorf("setup input must be a readable regular file with appropriate permissions")}
-	file,err:=os.OpenFile(path,os.O_RDONLY|syscall.O_NOFOLLOW,0)
+	file,err:=os.OpenFile(path,os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK,0)
 	if err!=nil {return nil,fmt.Errorf("cannot open setup input")}
 	defer file.Close()
 	after,err:=file.Stat()
