@@ -67,7 +67,8 @@
 # bytes. Hosts do not read GitHub. They ask the control plane. Prod
 # reuses the release for the tag and skips an asset whose name and
 # sha256 already match. A different sha256 fails with "bump the
-# version". Test deletes the rolling release and creates it again.
+# version". Test first preserves test-<release-id>, then replaces the
+# rolling test release. Permanent test releases are never pruned here.
 #
 # Signing reads the private key and passphrase from Key Vault after
 # azure/login. The command is az keyvault secret show --vault-name
@@ -489,13 +490,44 @@ fi
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
 api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
 
+# Archive each test build before touching the rolling alias.
+tags=("$tag")
 if [ "$channel" = test ]; then
-  code=$(curl -sS -o "${dist}/existing.json" -w '%{http_code}' "${auth[@]}" \
-    "${api}/releases/tags/test" || true)
+  tags=("test-${release_id}" test)
+fi
+for tag in "${tags[@]}"; do
+if [ "$tag" != test ] && [ "$channel" = test ]; then
+  code=$(curl --connect-timeout 30 --max-time 600 -sS -o "${dist}/ref.json" -w '%{http_code}' "${auth[@]}" "${api}/git/ref/tags/${tag}")
+  if [ "$code" = 200 ]; then
+    python3 - "${dist}/ref.json" "$GITHUB_SHA" <<'PY'
+import json, sys
+ref = json.load(open(sys.argv[1]))["object"]
+if ref.get("type") != "commit" or ref.get("sha") != sys.argv[2]:
+    sys.exit("hypermesh release: permanent test tag belongs to a different commit")
+PY
+  elif [ "$code" != 404 ]; then
+    echo "hypermesh release: look up ${tag} ref failed with HTTP ${code}" >&2
+    exit 1
+  fi
+fi
+if [ "$tag" = test ]; then
+  code=$(curl --connect-timeout 30 --max-time 600 -sS -o "${dist}/existing.json" -w '%{http_code}' "${auth[@]}" "${api}/releases/tags/test")
   if [ "$code" = 200 ]; then
     gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/existing.json")
-    curl -sS -X DELETE "${auth[@]}" "${api}/releases/${gh_rel}" >/dev/null
-    curl -sS -X DELETE "${auth[@]}" "${api}/git/refs/tags/test" >/dev/null || true
+    code=$(curl --connect-timeout 30 --max-time 600 -sS -o /dev/null -w '%{http_code}' -X DELETE "${auth[@]}" "${api}/releases/${gh_rel}")
+    if [ "$code" != 204 ]; then
+      echo "hypermesh release: delete rolling release failed with HTTP ${code}" >&2
+      exit 1
+    fi
+  elif [ "$code" != 404 ]; then
+    echo "hypermesh release: look up rolling release failed with HTTP ${code}" >&2
+    exit 1
+  fi
+  # A previous interrupted publish can leave the tag without a release.
+  code=$(curl --connect-timeout 30 --max-time 600 -sS -o /dev/null -w '%{http_code}' -X DELETE "${auth[@]}" "${api}/git/refs/tags/test")
+  if [ "$code" != 204 ] && [ "$code" != 404 ]; then
+    echo "hypermesh release: delete rolling tag failed with HTTP ${code}" >&2
+    exit 1
   fi
 fi
 
@@ -507,7 +539,7 @@ fi
 upload_github() {
   name=$1
   file=$2
-  code=$(curl -sS -o /dev/null -w '%{http_code}' \
+  code=$(curl --connect-timeout 30 --max-time 600 -sS -o /dev/null -w '%{http_code}' \
     -H "Authorization: Bearer ${GH_TOKEN}" \
     -H "Content-Type: application/octet-stream" \
     -H "Accept: application/vnd.github+json" \
@@ -519,17 +551,16 @@ upload_github() {
   fi
 }
 
-# Prod reuses the GitHub Release for this tag. An asset whose sha256
-# already matches is left in place. A different sha256 is bump the version.
-# Test deletes the rolling release and creates it again.
+# Permanent releases retain matching assets and repair interrupted uploads.
+# Only the rolling test alias is replaced.
 gh_rel=""
 assets_json=""
-if [ "$channel" = prod ]; then
-  code=$(curl -sS -o "${dist}/existing.json" -w '%{http_code}' "${auth[@]}" \
+if [ "$tag" != test ]; then
+  code=$(curl --connect-timeout 30 --max-time 600 -sS -o "${dist}/existing.json" -w '%{http_code}' "${auth[@]}" \
     "${api}/releases/tags/${tag}" || true)
   if [ "$code" = 200 ]; then
     gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/existing.json")
-    code=$(curl -sS -o "${dist}/assets.json" -w '%{http_code}' "${auth[@]}" \
+    code=$(curl --connect-timeout 30 --max-time 600 -sS -o "${dist}/assets.json" -w '%{http_code}' "${auth[@]}" \
       "${api}/releases/${gh_rel}/assets?per_page=100" || true)
     if [ "$code" != 200 ]; then
       echo "hypermesh release: list ${tag} assets failed with HTTP ${code}" >&2
@@ -544,7 +575,7 @@ fi
 if [ -z "$gh_rel" ]; then
   payload=$(python3 -c 'import json,sys; print(json.dumps({"tag_name":sys.argv[1],"name":sys.argv[2],"body":sys.argv[3],"target_commitish":sys.argv[4],"draft":False,"prerelease":sys.argv[5]=="true"}))' \
     "$tag" "$release_id" "$notes" "$GITHUB_SHA" "$prerelease")
-  code=$(curl -sS -o "${dist}/created.json" -w '%{http_code}' "${auth[@]}" \
+  code=$(curl --connect-timeout 30 --max-time 600 -sS -o "${dist}/created.json" -w '%{http_code}' "${auth[@]}" \
     -H "Content-Type: application/json" \
     -X POST --data "$payload" "${api}/releases")
   if [ "$code" != 201 ]; then
@@ -577,7 +608,7 @@ for name in "${artifact_names[@]}"; do
           exit 1
         fi
         asset_file=$(mktemp)
-        code=$(curl -sS -o "$asset_file" -w '%{http_code}' "${auth[@]}" \
+        code=$(curl --connect-timeout 30 --max-time 600 -sS -o "$asset_file" -w '%{http_code}' "${auth[@]}" \
           -H "Accept: application/octet-stream" \
           "${api}/releases/assets/${asset_id}" || true)
         if [ "$code" != 200 ]; then
@@ -601,6 +632,8 @@ for name in "${artifact_names[@]}"; do
     fi
   fi
   upload_github "$name" "${dist}/${name}"
+done
+
 done
 
 echo "hypermesh release: published ${channel} ${release_id} ${GITHUB_SHA}"

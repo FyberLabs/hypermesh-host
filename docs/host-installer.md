@@ -1225,3 +1225,38 @@ runtime support for that suite, a benchmark result or certification. The
 AIuditor may still need program configuration before AGX-1 acceptance.
 Heartbeat, tunnel/workload verification and controlled activation remain
 the next onboarding execution tasks.
+
+## Release channels and promotion (approved 2026-10-01)
+
+- [x] Preserve each newly published test build as a GitHub prerelease tagged
+  `test-<build>-<12-character-commit>`, with the same signed ARM64/AMD64
+  installer, agent, bootstrap and verification files as the channel build.
+  Complete that archive before replacing the rolling `test` prerelease.
+  Conflicting archive tags or bytes fail publication; matching assets remain.
+  Test blob retention does not delete these GitHub releases. Existing historical
+  builds are not backfilled by this change.
+- [ ] Expose **Production** and **Test** downloads on hyperme.sh. Production is
+  the default; selecting Test is explicit. Show each channel's available build,
+  architecture, release notes and verification instructions. If Production has
+  no published release, say so; never silently substitute Test.
+- [ ] Promote a specific verified test release to Production with recorded
+  source release, commit and artifact digests. Promotion must be a reviewed
+  operation, never an automatic consequence of publishing a test build.
+  Define signed promotion metadata and preserve tested payload provenance;
+  reconcile the current channel/version-bound metadata and global build floor
+  before enabling this flow. The existing vX.Y.Z workflow still rebuilds and
+  signs a production release; it is not yet the approved promotion mechanism.
+- [ ] Persist the owner's chosen update channel during installation and expose
+  an explicit later channel change in the host dashboard/agent. Handle a Test
+  build newer than Production without silently downgrading or bypassing trust.
+- [ ] Serve downloads without requiring access to the private GitHub repository,
+  with independent bootstrap trust and end-to-end website/install tests.
+
+Permanent test tags do not match the production workflow's `vX.Y.Z` trigger.
+This milestone adds release history, not a production promotion or website
+download implementation. GitHub mirroring follows the verified Azure channel
+publication; a GitHub API failure can leave the channel published while the
+mirror is incomplete. The rolling alias can be briefly unavailable during its
+replacement, but a completed permanent release remains downloadable to users
+with repository access. A full test workflow rerun allocates a new build number;
+it does not reuse an older test build's signed metadata.
