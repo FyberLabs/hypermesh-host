@@ -99,3 +99,22 @@ func TestWireGuardIntentAndJournal(t *testing.T){
   }else if j.WireGuardVerifiedAt!=nil{t.Fatal("failure retained verification")}
  })}
 }
+
+func TestCombinedHeartbeatWireGuardIntentIsRecoverable(t *testing.T){
+ var j onboardingJournal
+ deps:=onboardingDeps{
+  Verify:func(context.Context)error{return nil},
+  Preflight:func(context.Context)error{return nil},
+  Remote:func(context.Context)(hostregistration.OnboardingSnapshot,error){
+   s:=heartbeatSnapshot();s.Capabilities=append(s.Capabilities,"onboarding_tunnel_v1");return s,nil
+  },
+  Heartbeat:func(context.Context)(hostregistration.HeartbeatReceipt,error){return receiptFixture(),nil},
+  WireGuard:func(context.Context)(time.Time,error){return time.Now().UTC(),nil},
+  Save:func(value onboardingJournal)error{
+   if !validHeartbeatJournal(value)||!validWireGuardJournal(value){t.Fatal("invalid recovery journal",value.State)}
+   return nil
+  },
+ }
+ if err:=performOnboardingCheck(context.Background(),&j,deps);err!=nil{t.Fatal(err)}
+ if j.HeartbeatRecordedAt==nil||j.WireGuardVerifiedAt==nil{t.Fatal("compound success lost evidence")}
+}

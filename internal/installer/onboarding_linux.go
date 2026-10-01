@@ -169,6 +169,9 @@ func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboar
  }
  if deps.WireGuard!=nil&&candidate.FailureCode=="" {
   *j=candidate;j.State="checking"
+  j.Gates=append([]onboardingGate(nil),candidate.Gates...)
+  j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil
+  for i:=range j.Gates {if j.Gates[i].ID=="heartbeat"{j.Gates[i].State="pending"}}
   j.NextAction="WireGuard probe pending or interrupted; rerun check-agent --wireguard with the same plan and identity."
   if err:=deps.Save(*j);err!=nil{return fail("status_persistence","Cannot save WireGuard intent; repair state storage.",fmt.Errorf("cannot persist WireGuard intent"))}
   tunnelFail:=func(err error)error{
