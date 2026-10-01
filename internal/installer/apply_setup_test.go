@@ -26,7 +26,7 @@ func newApplyFixture(t *testing.T, packages, headless bool)*applyFixture {
 	pre.Resources.ModelDirectory="/cache"
 	f:=&applyFixture{installed:map[string]string{
 		"ca-certificates":"1.0","gnupg":"2.0","python3":"3.12",
-		"wireguard-tools":"1.0","docker.io":"26.0","nvidia-l4t-core":"36.4.0"},
+		"wireguard-tools":"1.0","iproute2":"1.0","iputils-ping":"1.0","docker.io":"26.0","nvidia-l4t-core":"36.4.0"},
 		target:"graphical.target"}
 	if !packages {f.installed["wireguard-go"]="1.0"}
 	simulation:=func()string {

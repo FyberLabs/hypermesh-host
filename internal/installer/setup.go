@@ -32,11 +32,11 @@ type SetupProfile struct {
 }
 
 func setupProfiles() []SetupProfile {
-	packages := []string{"ca-certificates", "gnupg", "python3", "wireguard-tools"}
+	packages := []string{"ca-certificates", "gnupg", "python3", "wireguard-tools", "iproute2", "iputils-ping"}
 	return []SetupProfile{
-		{"ubuntu-jetson-cuda", 2, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
-		{"ubuntu-amd-hip", 2, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
-		{"ubuntu-discrete-cuda", 2, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-jetson-cuda", 3, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-amd-hip", 3, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-discrete-cuda", 3, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
 	}
 }
 

@@ -122,7 +122,8 @@ disabled with consent, not that other services are disabled.
 - [x] Device-authenticated control-plane protocol and registration identity check, with a redacted readiness snapshot.
 - [x] Authenticated AIuditor tenant/class program membership check through the plane, without local fallback.
 - [x] Explicit, recoverable one-shot device heartbeat with committed acknowledgment.
-- [ ] WireGuard and workload compatibility checks.
+- [x] Explicit inactive WireGuard handshake and gateway overlay data-path probe.
+- [ ] Workload compatibility checks and physical WireGuard acceptance.
 - [x] Signed bootstrap verification, channel discovery and persistent build floor.
 - [x] Signed agent download for both Linux architectures, with optional exact installer-release binding.
 - [ ] Reviewed installer self-update.
@@ -627,7 +628,7 @@ exit 1 means blocked and exit 2 means invalid arguments.
   --profile auto --headless > setup-plan.json
 ```
 
-The revision-2 policies cover Ubuntu 22.04/24.04 with measured Jetson ARM64
+The revision-3 policies cover Ubuntu 22.04/24.04 with measured Jetson ARM64
 CUDA UMA, AMD x86-64 HIP UMA, or discrete CUDA on Linux ARM64/x86-64.
 These are **candidate policies**, not validated driver compatibility matrices.
 Names and installed RAM labels cannot override architecture/runtime matching.
@@ -649,7 +650,8 @@ need an explicit future policy; the planner does not replace them.
 No OS, kernel, driver, power-mode or GPU-clock upgrade is proposed. The old
 AGX command's fixed version pins are not reused as certification evidence.
 
-Shared prerequisites are ca-certificates, gnupg, python3 and wireguard-tools.
+Shared prerequisites are ca-certificates, gnupg, python3, wireguard-tools,
+iproute2 and iputils-ping.
 The explicit \`--wireguard-mode kernel\` default matches the agent\'s kernel path.
 Only \`--wireguard-mode userspace\` adds wireguard-go. Mode is recorded in the
 plan and its digest; the later apply stage must render the same mode into
@@ -684,7 +686,7 @@ and journaled application/resume against a freshly revalidated plan.
 
 ## Approved prerequisite application and resume
 
-Revision-2 profiles bind the constrained noninteractive application arguments.
+Revision-3 profiles bind the constrained noninteractive application arguments.
 Implemented: schema-2 setup plans record the readiness URL and headless intent
 as well as the exact prerequisite operations. Generate a fresh plan with the
 same installer build that will apply it. Older schema-1 plans must be
@@ -1224,8 +1226,8 @@ A passed gate proves the plane could authenticate and read its configured
 program. It does **not** prove the host's direct AIuditor/WireGuard path,
 runtime support for that suite, a benchmark result or certification. The
 AIuditor may still need program configuration before AGX-1 acceptance.
-Heartbeat, tunnel/workload verification and controlled activation remain
-the next onboarding execution tasks.
+The one-shot heartbeat and WireGuard stages are documented below. Workload
+verification and controlled activation remain subsequent execution tasks.
 
 ## Release channels and promotion (approved 2026-10-01)
 
@@ -1273,7 +1275,7 @@ sudo ./hypermesh-deploy check-agent \
 sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
 ```
 
-Without `--heartbeat`, `check-agent` remains read-only on the plane. With the
+Without `--heartbeat` or `--wireguard`, `check-agent` remains read-only on the plane. With the
 flag it still verifies private registration state, exact installed payloads,
 inactive services and fresh resource/hardware prerequisites first. It performs
 the existing device/AIuditor check and requires `onboarding_heartbeat_v1` before
@@ -1313,6 +1315,51 @@ GPU/model certification.
 Automated tests cover explicit opt-in, durable-before-send ordering, older
 planes, local/program failures, lost responses, cancellation, persistence
 failures, measured uptime bounds, protocol binding and redaction. Physical
-AGX-1 acceptance remains pending. The next complete task is the controlled
-WireGuard handshake/data-path stage, followed by certification execution and
-enrollment-gated service activation.
+AGX-1 acceptance remains pending. WireGuard handshake/data-path checks are now
+implemented below; certification execution and enrollment-gated service
+activation remain pending.
+
+## Completed: explicit WireGuard connectivity probe
+
+After deploying the plane's `onboarding_tunnel_v1` capability, run:
+
+```bash
+sudo ./hypermesh-deploy check-agent \
+  --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256 --wireguard
+sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
+```
+
+`--heartbeat` may be combined with this flag. All installation, private identity,
+inactive-unit, resource and program checks still run first. Intent is durably
+recorded before allocating an idle peer. The plane refuses holds, active/selling
+or already-certified hosts, and reuses the registered public key and peer on
+retries. Revision-3 prerequisite plans add iproute2 and iputils-ping; userspace
+WireGuard additionally requires wireguard-go. Missing tools require reviewing
+and approving a new setup plan, not bypassing package approval.
+
+The probe creates a temporary interface named `hm<first-12-plan-digest>`, using
+the approved kernel/userspace mode. Only a route to the gateway overlay address
+10.77.0.1/32 is installed. The default/LAN route and existing hypermesh interface
+are not replaced. The userspace process runs as a bounded child, not a service.
+Success requires a fresh handshake with the allocated server key and an ICMP
+echo through that interface. HTTPS success alone cannot pass this gate.
+
+The interface, probe route, child process and staged key file are cleaned up
+before success is recorded as `wireguard_verified_at`. Cleanup failures block
+success. A retry can recover a leftover interface only when both its ownership
+alias and public key match this plan/registration; an unknown interface or a
+pre-existing exact probe route is a conflict requiring local inspection.
+An interruption before the ownership/key markers are complete also requires
+inspection. Preserve registration credentials; do not re-enroll to fix networking.
+
+The gateway must synchronize the idle peer, expose the configured UDP endpoint,
+and answer ICMP on 10.77.0.1. A timeout calls out those checks; inconsistent gateway
+keys or an exhausted pool require platform repair. The command is bounded by
+the existing three-minute deadline with a 90-second local probe maximum.
+Neither success nor failure starts agent services, grants certification or enables
+selling. The idle plane peer persists for later activation and is revoked by host
+retirement. A later ordinary check clears the saved connectivity success.
+
+Protocol, allocation/retry, failure, cleanup, timestamp and journal checks are
+automated. Physical AGX-1/N5 validation, AIuditor inference and workload
+compatibility, certification execution, and service activation remain pending.

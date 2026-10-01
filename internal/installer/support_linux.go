@@ -136,11 +136,11 @@ func supportOnboarding(dir, sha string) supportStage {
 	state := supportRead(dir, "onboarding-"+sha+".json", &j)
 	if state != "collected" { return supportUnavailable("onboarding", state) }
 	if j.Schema != 1 || j.PlanSHA256 != sha || !supportOneOf(j.State, "checking", "checked", "failed") ||
-		j.ActivationAllowed || j.SellingAllowed || j.RecordedAt.IsZero() || !validHeartbeatJournal(j) {
+		j.ActivationAllowed || j.SellingAllowed || j.RecordedAt.IsZero() || (!validHeartbeatJournal(j) || !validWireGuardJournal(j)) {
 		return supportUnavailable("onboarding", "invalid")
 	}
 	code := j.FailureCode
-	if !supportOneOf(code, "", "local_identity", "local_preflight", "plane_check", "interrupted", "status_persistence", "aiuditor_program", "heartbeat") { code = "unknown" }
+	if !supportOneOf(code, "", "local_identity", "local_preflight", "plane_check", "interrupted", "status_persistence", "aiuditor_program", "heartbeat", "wireguard") { code = "unknown" }
 	seen := map[string]bool{}
 	gates := []supportGate{}
 	for _, gate := range j.Gates {
@@ -159,6 +159,7 @@ func supportOnboarding(dir, sha string) supportStage {
 	case "plane_check": action = "Check the deployed onboarding API and network connection; retry without deleting credentials."
 	case "aiuditor_program": action = "Check the plane AIuditor configuration, service authentication and tenant/class suite; rerun check-agent for a specific blocker."
 	case "heartbeat": action = "Heartbeat is unconfirmed; check the plane and dashboard holds, then rerun check-agent --heartbeat with the same approved plan and identity."
+	case "wireguard": action = "Check gateway peer allocation and UDP/overlay reachability; rerun check-agent --wireguard with the same approved plan and identity."
 	case "status_persistence": action = "Check disk space and state-directory permissions, then rerun check-agent."
 	}
 	recorded := j.RecordedAt.UTC()

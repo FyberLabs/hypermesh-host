@@ -30,6 +30,8 @@ type onboardingJournal struct {
  RecordedAt time.Time `json:"recorded_at"`
  PlaneCheckedAt *time.Time `json:"plane_checked_at,omitempty"`
  LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
+ WireGuardRequested bool `json:"wireguard_requested,omitempty"`
+ WireGuardVerifiedAt *time.Time `json:"wireguard_verified_at,omitempty"`
  HeartbeatRequested bool `json:"heartbeat_requested,omitempty"`
  HeartbeatRecordedAt *time.Time `json:"heartbeat_recorded_at,omitempty"`
  HeartbeatUptimeS *int64 `json:"heartbeat_uptime_s,omitempty"`
@@ -105,12 +107,14 @@ type onboardingDeps struct {
  Preflight func(context.Context)error
  Remote func(context.Context)(hostregistration.OnboardingSnapshot,error)
  Heartbeat func(context.Context)(hostregistration.HeartbeatReceipt,error)
+ WireGuard func(context.Context)(time.Time,error)
  Save func(onboardingJournal)error
 }
 func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboardingDeps)error {
  // Replace previous success before probing. Crash/cancellation can leave only
  // 'checking', never make old evidence look like the latest successful check.
  j.State="checking";j.RecordedAt=time.Now().UTC()
+ j.WireGuardRequested=deps.WireGuard!=nil;j.WireGuardVerifiedAt=nil
  j.HeartbeatRequested=deps.Heartbeat!=nil;j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil
  j.PlaneCheckedAt=nil;j.LastHeartbeatAt=nil;j.ProtocolVerified=false;j.LocalPreflightPassed=false
  j.ActivationAllowed=false;j.SellingAllowed=false;j.ReportedSellState="";j.Gates=nil;j.FailureCode=""
@@ -163,13 +167,40 @@ func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboar
   candidate.RecordedAt=time.Now().UTC()
   candidate.NextAction="One-shot heartbeat recorded. Keep services inactive; complete WireGuard and certification gates before activation or selling."
  }
+ if deps.WireGuard!=nil&&candidate.FailureCode=="" {
+  *j=candidate;j.State="checking"
+  j.Gates=append([]onboardingGate(nil),candidate.Gates...)
+  j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil
+  for i:=range j.Gates {if j.Gates[i].ID=="heartbeat"{j.Gates[i].State="pending"}}
+  j.NextAction="WireGuard probe pending or interrupted; rerun check-agent --wireguard with the same plan and identity."
+  if err:=deps.Save(*j);err!=nil{return fail("status_persistence","Cannot save WireGuard intent; repair state storage.",fmt.Errorf("cannot persist WireGuard intent"))}
+  tunnelFail:=func(err error)error{
+   // A failed compound command does not retain passed heartbeat evidence.
+   j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil
+   for i:=range j.Gates {
+    if j.Gates[i].ID=="heartbeat"{j.Gates[i].State="pending"}
+    if j.Gates[i].ID=="tunnel"{j.Gates[i]=onboardingGate{"tunnel","blocked","Check gateway allocation/key consistency, UDP endpoint, WireGuard mode, overlay ICMP and temporary interface cleanup; rerun with the same identity."}}
+   }
+   return fail("wireguard","WireGuard connectivity is unconfirmed. Preserve keys; resolve the reported local or gateway blocker and rerun check-agent --wireguard.",err)
+  }
+  if !snapshot.SupportsTunnel(){return tunnelFail(fmt.Errorf("update the plane for onboarding_tunnel_v1"))}
+  observed,err:=deps.WireGuard(ctx)
+  if err!=nil{return tunnelFail(err)}
+  if observed.IsZero()||ctx.Err()!=nil{return tunnelFail(fmt.Errorf("WireGuard probe interrupted or invalid"))}
+  candidate.WireGuardVerifiedAt=&observed
+  for i:=range candidate.Gates {if candidate.Gates[i].ID=="tunnel" {
+   candidate.Gates[i]=onboardingGate{"tunnel","passed","Fresh WireGuard handshake and gateway overlay echo verified; temporary interface removed. Certification and service activation remain pending."}
+  }}
+  candidate.RecordedAt=time.Now().UTC()
+  candidate.NextAction="WireGuard handshake and gateway data path verified. Keep services inactive; complete certification before activation or selling."
+ }
  if err:=deps.Save(candidate);err!=nil {
   // Do not emit a checked result unless its durable write succeeded. A failed
   // rename/fsync has an uncertain outcome; the caller must retry the check.
   j.State="failed";j.FailureCode="status_persistence";j.RecordedAt=time.Now().UTC()
   j.ProtocolVerified=false;j.LocalPreflightPassed=false
   j.PlaneCheckedAt=nil;j.LastHeartbeatAt=nil;j.ReportedSellState="";j.Gates=nil
-  j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil
+  j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil;j.WireGuardVerifiedAt=nil
   j.NextAction="Status persistence failed; check disk space and installer-state permissions, then rerun check-agent."
   return fmt.Errorf("cannot persist completed onboarding check; success is not confirmed")
  }
@@ -182,6 +213,7 @@ func RunCheckAgent(ctx context.Context,args []string,out,diagnostic io.Writer)in
  flags:=flag.NewFlagSet("check-agent",flag.ContinueOnError);flags.SetOutput(diagnostic)
  path:=flags.String("plan","","installed agent plan")
  approved:=flags.String("approve-plan","","exact agent plan_sha256")
+ wireguard:=flags.Bool("wireguard",false,"allocate an idle peer and probe WireGuard handshake/data path; leave services inactive")
  heartbeat:=flags.Bool("heartbeat",false,"record one authenticated heartbeat after local and program checks; leave services inactive")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0||*path==""||!setupDigestRE.MatchString(*approved){fmt.Fprintln(diagnostic,"require --plan and --approve-plan");return 2}
@@ -223,6 +255,15 @@ func RunCheckAgent(ctx context.Context,args []string,out,diagnostic io.Writer)in
    return client.HeartbeatDevice(ctx,registration.Request,registration.DeviceID,registration.DeviceSecret,uptime)
   }
  }
+ if *wireguard {
+  deps.WireGuard=func(ctx context.Context)(time.Time,error){
+   if err:=deps.Verify(ctx);err!=nil{return time.Time{},err}
+   receipt,err:=client.PrepareTunnel(ctx,registration.Request,registration.DeviceID,registration.DeviceSecret)
+   if err!=nil{return time.Time{},err}
+   if err=deps.Verify(ctx);err!=nil{return time.Time{},err}
+   return newWireguardProbe().check(ctx,receipt.Tunnel,registration.PrivateKey,registration.Request.WGPublicKey,p.Setup.WireGuardMode,p.SHA256)
+  }
+ }
  err=performOnboardingCheck(ctx,&j,deps)
  if json.NewEncoder(out).Encode(j)!=nil{return 1}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
@@ -239,7 +280,7 @@ func RunOnboardingStatus(_ context.Context,args []string,out,diagnostic io.Write
  if err==nil{err=decodeSetupJSON(raw,&j)}
  if err!=nil||j.Schema!=1||j.PlanSHA256!=*digest||!hostregistration.UUID.MatchString(j.RequestID)||
  !hostregistration.UUID.MatchString(j.DeviceID)||!agentNameRE.MatchString(j.HostName)||j.ActivationAllowed||j.SellingAllowed||
- (j.State!="checking"&&j.State!="checked"&&j.State!="failed")||!validHeartbeatJournal(j){
+ (j.State!="checking"&&j.State!="checked"&&j.State!="failed")||!validHeartbeatJournal(j)||!validWireGuardJournal(j){
   fmt.Fprintln(diagnostic,"onboarding status unavailable or invalid");return 1
  }
  // This is a dated local observation, not a live readiness or activation claim.
@@ -255,4 +296,12 @@ func validHeartbeatJournal(j onboardingJournal)bool {
   !j.HeartbeatRecordedAt.IsZero()&&j.HeartbeatUptimeS!=nil&&*j.HeartbeatUptimeS>=0&&*j.HeartbeatUptimeS<=1<<31-1&&
   j.LastHeartbeatAt!=nil&&j.LastHeartbeatAt.Equal(*j.HeartbeatRecordedAt)&&
   j.PlaneCheckedAt!=nil&&j.PlaneCheckedAt.Equal(*j.HeartbeatRecordedAt)
+}
+
+func validWireGuardJournal(j onboardingJournal)bool {
+ passed:=false
+ for _,gate:=range j.Gates {if gate.ID=="tunnel"&&gate.State=="passed"{passed=true}}
+ if j.WireGuardVerifiedAt==nil{return !passed}
+ return j.WireGuardRequested&&j.State=="checked"&&passed&&!j.WireGuardVerifiedAt.IsZero()&&
+  !j.WireGuardVerifiedAt.After(j.RecordedAt)&&j.ProtocolVerified&&j.LocalPreflightPassed
 }
