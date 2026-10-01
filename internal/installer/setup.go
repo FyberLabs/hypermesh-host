@@ -28,14 +28,15 @@ type SetupProfile struct {
 	Validation string `json:"validation"`
 	DriverPolicy string `json:"driver_policy"`
 	RequiredPackages []string `json:"required_packages"`
+	UserspacePackages []string `json:"userspace_packages"`
 }
 
 func setupProfiles() []SetupProfile {
-	packages := []string{"ca-certificates", "gnupg", "python3", "wireguard-go", "wireguard-tools"}
+	packages := []string{"ca-certificates", "gnupg", "python3", "wireguard-tools"}
 	return []SetupProfile{
-		{"ubuntu-jetson-cuda", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...)},
-		{"ubuntu-amd-hip", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...)},
-		{"ubuntu-discrete-cuda", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...)},
+		{"ubuntu-jetson-cuda", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-amd-hip", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-discrete-cuda", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
 	}
 }
 
@@ -63,6 +64,7 @@ type SetupPlan struct {
 	InstallerVersion string `json:"installer_version"`
 	InstallerBuild int `json:"installer_build"`
 	Profile *SetupProfile `json:"profile"`
+	WireGuardMode string `json:"wireguard_mode"`
 	Preflight Plan `json:"preflight"`
 	Platform SetupPlatform `json:"platform"`
 	Packages []PackageChange `json:"packages"`
@@ -129,6 +131,7 @@ func runSetupPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	allocation := flags.Int64("uma-gib", 0, "proposed UMA allocation in GiB")
 	address := flags.String("aiuditor-check-url", "", "HTTPS readiness URL")
 	profile := flags.String("profile", "auto", "auto or a profile ID from --list-profiles")
+	wireguardMode := flags.String("wireguard-mode", "kernel", "kernel (default) or userspace; only userspace requires wireguard-go")
 	headless := flags.Bool("headless", false, "propose multi-user.target for the next boot; still requires later approval")
 	list := flags.Bool("list-profiles", false, "list versioned candidate policies without probing")
 	if err := flags.Parse(args); err != nil {
@@ -136,6 +139,9 @@ func runSetupPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 		return 2
 	}
 	if flags.NArg() != 0 { fmt.Fprintln(diagnostic, "unexpected positional arguments"); return 2 }
+	if *wireguardMode != "kernel" && *wireguardMode != "userspace" {
+		fmt.Fprintln(diagnostic, "--wireguard-mode must be kernel or userspace"); return 2
+	}
 	if *list {
 		if err := json.NewEncoder(out).Encode(setupProfiles()); err != nil { return 1 }
 		return 0
@@ -154,7 +160,7 @@ func runSetupPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	if err := json.Unmarshal(preliminary.Bytes(), &p); err != nil {
 		fmt.Fprintln(diagnostic, "cannot read preliminary preflight"); return 1
 	}
-	result := buildSetupPlan(ctx, p, *profile, *headless, source)
+	result := buildSetupPlan(ctx, p, *profile, *wireguardMode, *headless, source)
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(result); err != nil { fmt.Fprintln(diagnostic, "cannot write setup plan"); return 1 }
@@ -208,8 +214,8 @@ func parseSetupOS(data []byte) (string, string, error) {
 	return values["ID"], values["VERSION_ID"], nil
 }
 
-func buildSetupPlan(ctx context.Context, p Plan, requested string, headless bool, source setupSource) SetupPlan {
-	result := SetupPlan{SchemaVersion: 1, InstallerCommit: buildinfo.Current(),
+func buildSetupPlan(ctx context.Context, p Plan, requested, wireguardMode string, headless bool, source setupSource) SetupPlan {
+	result := SetupPlan{SchemaVersion: 1, WireGuardMode: wireguardMode, InstallerCommit: buildinfo.Current(),
 		InstallerVersion: buildinfo.CurrentVersion(), InstallerBuild: buildinfo.CurrentBuild(),
 		Preflight: p, Packages: []PackageChange{}, Changes: []SetupChange{}, Blockers: append([]string{}, p.Blockers...),
 		Pending: []string{"Approve a complete plan and revalidate its inputs immediately before applying",
@@ -221,6 +227,7 @@ func buildSetupPlan(ctx context.Context, p Plan, requested string, headless bool
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	fail := func(message string) { result.Blockers = append(result.Blockers, message) }
+	if wireguardMode != "kernel" && wireguardMode != "userspace" { fail("select kernel or userspace WireGuard mode") }
 	if !p.PreliminaryChecksPassed { fail("preliminary preflight must pass before setup can be approved") }
 	raw, err := source.read("/etc/os-release")
 	if err != nil { fail("cannot read OS identity") } else {
@@ -233,6 +240,10 @@ func buildSetupPlan(ctx context.Context, p Plan, requested string, headless bool
 	}
 	result.Profile, err = selectSetupProfile(p, result.Platform, requested)
 	if err != nil { fail(err.Error()) }
+	if result.Profile != nil && wireguardMode == "userspace" {
+		result.Profile.RequiredPackages = append(result.Profile.RequiredPackages, result.Profile.UserspacePackages...)
+		sort.Strings(result.Profile.RequiredPackages)
+	}
 	raw, err = source.output(ctx, "systemctl", "get-default")
 	if err != nil { fail("cannot read systemd default target") } else {
 		result.Platform.DefaultTarget = strings.TrimSpace(string(raw))

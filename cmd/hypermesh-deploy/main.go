@@ -109,6 +109,7 @@ func usage() {
 Commands:
   plan-setup  review versioned Linux prerequisite package and headless changes.
               Resource/readiness flags plus --profile auto and optional --headless.
+              --wireguard-mode kernel (default) or userspace; only userspace needs wireguard-go.
               --list-profiles lists candidate policies; this command applies nothing.
   download  fetch a signed deploy CLI using independently trusted key material.
             Use download --help for required release, channel and build constraints.

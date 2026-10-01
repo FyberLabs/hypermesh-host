@@ -592,8 +592,13 @@ need an explicit future policy; the planner does not replace them.
 No OS, kernel, driver, power-mode or GPU-clock upgrade is proposed. The old
 AGX command's fixed version pins are not reused as certification evidence.
 
-Missing prerequisites are ca-certificates, gnupg, python3, wireguard-go and
-wireguard-tools. Installed native packages remain unchanged. Local APT metadata
+Shared prerequisites are ca-certificates, gnupg, python3 and wireguard-tools.
+The explicit \`--wireguard-mode kernel\` default matches the agent\'s kernel path.
+Only \`--wireguard-mode userspace\` adds wireguard-go. Mode is recorded in the
+plan and its digest; the later apply stage must render the same mode into
+agent/service configuration. Profile names do not force userspace mode, so
+kernel-capable Jetson/J4012, AMD and discrete hosts do not need wireguard-go.
+Kernel module/tunnel readiness still needs verification before enrollment. Installed native packages remain unchanged. Local APT metadata
 supplies candidates; the planner does not refresh sources or download packages.
 It simulates required versions, pins the complete dependency closure, and
 simulates again to confirm that the displayed version-pinned argv reproduces
