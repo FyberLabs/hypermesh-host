@@ -138,3 +138,39 @@ func TestAgentJournalPrivateAtomicPersistence(t *testing.T) {
 	if err=decodeSetupJSON(raw,&got);err!=nil||got.State!=j.State{t.Fatal(got,err)}
 	files,_:=filepath.Glob(filepath.Join(dir,".agent-journal-*"));if len(files)!=0{t.Fatal("journal temp leaked")}
 }
+
+func TestRejectedPrecheckDoesNotAuthorizeAdoptionOnRetry(t *testing.T) {
+	p:=agentInstallFixture(t);files:=agentPayloads(p,[]byte("agent"));root:=t.TempDir()
+	if err:=writeAgentFile(agentDest(root,files[0].Path),files[0]);err!=nil{t.Fatal(err)}
+	j:=agentInstallJournal{Schema:1,PlanSHA256:p.SHA256}
+	save:=func(agentInstallJournal)error{return nil}
+	for attempt:=0;attempt<2;attempt++ {
+		if err:=installAgentFiles(context.Background(),root,files,j.Started,&j,save);err==nil{t.Fatal("adopted preexisting file")}
+		j.State="failed" // The CLI persists the failure, without granting resume.
+		if j.Started{t.Fatal("precheck failure authorized resume")}
+	}
+}
+func TestAgentUnitSearchPathsAndInheritedOverrides(t *testing.T) {
+	p:=agentInstallFixture(t);files:=agentPayloads(p,[]byte("agent"))
+	for _,dir:=range []string{"/usr/local/lib/systemd/system","/usr/lib/systemd/system","/run/systemd/generator.early","/custom/manager-units"} {
+		for _,name:=range []string{"hypermesh-agent.service","hypermesh-wg.service",
+			"hypermesh-agent.service.d","hypermesh-wg.service.d","hypermesh-.service.d","service.d"} {
+			root:=t.TempDir();path:=agentDest(root,filepath.Join(dir,name))
+			if err:=os.MkdirAll(filepath.Dir(path),0o755);err!=nil{t.Fatal(err)}
+			if err:=os.WriteFile(path,[]byte("override"),0o644);err!=nil{t.Fatal(err)}
+			if err:=checkAgentUnitPathList(root,files,"/etc/systemd/system "+dir);err==nil{t.Fatal("ignored",path)}
+		}
+	}
+	for _,bad:=range []string{"","relative","/path/../other","/path\\x20space"} {
+		if err:=checkAgentUnitPathList(t.TempDir(),files,bad);err==nil{t.Fatal("accepted path list",bad)}
+	}
+	root:=t.TempDir()
+	source:=setupSource{Output:func(_ context.Context,name string,args ...string)([]byte,error){
+		if name=="systemd-analyze"{return []byte("/etc/systemd/system\n/usr/local/lib/systemd/system"),nil}
+		return []byte("/custom/manager-units"),nil
+	}}
+	if err:=checkAgentUnitPaths(context.Background(),source,root,files);err!=nil{t.Fatal(err)}
+	path:=agentDest(root,"/custom/manager-units/service.d")
+	if err:=os.MkdirAll(path,0o755);err!=nil{t.Fatal(err)}
+	if err:=checkAgentUnitPaths(context.Background(),source,root,files);err==nil{t.Fatal("ignored running manager path")}
+}

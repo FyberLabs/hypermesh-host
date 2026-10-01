@@ -45,6 +45,7 @@ type agentInstallJournal struct {
 	Schema int `json:"schema"`
 	PlanSHA256 string `json:"plan_sha256"`
 	State string `json:"state"`
+	Started bool `json:"started"`
 	Completed []string `json:"completed"`
 	Error string `json:"error,omitempty"`
 }
@@ -238,7 +239,7 @@ func checkAgentConflicts(root string,files []agentPayload,resume bool)error {
 }
 func installAgentFiles(ctx context.Context,root string,files []agentPayload,resume bool,j *agentInstallJournal,save func(agentInstallJournal)error)error {
 	if err:=checkAgentConflicts(root,files,resume);err!=nil{return err}
-	j.State="installing";j.Error=""
+	j.State="installing";j.Error="";j.Started=true
 	if err:=save(*j);err!=nil{return err}
 	for _,f:=range files {
 		if err:=ctx.Err();err!=nil{return err}
@@ -297,10 +298,11 @@ func RunInstallAgent(ctx context.Context,args []string,out,diagnostic io.Writer)
 		if err==nil{err=decodeSetupJSON(raw,&j)}
 		if err==nil&&(j.Schema!=1||j.PlanSHA256!=p.SHA256){err=fmt.Errorf("agent journal does not match")}
 		if err!=nil{fmt.Fprintln(diagnostic,"invalid agent journal; preserve it for recovery");return 1}
-		resume=true
+		resume=j.Started
 	} else if !os.IsNotExist(statErr){fmt.Fprintln(diagnostic,"cannot inspect agent journal");return 1}
 	save:=func(value agentInstallJournal)error{return saveAgentJournal(journalPath,value)}
-	err=secureSetupDirectory("/var/lib/hypermesh",false)
+	err=checkAgentUnitPaths(ctx,setupSource{},"",agentPayloads(p,binary))
+	if err==nil {err=secureSetupDirectory("/var/lib/hypermesh",false)}
 	if err==nil {err=installAgentFiles(ctx,"",agentPayloads(p,binary),resume,&j,save)}
 	if err!=nil {j.State="failed";j.Error=err.Error();if saveErr:=save(j);saveErr!=nil{fmt.Fprintln(diagnostic,"cannot persist failure journal")}}
 	if encodeErr:=json.NewEncoder(out).Encode(j);encodeErr!=nil{return 1}
@@ -320,4 +322,34 @@ func RunAgentInstallStatus(_ context.Context,args []string,out,diagnostic io.Wri
 	if err!=nil||j.Schema!=1||j.PlanSHA256!=*digest{fmt.Fprintln(diagnostic,"agent installation journal unavailable or invalid");return 1}
 	if err=json.NewEncoder(out).Encode(j);err!=nil{return 1}
 	return 0
+}
+
+func checkAgentUnitPaths(ctx context.Context,source setupSource,root string,files []agentPayload)error {
+	// Include compiled defaults (even currently empty paths) and the running
+	// manager's actual search path. Never assume /etc and /usr/lib are exhaustive.
+	defaults,err:=source.output(ctx,"systemd-analyze","--system","unit-paths")
+	if err!=nil{return fmt.Errorf("cannot determine systemd unit search paths")}
+	actual,err:=source.output(ctx,"systemctl","--system","show","-p","UnitPath","--value")
+	if err!=nil{return fmt.Errorf("cannot determine running systemd unit search paths")}
+	return checkAgentUnitPathList(root,files,string(defaults)+"\n"+string(actual))
+}
+func checkAgentUnitPathList(root string,files []agentPayload,raw string)error {
+	paths:=strings.Fields(raw)
+	if len(paths)==0{return fmt.Errorf("systemd unit search path is empty")}
+	managed:=map[string]bool{}
+	for _,f:=range files {managed[f.Path]=true}
+	for _,dir:=range paths {
+		if !filepath.IsAbs(dir)||filepath.Clean(dir)!=dir||strings.ContainsAny(dir,"\\\"'"){
+			return fmt.Errorf("cannot safely interpret systemd unit search path")
+		}
+		for _,name:=range []string{"hypermesh-agent.service","hypermesh-wg.service",
+			"hypermesh-agent.service.d","hypermesh-wg.service.d","hypermesh-.service.d","service.d"} {
+			path:=filepath.Join(dir,name)
+			if managed[path] {continue} // Exact bytes/type/mode checked by the install engine.
+			if _,err:=os.Lstat(agentDest(root,path));!os.IsNotExist(err){
+				return fmt.Errorf("unreviewed systemd unit or inherited drop-in blocks installation: %s",path)
+			}
+		}
+	}
+	return nil
 }

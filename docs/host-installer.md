@@ -780,7 +780,9 @@ Application uses the prerequisite install lock and a private atomic journal at
 `/var/lib/hypermesh/installer/agent-PLAN_SHA256.json`. The agent state directory
 must be root-owned 0700. Existing files with different bytes, permissions or
 ownership, symlinks, enrolled identity, activation marker, vendor units and
-service overrides block first installation. No existing file is replaced.
+service overrides block first installation. Both compiled and running-manager
+systemd search paths are checked, including inherited prefix/type drop-ins.
+A failed initial conflict check does not authorize adoption on a second attempt. No existing file is replaced.
 Resume with the same command: matching installed files are reconciled even if
 their completion was not journaled. File publication is atomic and directories
 are fsynced. A crash between publication and temporary-link removal can require
