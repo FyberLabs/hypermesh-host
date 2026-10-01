@@ -994,10 +994,19 @@ load_signing_material() {
     echo "hypermesh release: signing key secret is empty" >&2
     return 1
   fi
-  if ! az keyvault secret show --vault-name "$vault" --name "$pass_secret" --query value -o tsv > "$pass_file"; then
-    echo "hypermesh release: reading the signing passphrase from Key Vault failed" >&2
-    return 1
+  # Infra omits this optional secret for an unprotected signing key.
+  # Capture diagnostics privately; never turn access/network errors into an
+  # empty passphrase. GPG still must successfully sign and verify artifacts.
+  if ! az keyvault secret show --vault-name "$vault" --name "$pass_secret" --query value -o tsv > "$pass_file" 2> "${home}/pass-error"; then
+    if grep -q '^ERROR: (SecretNotFound)' "${home}/pass-error"; then
+      : > "$pass_file"
+      echo "hypermesh release: optional signing passphrase absent; using an empty passphrase" >&2
+    else
+      echo "hypermesh release: reading the signing passphrase from Key Vault failed (diagnostics suppressed)" >&2
+      return 1
+    fi
   fi
+  rm -f "${home}/pass-error"
   # tsv appends one newline. The passphrase file must not keep it.
   raw=$(<"$pass_file")
   printf '%s' "$raw" > "$pass_file"
