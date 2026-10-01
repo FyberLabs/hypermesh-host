@@ -480,3 +480,10 @@ At implementation time, the committed infra update-key and fingerprint lists
 are empty. Their approved independent source is pending operator input.
 Do not describe the website bootstrap as ready until those trust and delivery
 items are complete. Do not add the private signing key to a host package.
+
+Bootstrap artifact transfers have a 120-second end-to-end deadline covering
+connection setup, redirects, response headers and the entire body, in addition
+to the 30-second socket timeout and size limits. A Unix main-thread interval
+timer interrupts trickling responses; the timer and handler are restored after
+each transfer. Unsupported timer contexts fail closed. Regression tests cover
+a continuously trickling local server and delayed response setup.
