@@ -35,6 +35,7 @@ type WorkloadReceipt struct {
 	SampleMS int `json:"sample_ms"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
 	CleanupComplete bool `json:"cleanup_complete"`
+	ThermalC *float64 `json:"thermal_c,omitempty"`
 	ContextFit *pathb.ContextFit `json:"context_fit,omitempty"`
 }
 
@@ -87,5 +88,5 @@ func runLocalWorkloadPreflight(ctx context.Context,r WorkloadPreflight,state str
 	if !res.Passed||!res.WorkloadVerified||!res.Measured {
 		return WorkloadReceipt{},fmt.Errorf("pinned workload preflight failed: %s",res.Reason)
 	}
-	return WorkloadReceipt{Request:r,HostImageHash:res.ImageHash,SampleMS:res.SampleMs,TokensPerSecond:res.DecodeTokS,CleanupComplete:true,ContextFit:res.ContextFit},nil
+	return WorkloadReceipt{Request:r,HostImageHash:res.ImageHash,SampleMS:res.SampleMs,TokensPerSecond:res.DecodeTokS,CleanupComplete:true,ContextFit:res.ContextFit,ThermalC:res.ThermalC},nil
 }

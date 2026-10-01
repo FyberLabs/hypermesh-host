@@ -1433,6 +1433,11 @@ and N5 GPU evidence must still be collected.
 
 ## Remaining installation-to-ready sequence
 
+Authenticated acquisition and controlled certification/activation are now implemented:
+see [the operator and host procedure](authenticated-certification.md). The numbered
+certification/start items below describe the original sequence and are superseded
+by that procedure; physical acceptance remains pending.
+
 Complete these stages in order; a green diagnostic must not skip later gates:
 
 1. Run an approved pinned model/runtime compatibility and context-fit workload,
@@ -1634,3 +1639,14 @@ Authenticated model acquisition, immutable AIuditor run evidence, controlled
 certification/service activation, guided repair/reboot and physical AGX/N5
 acceptance remain open. The export is historical and never starts services,
 retries a workload or authorizes selling.
+
+
+### Completed: authenticated model acquisition and controlled activation (2026-10-01)
+
+The Linux NVIDIA installer now supports `plan-certification`, `certify-agent`, and
+`activate-agent`, backed by tenant/device-bound frozen SQL runs and original-owner
+approval. See [authenticated certification](authenticated-certification.md) for
+configuration, review, commands, retry behavior and remaining acceptance work.
+Earlier references above to these two milestones being pending are historical.
+Guided orchestration, self-update, repair/uninstall, sustained benchmarks and the
+remaining hardware/platform acceptance tasks are still open.

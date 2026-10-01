@@ -24,7 +24,17 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
-	if name == "plan-workload" || name == "check-workload" || name == "workload-status" {
+	if name == "plan-certification" || name == "certify-agent" || name == "activate-agent" {
+  ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+  code := 2
+  switch name {
+  case "plan-certification": code = installer.RunPlanCertification(ctx,os.Args[2:],os.Stdout,os.Stderr)
+  case "certify-agent": code = installer.RunCertifyAgent(ctx,os.Args[2:],os.Stdout,os.Stderr)
+  case "activate-agent": code = installer.RunActivateAgent(ctx,os.Args[2:],os.Stdout,os.Stderr)
+  }
+  stop();os.Exit(code)
+ }
+ if name == "plan-workload" || name == "check-workload" || name == "workload-status" {
 		ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
 		run:=installer.RunPlanWorkload
 		if name=="check-workload"{run=installer.RunCheckWorkload}
@@ -159,6 +169,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan-certification  obtain an authenticated frozen model/runtime plan; --agent-plan FILE
+  certify-agent  acquire and certify while inactive; --plan FILE --approve-plan SHA256 --run
+  activate-agent  original-owner approval and paused startup; --plan FILE --approve-plan SHA256 --start
   plan-workload  review explicit local model/runtime pins; use --help.
   check-workload  run approved inference with host services inactive.
                   --plan FILE --approve-plan SHA256 --run

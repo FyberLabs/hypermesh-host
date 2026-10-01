@@ -58,7 +58,7 @@ func(c *Client) PrepareTunnel(ctx context.Context,r Request,deviceID,secret stri
  if err:=c.request(ctx,"POST","/api/v1/hypermesh/agent/onboarding/tunnel",secret,q,&out);err!=nil{return out,err}
  if err:=c.checkOnboarding(out.OnboardingSnapshot,r,q);err!=nil{return TunnelReceipt{},err}
  if !out.SupportsTunnel()||out.AIuditorProgramState!="ready"||out.SellState!="paused"||
-  out.PathBState!="never-run"||*out.ScheduleHold||!(*out.ClassAvailable)||
+  !oneOf(out.PathBState,"never-run","green")||*out.ScheduleHold||!(*out.ClassAvailable)||
   out.CheckedAt.Before(started.Add(-time.Minute))||out.CheckedAt.After(time.Now().Add(time.Minute)) {
   return TunnelReceipt{},fmt.Errorf("plane did not authorize an inactive WireGuard probe")
  }
