@@ -168,7 +168,8 @@ Commands:
   runtime-memory-status  read dated allocation evidence; --setup-plan-sha SHA256
   support-bundle  export redacted, historical installer diagnostics (Linux, root).
                   --plan-sha SHA256 [--setup-plan-sha SHA256] --output /absolute/new.json
-                  A setup digest alone also works; use support-bundle --help.
+                  Add --workload-plan-sha SHA256 for inference/context evidence.
+                  Any one plan digest also works; use support-bundle --help.
   check-agent  verify saved device identity, plane protocol and local preflight.
                --plan FILE --approve-plan SHA256 [--heartbeat] [--wireguard]; does not activate services.
                --heartbeat records one HTTPS heartbeat, not a verified tunnel.

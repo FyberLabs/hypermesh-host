@@ -1592,3 +1592,45 @@ be upgraded through a reviewed digest; there is no silent short-check fallback.
 
 Native API references: [llama.cpp server protocol](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
 and [native completion response](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-task.cpp).
+
+
+### Completed: workload recovery evidence in support bundles (2026-10-01)
+
+Include the exact workload plan digest when exporting installer diagnostics:
+
+```sh
+sudo hypermesh-deploy support-bundle \\
+  --setup-plan-sha SETUP_PLAN_SHA256 \\
+  --workload-plan-sha WORKLOAD_PLAN_SHA256 \\
+  --output /root/hypermesh-support.json
+```
+
+Add `--plan-sha AGENT_PLAN_SHA256` to include installation, registration and
+onboarding evidence. Any one of these digests can be used alone. No journal
+discovery or implicit enrollment is performed. A selected setup digest must
+match the workload's embedded setup plan; a mismatch is reported as invalid.
+
+The workload stage validates the entire historical journal and receipt before
+exporting allowlisted measurements: context size, whether full-context work was
+requested, short-inference timing/throughput, cleanup confirmation and (when
+verified) full-context token counts/timing. A short-only check cannot acquire a
+full-context success claim. Failed or interrupted checks export no successful
+measurements. Guidance distinguishes local preflight, runtime, interruption and
+status-persistence failures and calls for inspecting leftover containers before
+retrying. Preserve registration and keys throughout recovery.
+
+Model paths, model/catalog names, registry locations, hashes of model/host images,
+raw saved guidance and embedded setup plans are excluded. The collector holds
+the shared installer lock, reads private regular journals without following
+symlinks, changes no installer state and writes a new private output file.
+Older-build journals remain readable; they do not authorize current execution.
+Every unselected stage is explicitly `not-requested`. Missing, unsafe,
+inconsistent or corrupt selected evidence produces a partial bundle and exit 1.
+A successfully collected failure is still a failure: `collection_complete`
+describes export completeness, never host readiness.
+
+This closes support-export integration for local workload/context checks.
+Authenticated model acquisition, immutable AIuditor run evidence, controlled
+certification/service activation, guided repair/reboot and physical AGX/N5
+acceptance remain open. The export is historical and never starts services,
+retries a workload or authorizes selling.
