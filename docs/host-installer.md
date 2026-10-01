@@ -120,7 +120,8 @@ disabled with consent, not that other services are disabled.
 - [x] Read-only CLI preflight plan with resource/hardware blockers and HTTPS
   endpoint reachability checks.
 - [x] Device-authenticated control-plane protocol and registration identity check, with a redacted readiness snapshot.
-- [ ] Authenticated AIuditor program, WireGuard and workload compatibility checks.
+- [x] Authenticated AIuditor tenant/class program membership check through the plane, without local fallback.
+- [ ] WireGuard and workload compatibility checks.
 - [x] Signed bootstrap verification, channel discovery and persistent build floor.
 - [x] Signed agent download for both Linux architectures, with optional exact installer-release binding.
 - [ ] Reviewed installer self-update.
@@ -1025,8 +1026,8 @@ Preserve private journals locally and never upload them as support logs.
 
 Success is `registered-inactive`: the dashboard device is paused and
 uncertified. No activation marker, service enable/start, certification result or
-selling state is created. The authenticated control-plane check is implemented below. AIuditor program,
-WireGuard and certification gating still precede service activation. AGX-1 physical acceptance is
+selling state is created. The authenticated control-plane and AIuditor program checks are implemented below.
+WireGuard and certification execution still precede service activation. AGX-1 physical acceptance is
 still pending.
 
 Automated coverage includes TLS auth/session separation and response binding,
@@ -1045,7 +1046,7 @@ sudo ./hypermesh-deploy check-agent \
 sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
 ```
 
-This is an identity, protocol and local preflight check. It requires the same
+This is an identity, protocol, AIuditor program and local preflight check. It requires the same
 release-built installer and exact approved agent plan. It reads the saved private
 device identity under the shared installer lock, verifies installed payloads,
 inactive units and key/state files, then reruns current hardware, resource and
@@ -1057,7 +1058,8 @@ The CLI sends a freshly generated 32-byte nonce and the saved registration/devic
 IDs to `POST /api/v1/hypermesh/agent/onboarding/check`, authenticated with the
 saved device secret. No browser login or copied UUID is required for this check.
 The response must match protocol version/capabilities, nonce, tenant,
-registration, device, reported name, class and WireGuard key fingerprint.
+registration, device, reported name, class and WireGuard key fingerprint. It must
+also advertise `aiuditor_program_v1` and return a recognized program state.
 Missing fields, unsupported versions, replayed/mismatched responses, redirects
 and old deployments without the route fail closed. The shared HTTPS transport
 caps responses at 1 MiB and applies a 15-second deadline through the whole body;
@@ -1070,14 +1072,14 @@ bindings cannot be hidden behind the marketplace read cache. The check does not
 publish a heartbeat or make an offline machine appear alive.
 
 Output lists class availability, reported Path A/Path B state, scheduling holds,
-and the remaining heartbeat, AIuditor program, tunnel, activation and selling
+the AIuditor program result, and the remaining heartbeat, tunnel, activation and selling
 gates, with a next action for each. Current hardware intake or certification
 problems remain visible even when the HTTPS check succeeds. A reported green
 certificate does not skip remaining gates. The last heartbeat timestamp is
 historical evidence, not a fresh liveness claim.
 
-`check-agent` exits 0 when device-authenticated API compatibility and the
-implemented local checks pass, 1 when a local/remote check or persistence fails,
+`check-agent` exits 0 when device-authenticated API compatibility, the strict
+AIuditor program gate and implemented local checks pass, 1 when a check or persistence fails,
 and 2 for invalid arguments. **Exit 0 does not mean installation is complete or
 selling is allowed.** `activation_allowed` and `selling_allowed` remain false.
 Neither command creates an activation marker, starts/enables a service, runs a
@@ -1100,7 +1102,7 @@ The companion product change is limited to Hypermesh paths so Panopticon CI
 selects the Hypermesh-family suites. Physical AGX/N5 acceptance remains pending.
 
 Next complete task: an approved, recoverable onboarding execution path for
-authenticated AIuditor/heartbeat/tunnel checks and certification while keeping
+heartbeat/tunnel checks and certification execution while keeping
 paid workload admission disabled, followed by service activation. This check
 does not stand in for that execution or benchmark evidence.
 
@@ -1176,5 +1178,50 @@ fields, historical blocked/failed summaries, source-file preservation,
 partial/missing/corrupt/future journals, size/type/permission/link checks,
 writer-lock exclusion, cancellation, private atomic output and refusal to
 overwrite. Physical AGX/N5 acceptance remains pending. Repair/uninstall,
-authenticated AIuditor/tunnel execution, certification, activation, and live
+tunnel and certification execution, activation, and live
 status presentation remain separate roadmap tasks.
+
+## Completed: authenticated AIuditor program gate
+
+`check-agent` now requires `aiuditor_program_v1` from the plane. Update Panopticon
+before this host release; older planes without that capability cannot pass.
+There are no new installer flags or host-side service credentials. The saved
+device credential stays between the host and plane.
+
+The plane uses its configured AIuditor service token to check authoritative
+role/writer metadata and read valid core-suite membership for this tenant and
+hardware class. Missing/unreachable service, rejected service credentials,
+a witness/wrong writer, an empty suite, malformed membership or crossed
+tenant/class data cannot be replaced by a locally seeded default.
+
+The existing `aiuditor` readiness gate becomes `passed` only for `ready`.
+All other recognized states become `blocked` with a specific next action:
+
+- Configure the plane's `AIUDITOR_SERVICE_URL` and `AIUDITOR_INTERNAL_TOKEN`.
+- Check AIuditor availability and the plane-to-service network.
+- Correct mismatched service authentication without rotating device keys.
+- Select the authoritative writer required by `AIUDITOR_REQUIRED_WRITER`.
+- Have a program operator configure the tenant/class certification suite.
+- Repair incompatible responses or mismatched program records.
+
+On those failures the command exits 1 and durably records `state=failed`,
+`failure_code=aiuditor_program`, the checked timestamp and gates. A verified
+device API/local preflight remains recorded accurately, but cannot turn a
+blocked program into overall success. The next run performs a new probe;
+no previous success is reused. Failed status persistence cannot emit success.
+`onboarding-status` shows the saved guidance, and `support-bundle` recognizes
+the new fixed failure code while preserving its redaction rules.
+
+Both plane-to-AIuditor requests share a ten-second maximum deadline and each
+body is limited to 64 KiB. Redirects and arbitrary host-supplied URLs are not
+used. Raw upstream errors, service tokens and suite rows are not returned to
+the host. Protocol tests exercise missing/unknown capabilities and states,
+and installer tests verify each blocked state persists actionable failure
+without activation or selling permission.
+
+A passed gate proves the plane could authenticate and read its configured
+program. It does **not** prove the host's direct AIuditor/WireGuard path,
+runtime support for that suite, a benchmark result or certification. The
+AIuditor may still need program configuration before AGX-1 acceptance.
+Heartbeat, tunnel/workload verification and controlled activation remain
+the next onboarding execution tasks.

@@ -23,6 +23,7 @@ type OnboardingSnapshot struct {
  HostName string `json:"host_name"`
  ClassID string `json:"class_id"`
  ClassAvailable *bool `json:"class_available"`
+ AIuditorProgramState string `json:"aiuditor_program_state"`
  KeyFingerprint string `json:"key_fingerprint"`
  PathAState string `json:"path_a_state"`
  PathBState string `json:"path_b_state"`
@@ -70,7 +71,7 @@ func (c *Client) checkOnboarding(s OnboardingSnapshot,r Request,q onboardingRequ
   if capabilities[capability]{return fmt.Errorf("duplicate onboarding capability")}
   capabilities[capability]=true
  }
- if !capabilities["device_identity_v1"]||!capabilities["readiness_snapshot_v1"] {
+ if !capabilities["device_identity_v1"]||!capabilities["readiness_snapshot_v1"]||!capabilities["aiuditor_program_v1"] {
   return fmt.Errorf("plane lacks required onboarding capabilities")
  }
  if s.Nonce!=q.Nonce||s.TenantID!=c.tenant||s.RequestID!=r.RequestID||s.DeviceID!=q.DeviceID||
@@ -81,6 +82,9 @@ func (c *Client) checkOnboarding(s OnboardingSnapshot,r Request,q onboardingRequ
  s.ActivationAllowed==nil||s.SellingAllowed==nil||s.TunnelVerified==nil||
  *s.ActivationAllowed||*s.SellingAllowed||*s.TunnelVerified {
   return fmt.Errorf("incompatible onboarding readiness response")
+ }
+ if !oneOf(s.AIuditorProgramState,"ready","unconfigured","unavailable","unauthorized","writer_mismatch","missing_suite","invalid_response") {
+  return fmt.Errorf("missing or unrecognized AIuditor program state; update the plane and retry")
  }
  if !oneOf(s.PathAState,"accepted","pending","rejected","unknown")||
  !oneOf(s.PathBState,"green","never-run","suspended","unknown")||

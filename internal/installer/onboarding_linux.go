@@ -77,12 +77,26 @@ func onboardingGates(s hostregistration.OnboardingSnapshot)[]onboardingGate {
  if *s.ScheduleHold {hold=onboardingGate{"schedule","blocked","Review the hold reason and recovery action in the host dashboard."}}
  gates=append(gates,hold,
   onboardingGate{"heartbeat","pending","Agent heartbeat and current liveness must still be verified; this read sends no heartbeat."},
-  onboardingGate{"aiuditor","pending","Authenticated AIuditor program and certification connectivity checks remain required."},
+  onboardingProgramGate(s.AIuditorProgramState),
   onboardingGate{"tunnel","pending","An authenticated WireGuard handshake and data path still need verification."},
   onboardingGate{"activation","pending","Service activation requires the remaining onboarding workflow; leave services inactive."},
   onboardingGate{"selling","blocked","Selling remains disabled until certification, connectivity and owner approval are complete."})
  return gates
 }
+
+func onboardingProgramGate(state string)onboardingGate {
+ gate:=onboardingGate{"aiuditor","blocked","AIuditor returned an unsupported response; check the deployed API and tenant/class program bindings."}
+ switch state {
+ case "ready":gate=onboardingGate{"aiuditor","passed","The plane authenticated to its configured AIuditor and read this tenant/class suite; no benchmark or host tunnel was run."}
+ case "unconfigured":gate.NextAction="Configure AIUDITOR_SERVICE_URL and AIUDITOR_INTERNAL_TOKEN on the plane, then retry check-agent."
+ case "unavailable":gate.NextAction="Check AIuditor service health and the plane-to-AIuditor connection, then retry check-agent."
+ case "unauthorized":gate.NextAction="Verify the plane's AIUDITOR_INTERNAL_TOKEN matches AIuditor; do not rotate this host's keys."
+ case "writer_mismatch":gate.NextAction="Use an authoritative AIuditor matching AIUDITOR_REQUIRED_WRITER; a witness cannot satisfy this onboarding gate."
+ case "missing_suite":gate.NextAction="Have a program operator configure core certification suite membership for this tenant and hardware class, then retry."
+ }
+ return gate
+}
+
 type onboardingDeps struct {
  Verify func(context.Context)error
  Preflight func(context.Context)error
@@ -112,7 +126,11 @@ func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboar
  candidate.State="checked";candidate.RecordedAt=time.Now().UTC();candidate.ProtocolVerified=true
  candidate.PlaneCheckedAt=&snapshot.CheckedAt;candidate.LastHeartbeatAt=snapshot.LastHeartbeatAt
  candidate.Gates=onboardingGates(snapshot);candidate.ReportedSellState=snapshot.SellState
- candidate.NextAction="Authenticated API and local preflight checks passed. Complete the listed onboarding gates before activation or selling."
+ candidate.NextAction="Authenticated API, AIuditor program and local preflight checks passed. Complete the listed onboarding gates before activation or selling."
+ if snapshot.AIuditorProgramState!="ready" {
+  candidate.State="failed";candidate.FailureCode="aiuditor_program"
+  candidate.NextAction=onboardingProgramGate(snapshot.AIuditorProgramState).NextAction
+ }
  if err:=deps.Save(candidate);err!=nil {
   // Do not emit a checked result unless its durable write succeeded. A failed
   // rename/fsync has an uncertain outcome; the caller must retry the check.
@@ -123,6 +141,7 @@ func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboar
   return fmt.Errorf("cannot persist completed onboarding check; success is not confirmed")
  }
  *j=candidate
+ if j.FailureCode=="aiuditor_program" {return fmt.Errorf("AIuditor program check failed; see onboarding gates and next_action")}
  return nil
 }
 
