@@ -29,6 +29,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Test signing material loading
+        run: python3 packaging/release/test-signing-material.py
+
       - name: Vet
         run: go vet ./...
 
