@@ -1058,3 +1058,35 @@ wipe_gnupg_home() {
     unset GNUPGHOME
   fi
 }
+
+# build_release_binaries ROOT DIST VERSION LDFLAGS
+# Both the agent and operator CLI ship for each supported Linux architecture.
+build_release_binaries() {
+  local root=$1 dist=$2 version=$3 ldflags=$4 arch
+  for arch in arm64 amd64; do
+    (
+      cd "$root" || exit 1
+      CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+        go build -trimpath -ldflags "$ldflags" \
+        -o "${dist}/hypermesh-agent_${version}_linux_${arch}" ./cmd/agent || exit 1
+      CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+        go build -trimpath -ldflags "$ldflags" \
+        -o "${dist}/hypermesh-deploy_${version}_linux_${arch}" ./cmd/hypermesh-deploy || exit 1
+    ) || return 1
+  done
+}
+
+# write_release_checksums DIST VERSION
+# This list is signed, then drives the blob/channel/GitHub asset lists.
+write_release_checksums() {
+  local dist=$1 version=$2
+  (
+    cd "$dist" || exit 1
+    sha256sum \
+      "hypermesh-agent_${version}_linux_arm64" \
+      "hypermesh-agent_${version}_linux_amd64" \
+      "hypermesh-deploy_${version}_linux_arm64" \
+      "hypermesh-deploy_${version}_linux_amd64" \
+      release.json > checksums.txt
+  )
+}

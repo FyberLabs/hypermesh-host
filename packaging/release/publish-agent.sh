@@ -246,16 +246,7 @@ if [ "$channel" = prod ] && [ "$reuse" != 1 ]; then
 fi
 
 ldflags="-s -w -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=${GITHUB_SHA} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Version=${version} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Build=${build}"
-for arch in arm64 amd64; do
-  (
-    cd "$root"
-    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
-      go build -trimpath -ldflags "$ldflags" \
-      -o "${dist}/hypermesh-agent_${version}_linux_${arch}" \
-      ./cmd/agent
-  )
-done
-
+build_release_binaries "$root" "$dist" "$version" "$ldflags"
 umask 077
 signing_fpr=""
 load_signing_material \
@@ -317,13 +308,7 @@ with open(out, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, separators=(",", ":"))
     fh.write("\n")
 PY
-  (
-    cd "$dist"
-    sha256sum \
-      "hypermesh-agent_${version}_linux_arm64" \
-      "hypermesh-agent_${version}_linux_amd64" \
-      release.json > checksums.txt
-  )
+  write_release_checksums "$dist" "$version"
   gpg --batch --pinentry-mode loopback --passphrase-file "${gnupg}/pass" \
     --local-user "$fpr" \
     --output "${dist}/checksums.txt.sig" \
@@ -337,6 +322,8 @@ PY
   artifact_names=(
     "hypermesh-agent_${version}_linux_arm64"
     "hypermesh-agent_${version}_linux_amd64"
+    "hypermesh-deploy_${version}_linux_arm64"
+    "hypermesh-deploy_${version}_linux_amd64"
     release.json
     checksums.txt
     checksums.txt.sig
@@ -566,15 +553,8 @@ if [ -z "$gh_rel" ]; then
   gh_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${dist}/created.json")
 fi
 
-for name in \
-  "hypermesh-agent_${version}_linux_arm64" \
-  "hypermesh-agent_${version}_linux_amd64" \
-  release.json \
-  checksums.txt \
-  checksums.txt.sig \
-  checksums.txt.asc \
-  hypermesh-release.pub
-do
+# Reused production releases keep their original signed artifact set.
+for name in "${artifact_names[@]}"; do
   if [ ! -f "${dist}/${name}" ]; then
     if [ "$reuse" = 1 ] && [ "$name" = checksums.txt.asc ]; then
       continue
