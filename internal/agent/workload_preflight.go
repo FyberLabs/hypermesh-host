@@ -1,0 +1,88 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/pathb"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
+	"github.com/FyberLabs/hypermesh-host/internal/telem"
+)
+
+// WorkloadPreflight is an explicit local check, not an enrollment or agent job.
+// The caller must obtain approval, serialize installer work and verify inactivity.
+type WorkloadPreflight struct {
+	PlanSHA256 string `json:"plan_sha256"`
+	CatalogID string `json:"catalog_id"`
+	ImageDigest string `json:"image_digest"`
+	ModelPath string `json:"model_path"`
+	FileHash string `json:"file_hash"`
+	ContextTokens int `json:"context_tokens"`
+}
+
+type WorkloadReceipt struct {
+	Request WorkloadPreflight `json:"request"`
+	HostImageHash string `json:"host_image_hash"`
+	SampleMS int `json:"sample_ms"`
+	TokensPerSecond float64 `json:"tokens_per_second"`
+	CleanupComplete bool `json:"cleanup_complete"`
+}
+
+var workloadCatalogRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+var workloadPlanRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+func ValidateWorkloadPreflight(r WorkloadPreflight) error {
+	pin,err:=normalizeModelID(r.FileHash)
+	if !workloadPlanRE.MatchString(r.PlanSHA256)||!workloadCatalogRE.MatchString(r.CatalogID)||
+		!certImagePin.MatchString(r.ImageDigest)||err!=nil||pin!=r.FileHash||
+		!filepath.IsAbs(r.ModelPath)||filepath.Clean(r.ModelPath)!=r.ModelPath||
+		strings.ContainsAny(r.ModelPath,":\r\n\x00")||r.ContextTokens<512||r.ContextTokens>131072 {
+		return fmt.Errorf("invalid pinned workload request")
+	}
+	return nil
+}
+
+// RunWorkloadPreflight reuses the pinned runner without constructing an API
+// client, starting a service, reading a credential or changing enrollment.
+func RunWorkloadPreflight(ctx context.Context,r WorkloadPreflight,state string,
+	run func(context.Context,string,...string)([]byte,error)) (WorkloadReceipt,error) {
+	return runLocalWorkloadPreflight(ctx,r,state,run,"")
+}
+func runLocalWorkloadPreflight(ctx context.Context,r WorkloadPreflight,state string,
+	run func(context.Context,string,...string)([]byte,error),endpoint string)(WorkloadReceipt,error){
+	if err:=ValidateWorkloadPreflight(r);err!=nil{return WorkloadReceipt{},err}
+	if run==nil{return WorkloadReceipt{},fmt.Errorf("an isolated runtime runner is required")}
+	// Do not reinterpret a corrupt or stale lease journal as permission to run.
+	if _,err:=os.Lstat(filepath.Join(state,leaseFile));!os.IsNotExist(err){
+		return WorkloadReceipt{},fmt.Errorf("existing lease state must be reconciled before workload preflight")
+	}
+	src:=telem.Default()
+	src.ImageHashEnv="";src.ImageHashFile=""
+	// This local check needs filesystem telemetry only, never an inherited executable.
+	src.LookPath=func(string)(string,error){return "",os.ErrNotExist}
+	a:=&Agent{
+		cfg:Config{StateDir:state,GGUFPath:r.ModelPath,ListenPort:"18080",
+			LlamaCtxSize:strconv.Itoa(r.ContextTokens),LlamaTimeout:"120",LlamaJinja:"1"},
+		pathb:pathb.Runner{Collector:src},
+		runtime:&runtime.NVIDIA{Docker:"/usr/bin/docker",Run:run},
+		log:slog.New(slog.NewTextHandler(io.Discard,nil)),
+		certModelPath:r.ModelPath,certEndpoint:endpoint,
+	}
+	res:=a.runCertWorkload(ctx,api.Job{
+		JobID:r.PlanSHA256,Kind:api.KindCompactCert,SuiteID:pathb.SuitePackV1,
+		CatalogID:r.CatalogID,ImageDigest:r.ImageDigest,FileHash:r.FileHash,
+		Runtime:"nvidia",Backend:"cuda-jetson",
+	},nil)
+	if !res.Passed||!res.WorkloadVerified||!res.Measured {
+		return WorkloadReceipt{},fmt.Errorf("pinned workload preflight failed: %s",res.Reason)
+	}
+	return WorkloadReceipt{r,res.ImageHash,res.SampleMs,res.DecodeTokS,true},nil
+}
