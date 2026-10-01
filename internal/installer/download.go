@@ -28,6 +28,7 @@ type releaseMetadata struct {
 
 type downloadOptions struct {
 	BaseURL, Channel, Arch, Output string
+	StateFile string
 	MinimumBuild int64
 	Key []byte
 	Fingerprints []string
@@ -48,6 +49,7 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 	flags.StringVar(&opt.Channel, "channel", "", "expected channel: test or prod")
 	flags.StringVar(&opt.Arch, "arch", runtime.GOARCH, "target Linux architecture: arm64 or amd64")
 	flags.StringVar(&opt.Output, "output", "", "new output path; existing files are never overwritten")
+	flags.StringVar(&opt.StateFile, "state-file", "", "optional persistent cross-channel build floor in an owner-controlled directory")
 	flags.Int64Var(&opt.MinimumBuild, "min-build", -1, "required minimum accepted signed build")
 	flags.StringVar(&keyPath, "trusted-key", "", "independently trusted armored public key file")
 	flags.StringVar(&fingerprints, "fingerprints", "", "trusted signing fingerprints")
@@ -100,6 +102,20 @@ func validateDownload(opt downloadOptions) error {
 func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, verify signatureCheck) (releaseMetadata, error) {
 	var meta releaseMetadata
 	if err := validateDownload(opt); err != nil { return meta, err }
+	var persist func(int64) error
+	if opt.StateFile != "" {
+		statePath, err := filepath.Abs(opt.StateFile)
+		if err != nil { return meta, fmt.Errorf("invalid state path") }
+		outputPath, err := filepath.Abs(opt.Output)
+		if err != nil || outputPath == statePath || outputPath == statePath+".lock" {
+			return meta, fmt.Errorf("output and state paths must be distinct")
+		}
+		floor, commit, unlock, err := lockBuildState(statePath)
+		if err != nil { return meta, err }
+		defer unlock()
+		persist = commit
+		if floor > opt.MinimumBuild { opt.MinimumBuild = floor }
+	}
 	base := strings.TrimRight(opt.BaseURL, "/") + "/"
 	sums, err := fetch(ctx, base+"checksums.txt", 1<<20)
 	if err != nil { return meta, err }
@@ -124,6 +140,11 @@ func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, 
 	if err != nil { return meta, err }
 	if err := update.CheckHash(sums, name, payload); err != nil { return meta, err }
 	if err := ctx.Err(); err != nil { return meta, fmt.Errorf("download cancelled") }
+	// Persist before exposing executable bytes: a crash can advance the floor
+	// without an output, but cannot expose a newer binary with an older floor.
+	if persist != nil {
+		if err := persist(meta.Build); err != nil { return meta, err }
+	}
 	if err := writeVerifiedCLI(opt.Output, payload); err != nil { return meta, err }
 	return meta, nil
 }

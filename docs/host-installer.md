@@ -341,3 +341,37 @@ Tests cover signature rejection, metadata/binary tampering, wrong channel,
 older builds, existing destinations, staging cleanup, size limits and
 cancellation. The existing GPG verifier suite supplies cryptographic coverage.
 Physical AGX/N5 validation remains pending.
+
+## Persistent accepted-build tracking
+
+Implemented: add `--state-file /owner-controlled/directory/build-state.json`
+to verified CLI downloads. The effective minimum is the larger of the explicit
+`--min-build` and the persisted highest accepted build. One floor spans test
+and production, so switching channels cannot lower it. Same-build retries are
+allowed; older builds are rejected before publishing an executable.
+
+The state is optional for one-off downloads, but required for the future
+automatic bootstrap/update flow. Omitting it provides only the explicit build
+floor. Keep using the same state path; deleting or changing it removes this
+local rollback protection. It is not a defense against a privileged local user.
+
+A directory lock serializes downloads sharing the state file. State writes use
+a private temporary file, fsync and atomic rename. State is committed after
+signature/hash checks and before exposing executable bytes. If output creation
+then fails, the floor may advance without a new binary; retry that same build
+or a newer one. No automatic lowering is performed.
+
+An interrupted process can leave the `.lock` directory. Confirm no downloader
+is running before removing that empty lock directory. Never remove the state
+file as lock recovery. Invalid, unreadable, symlinked or broadly readable state
+files fail closed; restore a trusted record rather than silently resetting.
+Use an owner-controlled local directory that supports rename, links and fsync.
+
+- [x] Persist the accepted build floor across restarts and channels.
+- [x] Test concurrent-lock rejection, restart persistence, same-build retry,
+  older-build rejection, invalid state and private file permissions.
+- [ ] Authenticate latest-release discovery and integrate the persisted floor
+  into automatic installer updates.
+
+This completes local build tracking; automatic discovery, self-replacement and
+full guided onboarding remain pending.

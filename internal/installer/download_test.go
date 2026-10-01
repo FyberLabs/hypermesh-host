@@ -14,7 +14,7 @@ import (
 )
 
 func TestVerifiedDownload(t *testing.T) {
-	for _, mode := range []string{"valid", "signature", "metadata", "payload", "rollback", "channel", "exists"} {
+	for _, mode := range []string{"valid", "signature", "metadata", "payload", "rollback", "channel", "exists", "persisted-rollback"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			opt := downloadOptions{BaseURL: "https://example.invalid/release", Channel: "test", Arch: "arm64",
@@ -29,6 +29,12 @@ func TestVerifiedDownload(t *testing.T) {
 			case "metadata": raw = append(raw, ' ')
 			case "payload": payload = []byte("tampered")
 			case "rollback": opt.MinimumBuild = 22
+			case "persisted-rollback":
+				opt.StateFile = filepath.Join(dir, "state.json")
+				_, commit, unlock, err := lockBuildState(opt.StateFile)
+				if err != nil { t.Fatal(err) }
+				if err := commit(22); err != nil { t.Fatal(err) }
+				unlock()
 			case "channel": opt.Channel = "prod"
 			case "exists":
 				if err := os.WriteFile(opt.Output, []byte("keep"), 0o600); err != nil { t.Fatal(err) }
