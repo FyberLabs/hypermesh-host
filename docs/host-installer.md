@@ -222,3 +222,48 @@ Use the newly reported name for discovery. Update the test smoke host setting
 to `AGX-1` when that host is enrolled; do not retain `agx64-1` as an identity
 assumption or seed a device UUID. Physical enrollment and smoke acceptance
 remain pending that operator run. The N5 MAX is the second hardware target.
+
+## Approved operating modes, billing and device authorization
+
+Status: approved requirements; implementation pending.
+
+| Mode | Model state | Billing |
+| --- | --- | --- |
+| On-demand | No model kept running while idle; set up the requested model for an active lease | 15-minute rental slices, including the time to download, load and prepare a hostable model. |
+| Warm model | Owner chooses a specific model to keep running and ready | One-minute leases or token-based charges once pricing and metering support them end to end. |
+
+Additional setup time is the intended cost differential for custom models,
+rather than an arbitrary custom-model surcharge. Cached files are not a live
+model; caching may reduce actual setup time. Show renters the setup estimate,
+billing start point and minimum charge before acceptance. Track setup time
+separately from ready-to-serve time. Define refunds for host/platform-caused
+provisioning failures before enabling setup billing. Exact rounding, overruns,
+refund and token-metering rules remain to be specified.
+
+The installer should offer headless device authorization: display a short code
+and verification URL, let the owner sign in through a browser, choose their
+tenant and approve the host, then complete enrollment. Generate private keys
+locally and register only public keys. Authorization must expire, be single-use
+and bind to the intended enrollment. Retry/resume must not create duplicate
+devices; intentional retirement and reenrollment must create fresh keys while
+archiving the old identity. Do not collect the owner's password in the terminal.
+
+Implementation and acceptance tasks:
+
+- [ ] Add on-demand/warm-model selection to onboarding and host dashboard.
+- [ ] Implement on-demand preparation only for active leases and 15-minute slices.
+- [ ] Disclose and meter billable setup; test cached/uncached preparation and
+  approved refunds for host/platform provisioning failures.
+- [ ] Advertise the specific warm model and verified readiness; handle mode
+  changes without disrupting active leases.
+- [ ] Implement and reconcile one-minute lease charges and token metering
+  before advertising those options.
+- [ ] Add device authorization URL/code, tenant/host confirmation and installer polling.
+- [ ] Test pending, denied, expired, cancelled and replayed authorization.
+- [ ] Test restart/resume without duplicate enrollment and keep credentials out of logs.
+- [ ] Complete ARM download from hyperme.sh through browser approval to enroll
+  AGX-1 against the rebuilt test plane; repeat acceptance on the N5 MAX.
+
+These tasks span the host installer/agent, Panopticon authorization, lease and
+metering services, pricing, and hyperme.sh interfaces. An installer flag alone
+does not complete an operating mode. Physical acceptance remains pending.
