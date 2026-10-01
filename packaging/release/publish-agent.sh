@@ -324,6 +324,7 @@ PY
     "hypermesh-agent_${version}_linux_amd64"
     "hypermesh-deploy_${version}_linux_arm64"
     "hypermesh-deploy_${version}_linux_amd64"
+    bootstrap.py
     release.json
     checksums.txt
     checksums.txt.sig

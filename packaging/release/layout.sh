@@ -1074,6 +1074,7 @@ build_release_binaries() {
         -o "${dist}/hypermesh-deploy_${version}_linux_${arch}" ./cmd/hypermesh-deploy || exit 1
     ) || return 1
   done
+  cp "${root}/packaging/bootstrap.py" "${dist}/bootstrap.py"
 }
 
 # write_release_checksums DIST VERSION
@@ -1087,6 +1088,7 @@ write_release_checksums() {
       "hypermesh-agent_${version}_linux_amd64" \
       "hypermesh-deploy_${version}_linux_arm64" \
       "hypermesh-deploy_${version}_linux_amd64" \
+      bootstrap.py \
       release.json > checksums.txt
   )
 }
