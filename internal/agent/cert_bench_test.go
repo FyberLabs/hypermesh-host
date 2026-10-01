@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,133 +17,178 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
-func TestPathBStartsTheInspectedImageAndPostsTheSample(t *testing.T) {
-	const pin = "ghcr.io/fyberlabs/hypermesh-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	var mu sync.Mutex
-	var score api.ScorecardReport
-	var posted bool
-	var cmds []string
+const certTestPin = "example.invalid/selected-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, api.Job{
-			JobID: testJob, Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1",
-		})
-	})
-	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+testJob+"/result", func(w http.ResponseWriter, r *http.Request) {
-		var body api.JobResultRequest
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.ImageHash == pin {
-			t.Errorf("path_b image_hash must stay telem, got %q", body.ImageHash)
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc(api.PathScorecard, func(w http.ResponseWriter, r *http.Request) {
-		var body api.ScorecardReport
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		mu.Lock()
-		score = body
-		posted = true
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	})
-	plane := httptest.NewServer(mux)
-	t.Cleanup(plane.Close)
-	completions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(5 * time.Millisecond)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{"message": map[string]string{"content": "ready"}}},
-			"usage":   map[string]any{"completion_tokens": 4},
-		})
-	}))
-	t.Cleanup(completions.Close)
-
+func certFixture(t *testing.T, status int) (*Agent, api.Job, *[][]string) {
+	t.Helper()
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
-	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
-	gguf := filepath.Join(dir, "model.gguf")
-	_ = os.WriteFile(gguf, []byte("weights"), 0o644)
-	a := newTestAgent(t, plane.URL, dir, uptime, "", "")
+	if err := os.WriteFile(uptime, []byte("1 1\n"), 0600); err != nil { t.Fatal(err) }
+	a := newTestAgent(t, "http://127.0.0.1:1", dir, uptime, "", "")
 	a.state.DeviceID = testDevice
 	a.client.DeviceSecret = testSecret
+	gguf, hash := writeTestGGUF(t, dir)
 	a.cfg.GGUFPath = gguf
-	a.pathb.Endpoint = completions.URL
-	a.inspectCatalog = func(context.Context, string) string { return pin }
-	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
-		if len(args) > 0 {
-			mu.Lock()
-			cmds = append(cmds, args[0])
-			mu.Unlock()
+	job := api.Job{JobID:testJob, Kind:api.KindCompactCert, DeviceID:testDevice,
+		SuiteID:"pack-v1", CatalogID:"different-catalog", ImageDigest:certTestPin,
+		FileHash:hash, Runtime:"nvidia", Backend:"cuda-jetson"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct { Model string `json:"model"` }
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != job.CatalogID {
+			t.Error("probe did not use selected catalog alias")
 		}
-		return []byte("cid-cert\n"), nil
+		if status != http.StatusOK { w.WriteHeader(status); return }
+		time.Sleep(3*time.Millisecond)
+		writeJSON(w, 200, map[string]any{
+			"choices": []map[string]any{{"message":map[string]string{"content":"ready"}}},
+			"usage":map[string]int{"completion_tokens":4},
+		})
+	}))
+	t.Cleanup(server.Close)
+	a.certEndpoint = server.URL
+	a.pathb.Endpoint = "http://unrelated.invalid/v1/chat/completions"
+	a.certReadyWait = 20*time.Millisecond
+	a.inspectCatalog = func(context.Context,string)string { t.Error("mutable image lookup"); return "" }
+	calls := new([][]string)
+	a.runtime = &runtime.NVIDIA{Run:func(_ context.Context,_ string,args ...string)([]byte,error) {
+		*calls = append(*calls, append([]string{},args...))
+		return []byte("cert-container"),nil
 	}}
+	return a,job,calls
+}
 
-	if err := a.pullAndRun(context.Background()); err != nil {
-		t.Fatalf("pull: %v", err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if !posted {
-		t.Fatal("measured cert must post a scorecard")
-	}
-	if score.ImageDigest != pin || score.DecodeTokS <= 0 || score.SampleMs < 1 {
-		t.Fatalf("scorecard %+v", score)
-	}
-	if score.ImageHash == pin || score.ImageHash == "" {
-		t.Fatalf("image_hash %q", score.ImageHash)
-	}
-	if a.lease != nil {
-		t.Fatal("cert container must not become the lease")
-	}
-	if !strings.Contains(strings.Join(cmds, " "), "run") || !strings.Contains(strings.Join(cmds, " "), "stop") {
-		t.Fatalf("docker cmds %v", cmds)
+func TestCertRunsOnlyRequestedPinsAndCleansBeforeReturning(t *testing.T) {
+	for _,kind := range []api.JobKind{api.KindCompactCert,api.KindPathB} {
+		t.Run(string(kind),func(t *testing.T) {
+			a,job,calls := certFixture(t,200)
+			job.Kind=kind
+			got:=a.runJob(context.Background(),job)
+			if !got.Passed || !got.Measured || !got.WorkloadVerified || got.DecodeTokS<=0 {t.Fatalf("%+v",got)}
+			if a.localLease()!=nil {t.Fatal("cert became a lease")}
+			joined:=""
+			for _,args:=range *calls {joined+=strings.Join(args," ")+"\n"}
+			for _,part:=range []string{"pull "+certTestPin,"127.0.0.1:8080:8080",job.CatalogID,"stop cert-container","rm hypermesh-cert-bench-"} {
+				if !strings.Contains(joined,part){t.Fatalf("missing %q in %s",part,joined)}
+			}
+			if got.ImageHash==certTestPin || got.ImageHash==job.FileHash {t.Fatal("OS image hash changed meaning")}
+		})
 	}
 }
 
-func TestPathBSkipDoesNotPostAScorecard(t *testing.T) {
-	const pin = "ghcr.io/fyberlabs/hypermesh-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	var posts int
-	mux := http.NewServeMux()
-	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, api.Job{
-			JobID: testJob, Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1",
+func TestCertRejectsUnpinnedOrBusyWorkBeforeDocker(t *testing.T) {
+	cases:=[]struct{name string; change func(*Agent,*api.Job)}{
+		{"missing image",func(a *Agent,j *api.Job){j.ImageDigest=""}},
+		{"tag",func(a *Agent,j *api.Job){j.ImageDigest="example.invalid/model:latest"}},
+		{"truncated digest",func(a *Agent,j *api.Job){j.ImageDigest="example.invalid/model@sha256:a"}},
+		{"missing model pin",func(a *Agent,j *api.Job){j.FileHash=""}},
+		{"wrong model",func(a *Agent,j *api.Job){j.FileHash="sha256:"+strings.Repeat("b",64)}},
+		{"missing catalog",func(a *Agent,j *api.Job){j.CatalogID=""}},
+		{"unknown suite",func(a *Agent,j *api.Job){j.SuiteID="unknown"}},
+		{"missing job",func(a *Agent,j *api.Job){j.JobID=""}},
+		{"missing runtime",func(a *Agent,j *api.Job){j.Runtime=""}},
+		{"unsupported backend",func(a *Agent,j *api.Job){j.Backend="llama-cpp-vulkan"}},
+		{"live lease",func(a *Agent,j *api.Job){a.setLease(&runtime.Handle{LeaseID:"busy"})}},
+		{"missing file",func(a *Agent,j *api.Job){a.cfg.GGUFPath=filepath.Join(a.cfg.StateDir,"absent")}},
+	}
+	for _,tc:=range cases {t.Run(tc.name,func(t *testing.T){
+		a,job,calls:=certFixture(t,200);tc.change(a,&job)
+		got:=a.runJob(context.Background(),job)
+		if got.Passed||got.Measured||got.WorkloadVerified||len(*calls)!=0{t.Fatalf("got %+v calls=%v",got,*calls)}
+	})}
+}
+
+func TestCertFailedReadinessStillCleansAndCannotScore(t *testing.T) {
+	a,job,calls:=certFixture(t,503)
+	got:=a.runJob(context.Background(),job)
+	if got.Passed||got.WorkloadVerified||got.Measured{t.Fatalf("%+v",got)}
+	if last:=(*calls)[len(*calls)-1];last[0]!="rm"{t.Fatalf("cleanup missing: %v",*calls)}
+}
+
+func TestCertCleanupFailureInvalidatesMeasuredSuccess(t *testing.T) {
+	a,job,_:=certFixture(t,200)
+	base:=a.runtime.Run
+	a.runtime.Run=func(ctx context.Context,name string,args ...string)([]byte,error){
+		if args[0]=="stop"{return nil,errors.New("stop failed")}
+		return base(ctx,name,args...)
+	}
+	got:=a.runJob(context.Background(),job)
+	if got.Passed||got.Measured||got.WorkloadVerified||!strings.Contains(got.Reason,"cleanup failed"){t.Fatalf("%+v",got)}
+}
+
+func TestCertModelMutationInvalidatesSample(t *testing.T) {
+	a,job,_:=certFixture(t,200)
+	base:=a.runtime.Run
+	a.runtime.Run=func(ctx context.Context,name string,args ...string)([]byte,error){
+		if args[0]=="run"{if err:=os.WriteFile(a.cfg.GGUFPath,[]byte("changed"),0600);err!=nil{t.Fatal(err)}}
+		return base(ctx,name,args...)
+	}
+	got:=a.runJob(context.Background(),job)
+	if got.Passed||got.Measured||got.WorkloadVerified{t.Fatalf("%+v",got)}
+}
+
+func TestCertScoresOnlyExecutedCatalogAndRequiresAcceptance(t *testing.T) {
+	for _,status:=range []int{200,503} {t.Run(http.StatusText(status),func(t *testing.T){
+		a,job,calls:=certFixture(t,200)
+		var mu sync.Mutex
+		var scores []api.ScorecardReport
+		var passed bool
+		mux:=http.NewServeMux()
+		mux.HandleFunc(api.PathJobs,func(w http.ResponseWriter,r *http.Request){writeJSON(w,200,job)})
+		mux.HandleFunc(api.PathScorecard,func(w http.ResponseWriter,r *http.Request){
+			var score api.ScorecardReport
+			if err:=json.NewDecoder(r.Body).Decode(&score);err!=nil{t.Error(err)}
+			mu.Lock();scores=append(scores,score);mu.Unlock()
+			w.WriteHeader(status)
 		})
-	})
-	mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+testJob+"/result", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc(api.PathScorecard, func(w http.ResponseWriter, r *http.Request) {
-		posts++
-		w.WriteHeader(http.StatusOK)
-	})
-	plane := httptest.NewServer(mux)
-	t.Cleanup(plane.Close)
-	completions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(completions.Close)
+		mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+testJob+"/result",func(w http.ResponseWriter,r *http.Request){
+			var body api.JobResultRequest
+			if err:=json.NewDecoder(r.Body).Decode(&body);err!=nil{t.Error(err)}
+			mu.Lock();passed=body.Passed;mu.Unlock()
+			w.WriteHeader(200)
+		})
+		server:=httptest.NewServer(mux);defer server.Close()
+		a.client.BaseURL=server.URL
+		if err:=a.pullAndRun(context.Background());err!=nil{t.Fatal(err)}
+		mu.Lock();defer mu.Unlock()
+		if len(scores)!=1||scores[0].CatalogID!=job.CatalogID||scores[0].ImageDigest!=certTestPin||scores[0].SampleMs<1 {t.Fatalf("scores %+v",scores)}
+		if passed!=(status==200){t.Fatalf("passed=%v status=%d",passed,status)}
+		if (*calls)[len(*calls)-1][0]!="rm"{t.Fatal("cleanup incomplete")}
+	})}
+}
 
-	dir := t.TempDir()
-	uptime := filepath.Join(dir, "uptime")
-	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
-	gguf := filepath.Join(dir, "model.gguf")
-	_ = os.WriteFile(gguf, []byte("weights"), 0o644)
-	a := newTestAgent(t, plane.URL, dir, uptime, "", "")
-	a.state.DeviceID = testDevice
-	a.client.DeviceSecret = testSecret
-	a.cfg.GGUFPath = gguf
-	a.pathb.Endpoint = completions.URL
-	a.certReadyWait = 20 * time.Millisecond
-	a.sleep = func(time.Duration) {}
-	a.inspectCatalog = func(context.Context, string) string { return pin }
-	a.runtime = &runtime.NVIDIA{Run: func(context.Context, string, ...string) ([]byte, error) {
-		return []byte("cid-cert\n"), nil
-	}}
+func TestCertHashHonorsCancellation(t *testing.T) {
+	a,_,_:=certFixture(t,200)
+	ctx,cancel:=context.WithCancel(context.Background());cancel()
+	if _,err:=certFileHash(ctx,a.cfg.GGUFPath);err==nil{t.Fatal("cancelled hash accepted")}
+}
 
-	if err := a.pullAndRun(context.Background()); err != nil {
-		t.Fatalf("pull: %v", err)
+func TestCertEgressObservationPrecedesCleanup(t *testing.T) {
+	a,job,_:=certFixture(t,200)
+	job.Kind=api.KindPathB
+	alive,observed:=false,false
+	base:=a.runtime.Run
+	a.runtime.Run=func(ctx context.Context,name string,args ...string)([]byte,error){
+		if args[0]=="run"{alive=true}
+		if args[0]=="stop"{if !observed{t.Error("cleanup preceded observation")};alive=false}
+		return base(ctx,name,args...)
 	}
-	if posts != 0 {
-		t.Fatalf("inference skip must not post a scorecard, posts=%d", posts)
+	a.dockerRun=func(context.Context,...string)([]byte,error){
+		if !alive{t.Error("observed an absent certification container")}
+		return []byte(`[{"Internal":true,"Containers":{"cert-container":{"Name":"hypermesh-cert-bench","IPv4Address":"172.30.0.2/24"}}}]`),nil
 	}
+	a.egressSample=func(context.Context)([]string,bool){
+		observed=true
+		return []string{"172.30.0.2:1234 8.8.8.8:443"},true
+	}
+	got:=a.runJob(context.Background(),job)
+	if !observed||alive||got.EgressOk==nil||*got.EgressOk||got.EgressReason!=runtime.EgressUnexpected{
+		t.Fatalf("observation lost: alive=%v observed=%v result=%+v",alive,observed,got)
+	}
+}
+
+func TestCertEmptySuiteUsesThinV1Identity(t *testing.T) {
+	a,job,_:=certFixture(t,200)
+	job.SuiteID=""
+	got:=a.runJob(context.Background(),job)
+	if !got.Passed||got.Reason!="thin-v1"||certSuite(job.SuiteID)!="thin-v1"{t.Fatalf("%+v",got)}
 }

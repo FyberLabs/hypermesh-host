@@ -17,7 +17,6 @@ import (
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/bench"
-	"github.com/FyberLabs/hypermesh-host/internal/catalog"
 	"github.com/FyberLabs/hypermesh-host/internal/logsafe"
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
@@ -28,6 +27,8 @@ import (
 
 // Agent is the host process.
 type Agent struct {
+	// certEndpoint is a test seam; production certification always uses loopback.
+	certEndpoint string
 	cfg     Config
 	client  *api.Client
 	telem   telem.Source
@@ -671,18 +672,16 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 		}
 	}()
 
-	if job.Kind == api.KindPathB || job.Kind == api.KindCompactCert {
-		stop := a.ensureCertSample(ctx)
-		defer stop()
-	}
 	res := a.runJob(ctx, *job)
-	if job.Kind == api.KindPathB {
+	if job.Kind == api.KindPathB && strings.TrimSpace(job.CatalogID) == "" {
 		a.attachEgressObservation(ctx, &res)
 	}
 	// Compact-cert band check on the plane needs the scorecard before the
 	// job result greens path_b_state. Lab path_b keeps post-then-scorecard.
 	if job.Kind == api.KindCompactCert {
-		a.reportScorecard(ctx, *job, res.Result)
+		if err := a.reportScorecard(ctx, *job, res.Result); err != nil {
+			res.Result = pathb.Result{Passed: false, Reason: "cert scorecard not accepted"}
+		}
 		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
 			// The retry budget is spent. Staying busy would block a
 			// self-update until this process restarts.
@@ -694,68 +693,27 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 			a.pendingResult.Store(false)
 			return err
 		}
-		a.reportScorecard(ctx, *job, res.Result)
+		if err := a.reportScorecard(ctx, *job, res.Result); err != nil {
+			a.log.Warn("cert scorecard not accepted", "catalog_id", job.CatalogID)
+		}
 	}
 	posted = true
 	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))
 	return nil
 }
 
-func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Result) {
-	if job.Kind != api.KindPathB && job.Kind != api.KindInstanceCheck && job.Kind != api.KindCompactCert {
-		return
+// Only the workload measured by this execution may receive its score.
+// Never resolve a mutable tag or expand one sample across the catalog pack.
+func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Result) error {
+	if !res.Passed || !res.Measured || !res.WorkloadVerified || res.ImageHash == "" {
+		return nil
 	}
-	if !res.Passed || strings.TrimSpace(res.ImageHash) == "" {
-		return
-	}
-	if !res.Measured {
-		a.log.Info("scorecard skipped", "reason", "inference skipped")
-		return
-	}
-	runtimeName := strings.TrimSpace(job.Runtime)
-	if runtimeName == "" {
-		runtimeName = "nvidia"
-	}
-	seen := map[string]bool{}
-	var ids []string
-	if id := strings.TrimSpace(job.CatalogID); id != "" {
-		ids = []string{id}
-	} else if h := a.currentLease(); h != nil && strings.TrimSpace(h.CatalogID) != "" {
-		ids = []string{h.CatalogID}
-	} else {
-		for _, id := range bench.PackIDs() {
-			if bench.LocalImage(id) != "" {
-				ids = append(ids, id)
-			}
-		}
-	}
-	for _, catalogID := range ids {
-		if seen[catalogID] {
-			continue
-		}
-		seen[catalogID] = true
-		digest := a.catalogDigest(ctx, catalogID)
-		if digest == "" && !res.Measured {
-			continue
-		}
-		report := api.ScorecardReport{
-			DeviceID:    a.state.DeviceID,
-			CatalogID:   catalogID,
-			ImageHash:   res.ImageHash,
-			Runtime:     runtimeName,
-			PromptPack:  "pack-v1",
-			ImageDigest: digest,
-			ThermalC:    res.ThermalC,
-			Sustained:   false,
-		}
-		if res.Measured {
-			report.SampleMs = res.SampleMs
-			report.DecodeTokS = res.DecodeTokS
-		}
-		if err := a.client.PostScorecard(ctx, report); err != nil {
-			a.log.Warn("scorecard post failed", "catalog_id", catalogID, "err", err)
-		}
-	}
+	return a.client.PostScorecard(ctx, api.ScorecardReport{
+		DeviceID: a.state.DeviceID, CatalogID: job.CatalogID,
+		ImageHash: res.ImageHash, Runtime: job.Runtime, PromptPack: certSuite(job.SuiteID),
+		ImageDigest: job.ImageDigest, SampleMs: res.SampleMs,
+		DecodeTokS: res.DecodeTokS, ThermalC: res.ThermalC, Sustained: false,
+	})
 }
 
 func (a *Agent) catalogDigest(ctx context.Context, catalogID string) string {
@@ -783,78 +741,6 @@ func (a *Agent) rememberDigest(catalogID, digest string) {
 		a.digests = map[string]string{}
 	}
 	a.digests[catalogID] = digest
-}
-
-// ensureCertSample pulls the workload image when it is missing and starts
-// that repo@sha256 so path_b can take a timed sample. It does not record
-// a lease. A missing image, a missing GGUF, or a completions timeout
-// leaves the sample unset. Path B can still pass telem. That pass does
-// not tag the catalog.
-func (a *Agent) ensureCertSample(ctx context.Context) func() {
-	noop := func() {}
-	digest := a.catalogDigest(ctx, catalog.Llama318BQ4)
-	if digest == "" {
-		a.log.Info("cert image not local", "catalog_id", catalog.Llama318BQ4)
-		return noop
-	}
-	if a.currentLease() != nil || a.runtime == nil {
-		return noop
-	}
-	gguf := a.cfg.GGUFHostPath()
-	if err := runtime.RequireGGUFFile(gguf); err != nil {
-		a.log.Info("cert sample skipped", "reason", "no gguf")
-		return noop
-	}
-	handle, err := a.runtime.Start(ctx, runtime.Spec{
-		LeaseID:      certLeaseID,
-		CatalogID:    catalog.Llama318BQ4,
-		ImageDigest:  digest,
-		Runtime:      "nvidia",
-		HostPort:     a.cfg.PublishPort(),
-		BindAddress:  a.currentBindIP(),
-		GGUFPath:     gguf,
-		LlamaJinja:   a.cfg.LlamaJinja,
-		LlamaCtxSize: a.cfg.LlamaCtxSize,
-		LlamaTimeout: a.cfg.LlamaTimeout,
-	})
-	if err != nil {
-		a.log.Info("cert sample skipped", "reason", err.Error())
-		return noop
-	}
-	stop := func() {
-		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if stopErr := a.runtime.Stop(cctx, handle); stopErr != nil {
-			a.log.Warn("cert container stop", "err", stopErr)
-		}
-	}
-	if !a.waitCompletions(ctx) {
-		a.log.Info("cert sample skipped", "reason", "completions not ready")
-		stop()
-		return noop
-	}
-	return stop
-}
-
-func (a *Agent) waitCompletions(ctx context.Context) bool {
-	wait := a.certReadyWait
-	if wait <= 0 {
-		wait = 3 * time.Minute
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		if a.pathb.Probe(ctx) {
-			return true
-		}
-		if ctx.Err() != nil || !time.Now().Before(deadline) {
-			return false
-		}
-		sleep := a.sleep
-		if sleep == nil {
-			sleep = time.Sleep
-		}
-		sleep(2 * time.Second)
-	}
 }
 
 func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api.JobResultRequest) error {
@@ -905,7 +791,17 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 		if res, stub := a.backendStub(job); stub {
 			return jobOutcome{Result: res}
 		}
-		return jobOutcome{Result: a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))}
+		if job.Kind == api.KindCompactCert || (job.Kind == api.KindPathB && strings.TrimSpace(job.CatalogID) != "") {
+			out := jobOutcome{}
+			out.Result = a.runCertWorkload(ctx, job, func(observation context.Context) {
+				if job.Kind == api.KindPathB { a.attachEgressObservation(observation, &out) }
+			})
+			return out
+		}
+		res := a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))
+		// Legacy telemetry-only path_b and instance checks are not catalog benchmarks.
+		res.Measured = false
+		return jobOutcome{Result: res}
 	case api.KindLabPull:
 		return jobOutcome{Result: a.labPull(ctx, job)}
 	case api.KindLeaseStart:
