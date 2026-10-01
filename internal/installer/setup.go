@@ -34,9 +34,9 @@ type SetupProfile struct {
 func setupProfiles() []SetupProfile {
 	packages := []string{"ca-certificates", "gnupg", "python3", "wireguard-tools"}
 	return []SetupProfile{
-		{"ubuntu-jetson-cuda", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
-		{"ubuntu-amd-hip", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
-		{"ubuntu-discrete-cuda", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-jetson-cuda", 2, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-amd-hip", 2, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"ubuntu-discrete-cuda", 2, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
 	}
 }
 
@@ -65,6 +65,8 @@ type SetupPlan struct {
 	InstallerBuild int `json:"installer_build"`
 	Profile *SetupProfile `json:"profile"`
 	WireGuardMode string `json:"wireguard_mode"`
+	ReadinessURL string `json:"readiness_url"`
+	HeadlessRequested bool `json:"headless_requested"`
 	Preflight Plan `json:"preflight"`
 	Platform SetupPlatform `json:"platform"`
 	Packages []PackageChange `json:"packages"`
@@ -161,6 +163,8 @@ func runSetupPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 		fmt.Fprintln(diagnostic, "cannot read preliminary preflight"); return 1
 	}
 	result := buildSetupPlan(ctx, p, *profile, *wireguardMode, *headless, source)
+	result.ReadinessURL = *address
+	result.PlanSHA256 = setupPlanDigest(result)
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(result); err != nil { fmt.Fprintln(diagnostic, "cannot write setup plan"); return 1 }
@@ -215,7 +219,7 @@ func parseSetupOS(data []byte) (string, string, error) {
 }
 
 func buildSetupPlan(ctx context.Context, p Plan, requested, wireguardMode string, headless bool, source setupSource) SetupPlan {
-	result := SetupPlan{SchemaVersion: 1, WireGuardMode: wireguardMode, InstallerCommit: buildinfo.Current(),
+	result := SetupPlan{SchemaVersion: 2, HeadlessRequested: headless, WireGuardMode: wireguardMode, InstallerCommit: buildinfo.Current(),
 		InstallerVersion: buildinfo.CurrentVersion(), InstallerBuild: buildinfo.CurrentBuild(),
 		Preflight: p, Packages: []PackageChange{}, Changes: []SetupChange{}, Blockers: append([]string{}, p.Blockers...),
 		Pending: []string{"Approve a complete plan and revalidate its inputs immediately before applying",
@@ -272,8 +276,7 @@ func buildSetupPlan(ctx context.Context, p Plan, requested, wireguardMode string
 		result.Packages, err = resolveSetupPackages(ctx, source, installed, result.Profile.RequiredPackages, normalizedSetupArch(p.Hardware.Facts.Arch))
 		if err != nil { fail(err.Error()); result.Packages = []PackageChange{} }
 		if len(result.Packages) > 0 {
-			argv := []string{"apt-get", "--no-install-recommends", "--no-remove", "install"}
-			for _, pkg := range result.Packages { argv = append(argv, pkg.Name+"="+pkg.To) }
+			argv := setupInstallArgv(result.Packages)
 			result.Changes = append(result.Changes, SetupChange{"prerequisite-packages", "packages", true, argv,
 				"Exact versions include the simulated dependency closure; package maintainer scripts may restart services, so apply needs explicit review and recovery."})
 		}
@@ -307,9 +310,23 @@ func buildSetupPlan(ctx context.Context, p Plan, requested, wireguardMode string
 	result.Reviewable = len(result.Blockers) == 0
 	// The digest binds immutable profile revision, installer build, observed
 	// package/driver/kernel state, resource evidence and the exact proposed argv.
-	raw, _ = json.Marshal(result)
-	digest := sha256.Sum256(raw)
-	result.PlanSHA256 = hex.EncodeToString(digest[:])
+	result.PlanSHA256 = setupPlanDigest(result)
 	return result
 }
 
+
+func setupPlanDigest(p SetupPlan) string {
+	p.PlanSHA256 = ""
+	raw, _ := json.Marshal(p)
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
+}
+
+// All mutating arguments are reconstructed from validated package pins.
+// Noninteractive mode retains existing configuration files.
+func setupInstallArgv(packages []PackageChange) []string {
+	args := []string{"apt-get", "--assume-yes", "--no-install-recommends", "--no-remove", "--no-upgrade",
+		"-o", "APT::Get::AllowUnauthenticated=false", "-o", "Dpkg::Options::=--force-confold", "install"}
+	for _, pkg := range packages { args = append(args, pkg.Name+"="+pkg.To) }
+	return args
+}
