@@ -96,6 +96,19 @@ func supportAgent(dir, sha string) supportStage {
 			"/etc/systemd/system/hypermesh-wg.service") { return supportUnavailable("agent", "invalid") }
 		seen[path] = true
 	}
+
+	if !j.Started && len(j.Completed)>0 { return supportUnavailable("agent", "invalid") }
+	if j.State=="installing" && !j.Started { return supportUnavailable("agent", "invalid") }
+	if j.State=="pending" && (j.Started || len(j.Completed)>0) { return supportUnavailable("agent", "invalid") }
+	if j.State=="installed-awaiting-enrollment" {
+		if !j.Started { return supportUnavailable("agent", "invalid") }
+		// Every mode installs these five payloads. The optional userspace unit
+		// cannot be inferred from a journal alone; this is not plan verification.
+		for _, path := range []string{"/usr/local/bin/hypermesh-agent", "/usr/local/lib/hypermesh/update-rollback",
+			"/etc/hypermesh/update-pubkey.asc", "/etc/hypermesh/agent.env", "/etc/systemd/system/hypermesh-agent.service"} {
+			if !seen[path] { return supportUnavailable("agent", "invalid") }
+		}
+	}
 	action := "Preserve the installation journal and retry install-agent with the same approved plan after resolving local conflicts."
 	if j.State == "installed-awaiting-enrollment" { action = "Agent files were recorded installed; use register-agent for browser-approved enrollment." }
 	return supportStage{Component:"agent", Collection:"collected", State:j.State, ErrorRecorded:j.Error!="", CompletedFiles:len(j.Completed), NextAction:action}

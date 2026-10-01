@@ -29,7 +29,8 @@ func supportFixture(t *testing.T)(string, string, string, []string) {
 		setupJournal{Schema:1,PlanSHA256:p.Setup.PlanSHA256,Stage:"packages",State:"failed",OriginalTarget:"graphical.target",Error:secret});err!=nil{t.Fatal(err)}
 	if err=saveAgentJournal(filepath.Join(dir,"agent-"+p.SHA256+".json"),
 		agentInstallJournal{Schema:1,PlanSHA256:p.SHA256,State:"installed-awaiting-enrollment",Started:true,
-			Completed:[]string{"/etc/hypermesh/agent.env"},Error:secret});err!=nil{t.Fatal(err)}
+			Completed:[]string{"/usr/local/bin/hypermesh-agent", "/usr/local/lib/hypermesh/update-rollback",
+				"/etc/hypermesh/update-pubkey.asc", "/etc/hypermesh/agent.env", "/etc/systemd/system/hypermesh-agent.service"},Error:secret});err!=nil{t.Fatal(err)}
 	stamp:=time.Date(2026,10,1,10,0,0,0,time.FixedZone("local",-4*3600))
 	j:=onboardingJournal{Schema:1,PlanSHA256:p.SHA256,RequestID:r.Request.RequestID,DeviceID:r.DeviceID,
 		HostName:secret,State:"checked",RecordedAt:stamp,PlaneCheckedAt:&stamp,LastHeartbeatAt:&stamp,
@@ -48,7 +49,7 @@ func TestSupportBundleAllowlistAndNoMutation(t *testing.T) {
 	bundle,err:=collectSupport(context.Background(),dir,agentSHA,setupSHA);if err!=nil{t.Fatal(err)}
 	if !bundle.CollectionComplete || !bundle.HistoricalOnly || len(bundle.Stages)!=4 {t.Fatal("incomplete summary")}
 	if bundle.Stages[0].State!="failed" || !bundle.Stages[0].ErrorRecorded ||
-		bundle.Stages[1].CompletedFiles!=1 || bundle.Stages[2].State!="registered-inactive" ||
+		bundle.Stages[1].CompletedFiles!=5 || bundle.Stages[2].State!="registered-inactive" ||
 		bundle.Stages[3].Gates[0].State!="blocked" {t.Fatal("lost useful diagnostics")}
 	raw,err:=json.Marshal(bundle);if err!=nil{t.Fatal(err)}
 	for _,secret:=range secrets {if strings.Contains(string(raw),secret){t.Fatal("private source escaped the allowlist")}}
@@ -142,4 +143,38 @@ func TestSupportPublicationAndCLI(t *testing.T) {
 	if code:=runSupportBundle(context.Background(),args,&out,&diagnostic,dir,true);code!=1{t.Fatal("partial collection reported complete")}
 	raw,err=os.ReadFile(args[len(args)-1]);if err!=nil{t.Fatal("partial bundle not saved")}
 	if !bytes.Contains(raw,[]byte(`"collection_complete": false`)){t.Fatal("missing partial marker")}
+}
+
+func TestSupportRejectsInconsistentInstallCompletion(t *testing.T) {
+	for _,kind:=range []string{"not-started","missing-agent","missing-rollback","missing-trust","missing-env","missing-unit","duplicate","pending-started","installing-not-started"} {
+		t.Run(kind,func(t *testing.T){
+			dir,sha,_,_:=supportFixture(t)
+			path:=filepath.Join(dir,"agent-"+sha+".json")
+			raw,err:=os.ReadFile(path);if err!=nil{t.Fatal(err)}
+			var j agentInstallJournal;if err=json.Unmarshal(raw,&j);err!=nil{t.Fatal(err)}
+			switch kind {
+			case "not-started":j.Started=false
+			case "missing-agent":j.Completed=append(j.Completed[:0],j.Completed[1:]...)
+			case "missing-rollback":j.Completed=append(j.Completed[:1],j.Completed[2:]...)
+			case "missing-trust":j.Completed=append(j.Completed[:2],j.Completed[3:]...)
+			case "missing-env":j.Completed=append(j.Completed[:3],j.Completed[4:]...)
+			case "missing-unit":j.Completed=j.Completed[:4]
+			case "duplicate":j.Completed=append(j.Completed,j.Completed[0])
+			case "pending-started":j.State="pending"
+			case "installing-not-started":j.State="installing";j.Started=false;j.Completed=nil
+			}
+			if err=saveAgentJournal(path,j);err!=nil{t.Fatal(err)}
+			bundle,err:=collectSupport(context.Background(),dir,sha,"");if err!=nil{t.Fatal(err)}
+			if bundle.CollectionComplete || bundle.Stages[1].Collection!="invalid" ||
+				strings.Contains(bundle.Stages[1].NextAction,"use register-agent"){t.Fatal("inconsistent journal recommended enrollment")}
+		})
+	}
+}
+func TestSupportSetupOnlyDoesNotCollectPrivateAgentState(t *testing.T) {
+	dir,sha,setupSHA,_:=supportFixture(t)
+	// Unsafe agent state is irrelevant to a setup-only request.
+	if err:=os.Chmod(registrationPath(dir,sha),0o644);err!=nil{t.Fatal(err)}
+	bundle,err:=collectSupport(context.Background(),dir,"",setupSHA);if err!=nil{t.Fatal(err)}
+	if !bundle.CollectionComplete || bundle.Stages[0].Collection!="collected" {t.Fatal("setup-only collection failed")}
+	for _,stage:=range bundle.Stages[1:] {if stage.Collection!="not-requested"{t.Fatal("collected an unrequested stage")}}
 }
