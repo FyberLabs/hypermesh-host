@@ -129,7 +129,7 @@ func TestApplySetupRejectsApprovalAndCommandTampering(t *testing.T) {
 }
 
 func TestApplySetupBlocksDriftBeforeMutation(t *testing.T) {
-	for _,kind:=range []string{"package","approved-version","target","kernel","hardware","memory","dependencies","preflight","cancel"} {
+	for _,kind:=range []string{"package","approved-version","target","kernel","hardware","profile-facts","memory","dependencies","preflight","cancel"} {
 		t.Run(kind,func(t *testing.T) {
 			f:=newApplyFixture(t,true,true)
 			switch kind {
@@ -139,9 +139,9 @@ func TestApplySetupBlocksDriftBeforeMutation(t *testing.T) {
 			case "kernel":
 				read:=f.deps.Source.ReadFile
 				f.deps.Source.ReadFile=func(path string)([]byte,error){if path=="/proc/sys/kernel/osrelease"{return []byte("different"),nil};return read(path)}
-			case "hardware","memory":
+			case "hardware","profile-facts","memory":
 				p,_:=f.deps.Preflight(context.Background(),f.plan)
-				if kind=="hardware"{p.Hardware.Fingerprint="different"}else{p.Resources.Admission.Eligible=false}
+				if kind=="hardware"{p.Hardware.Fingerprint="different"}else if kind=="profile-facts"{p.Hardware.Facts.Tegra=false}else{p.Resources.Admission.Eligible=false}
 				f.deps.Preflight=func(context.Context,SetupPlan)(Plan,error){return p,nil}
 			case "preflight":f.deps.Preflight=func(context.Context,SetupPlan)(Plan,error){return Plan{},fmt.Errorf("failed")}
 			case "dependencies":

@@ -146,6 +146,9 @@ func validateSetupHost(ctx context.Context,p SetupPlan,deps setupApplyDeps) ([]P
 		fresh.Resources.Resources.UMAAllocationBytes!=p.Preflight.Resources.Resources.UMAAllocationBytes {
 		return nil,"",fmt.Errorf("resource or hardware preflight changed or failed; regenerate the plan")
 	}
+	if _,err:=selectSetupProfile(fresh,p.Platform,p.Profile.ID);err!=nil {
+		return nil,"",fmt.Errorf("fresh hardware no longer matches the approved profile")
+	}
 	if p.Preflight.Resources.Resources.UMA {
 		old,now:=p.Preflight.Resources.Resources.UMARuntime,fresh.Resources.Resources.UMARuntime
 		if !validUMARuntime(old) || !validUMARuntime(now) || old.Backend!=now.Backend || old.Device!=now.Device || old.TotalBytes!=now.TotalBytes {
