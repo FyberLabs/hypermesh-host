@@ -121,6 +121,7 @@ disabled with consent, not that other services are disabled.
   endpoint reachability checks.
 - [x] Device-authenticated control-plane protocol and registration identity check, with a redacted readiness snapshot.
 - [x] Authenticated AIuditor tenant/class program membership check through the plane, without local fallback.
+- [x] Explicit, recoverable one-shot device heartbeat with committed acknowledgment.
 - [ ] WireGuard and workload compatibility checks.
 - [x] Signed bootstrap verification, channel discovery and persistent build floor.
 - [x] Signed agent download for both Linux architectures, with optional exact installer-release binding.
@@ -1260,3 +1261,58 @@ mirror is incomplete. The rolling alias can be briefly unavailable during its
 replacement, but a completed permanent release remains downloadable to users
 with repository access. A full test workflow rerun allocates a new build number;
 it does not reuse an older test build's signed metadata.
+
+## Completed: recoverable one-shot onboarding heartbeat
+
+After registration, explicitly request one heartbeat with the same installed
+agent plan and its approved digest:
+
+```bash
+sudo ./hypermesh-deploy check-agent \
+  --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256 --heartbeat
+sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
+```
+
+Without `--heartbeat`, `check-agent` remains read-only on the plane. With the
+flag it still verifies private registration state, exact installed payloads,
+inactive services and fresh resource/hardware prerequisites first. It performs
+the existing device/AIuditor check and requires `onboarding_heartbeat_v1` before
+writing. Upgrade the plane first; an older plane produces an actionable error.
+
+The installer saves heartbeat intent before sending, rechecks local identity
+and inactive service configuration, measures Linux `/proc/uptime`, and sends
+one authenticated HTTPS observation. No owner-supplied uptime, fabricated
+device identity, browser token or enrollment retry is used. The plane repeats
+AIuditor readiness and revalidates live SQL authority immediately before commit.
+Only paused, never-certified, non-lab hosts with no loaded model or hold can
+use this pre-activation path. Resolve holds in the dashboard rather than
+deleting state or using this command to force the host online.
+
+A successful receipt must bind the fresh nonce, registered tenant/device/key,
+measured uptime, explicit recorded state and matching server timestamps.
+The journal records `heartbeat_requested`, `heartbeat_recorded_at` and
+`heartbeat_uptime_s` only after that acknowledgment. The heartbeat gate then
+shows **one HTTPS observation**, while tunnel, certification and activation
+remain pending and selling remains blocked. Support bundles export the dated
+heartbeat result without device credentials or raw transport errors.
+
+The existing three-minute command bound and 15-second per-request whole-body
+deadline still apply. A denied, interrupted, malformed or lost reply exits 1
+and stores fixed recovery guidance. The plane may have committed a heartbeat
+whose reply was lost; rerunning the same command with `--heartbeat` and the
+same keys safely records another observation. A failed final journal write
+never reports success. No background retries or service activation occur.
+
+Reading saved status does not refresh it. A later ordinary `check-agent`
+clears the previous local heartbeat acknowledgment; any last-heartbeat time
+from the plane is historical. An inconsistent journal cannot show a passed
+heartbeat without its committed receipt. This is not proof of a continuously
+running agent, a WireGuard handshake, direct AIuditor reachability or completed
+GPU/model certification.
+
+Automated tests cover explicit opt-in, durable-before-send ordering, older
+planes, local/program failures, lost responses, cancellation, persistence
+failures, measured uptime bounds, protocol binding and redaction. Physical
+AGX-1 acceptance remains pending. The next complete task is the controlled
+WireGuard handshake/data-path stage, followed by certification execution and
+enrollment-gated service activation.

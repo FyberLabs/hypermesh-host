@@ -30,6 +30,9 @@ type onboardingJournal struct {
  RecordedAt time.Time `json:"recorded_at"`
  PlaneCheckedAt *time.Time `json:"plane_checked_at,omitempty"`
  LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
+ HeartbeatRequested bool `json:"heartbeat_requested,omitempty"`
+ HeartbeatRecordedAt *time.Time `json:"heartbeat_recorded_at,omitempty"`
+ HeartbeatUptimeS *int64 `json:"heartbeat_uptime_s,omitempty"`
  ProtocolVerified bool `json:"protocol_verified"`
  LocalPreflightPassed bool `json:"local_preflight_passed"`
  ReportedSellState string `json:"reported_sell_state,omitempty"`
@@ -101,12 +104,14 @@ type onboardingDeps struct {
  Verify func(context.Context)error
  Preflight func(context.Context)error
  Remote func(context.Context)(hostregistration.OnboardingSnapshot,error)
+ Heartbeat func(context.Context)(hostregistration.HeartbeatReceipt,error)
  Save func(onboardingJournal)error
 }
 func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboardingDeps)error {
  // Replace previous success before probing. Crash/cancellation can leave only
  // 'checking', never make old evidence look like the latest successful check.
  j.State="checking";j.RecordedAt=time.Now().UTC()
+ j.HeartbeatRequested=deps.Heartbeat!=nil;j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil
  j.PlaneCheckedAt=nil;j.LastHeartbeatAt=nil;j.ProtocolVerified=false;j.LocalPreflightPassed=false
  j.ActivationAllowed=false;j.SellingAllowed=false;j.ReportedSellState="";j.Gates=nil;j.FailureCode=""
  j.NextAction="Check is in progress or was interrupted; rerun check-agent with the same approved plan."
@@ -131,12 +136,40 @@ func performOnboardingCheck(ctx context.Context,j *onboardingJournal,deps onboar
   candidate.State="failed";candidate.FailureCode="aiuditor_program"
   candidate.NextAction=onboardingProgramGate(snapshot.AIuditorProgramState).NextAction
  }
+ if deps.Heartbeat!=nil&&candidate.FailureCode=="" {
+  // Save the intent before mutation. A lost reply or interruption is never
+  // treated as success; repeating a single observation with fresh nonce is safe.
+  *j=candidate;j.State="checking"
+  j.NextAction="Heartbeat may be pending or interrupted; rerun check-agent --heartbeat with the same approved plan and identity."
+  if err:=deps.Save(*j);err!=nil{return fail("status_persistence","Cannot save heartbeat intent; repair state-directory storage and retry.",fmt.Errorf("cannot persist heartbeat intent"))}
+  heartbeatFailure:=func(err error)error{
+   for i:=range j.Gates {if j.Gates[i].ID=="heartbeat"{j.Gates[i].State="blocked";j.Gates[i].NextAction="Heartbeat outcome is unconfirmed. Resolve the reported connection, program or host-state blocker and rerun check-agent --heartbeat with the same identity."}}
+   return fail("heartbeat","Heartbeat is unconfirmed; rerun check-agent --heartbeat after checking the plane, AIuditor readiness and dashboard holds. Preserve registration and keys.",err)
+  }
+  if !snapshot.SupportsHeartbeat(){return heartbeatFailure(fmt.Errorf("plane must be updated for onboarding_heartbeat_v1 before sending a heartbeat"))}
+  if err:=ctx.Err();err!=nil{return heartbeatFailure(fmt.Errorf("heartbeat interrupted before send"))}
+  receipt,err:=deps.Heartbeat(ctx)
+  if err!=nil{return heartbeatFailure(err)}
+  if err=ctx.Err();err!=nil{return heartbeatFailure(fmt.Errorf("heartbeat interrupted; acknowledgment unconfirmed"))}
+  candidate.PlaneCheckedAt=&receipt.CheckedAt
+  candidate.LastHeartbeatAt=receipt.LastHeartbeatAt
+  candidate.HeartbeatRecordedAt=receipt.HeartbeatRecordedAt
+  candidate.HeartbeatUptimeS=receipt.HeartbeatUptimeS
+  candidate.Gates=onboardingGates(receipt.OnboardingSnapshot)
+  candidate.ReportedSellState=receipt.SellState
+  for i:=range candidate.Gates {if candidate.Gates[i].ID=="heartbeat"{
+   candidate.Gates[i]=onboardingGate{"heartbeat","passed","One authenticated HTTPS heartbeat was committed at heartbeat_recorded_at; continuous agent liveness and WireGuard remain unverified."}
+  }}
+  candidate.RecordedAt=time.Now().UTC()
+  candidate.NextAction="One-shot heartbeat recorded. Keep services inactive; complete WireGuard and certification gates before activation or selling."
+ }
  if err:=deps.Save(candidate);err!=nil {
   // Do not emit a checked result unless its durable write succeeded. A failed
   // rename/fsync has an uncertain outcome; the caller must retry the check.
   j.State="failed";j.FailureCode="status_persistence";j.RecordedAt=time.Now().UTC()
   j.ProtocolVerified=false;j.LocalPreflightPassed=false
   j.PlaneCheckedAt=nil;j.LastHeartbeatAt=nil;j.ReportedSellState="";j.Gates=nil
+  j.HeartbeatRecordedAt=nil;j.HeartbeatUptimeS=nil
   j.NextAction="Status persistence failed; check disk space and installer-state permissions, then rerun check-agent."
   return fmt.Errorf("cannot persist completed onboarding check; success is not confirmed")
  }
@@ -149,6 +182,7 @@ func RunCheckAgent(ctx context.Context,args []string,out,diagnostic io.Writer)in
  flags:=flag.NewFlagSet("check-agent",flag.ContinueOnError);flags.SetOutput(diagnostic)
  path:=flags.String("plan","","installed agent plan")
  approved:=flags.String("approve-plan","","exact agent plan_sha256")
+ heartbeat:=flags.Bool("heartbeat",false,"record one authenticated heartbeat after local and program checks; leave services inactive")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0||*path==""||!setupDigestRE.MatchString(*approved){fmt.Fprintln(diagnostic,"require --plan and --approve-plan");return 2}
  if os.Geteuid()!=0{fmt.Fprintln(diagnostic,"check-agent requires root to read the saved private identity");return 1}
@@ -180,6 +214,15 @@ func RunCheckAgent(ctx context.Context,args []string,out,diagnostic io.Writer)in
   Remote:func(ctx context.Context)(hostregistration.OnboardingSnapshot,error){return client.CheckDevice(ctx,registration.Request,registration.DeviceID,registration.DeviceSecret)},
   Save:func(value onboardingJournal)error{return saveOnboarding(onboardingPath(defaultSetupState,p.SHA256),value)},
  }
+ if *heartbeat {
+  deps.Heartbeat=func(ctx context.Context)(hostregistration.HeartbeatReceipt,error){
+   uptime,err:=measuredHeartbeatUptime()
+   if err!=nil{return hostregistration.HeartbeatReceipt{},err}
+   // Recheck local files/service after network I/O and before the mutation.
+   if err=deps.Verify(ctx);err!=nil{return hostregistration.HeartbeatReceipt{},err}
+   return client.HeartbeatDevice(ctx,registration.Request,registration.DeviceID,registration.DeviceSecret,uptime)
+  }
+ }
  err=performOnboardingCheck(ctx,&j,deps)
  if json.NewEncoder(out).Encode(j)!=nil{return 1}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
@@ -196,10 +239,20 @@ func RunOnboardingStatus(_ context.Context,args []string,out,diagnostic io.Write
  if err==nil{err=decodeSetupJSON(raw,&j)}
  if err!=nil||j.Schema!=1||j.PlanSHA256!=*digest||!hostregistration.UUID.MatchString(j.RequestID)||
  !hostregistration.UUID.MatchString(j.DeviceID)||!agentNameRE.MatchString(j.HostName)||j.ActivationAllowed||j.SellingAllowed||
- (j.State!="checking"&&j.State!="checked"&&j.State!="failed"){
+ (j.State!="checking"&&j.State!="checked"&&j.State!="failed")||!validHeartbeatJournal(j){
   fmt.Fprintln(diagnostic,"onboarding status unavailable or invalid");return 1
  }
  // This is a dated local observation, not a live readiness or activation claim.
  if json.NewEncoder(out).Encode(j)!=nil{return 1}
  return 0
+}
+
+func validHeartbeatJournal(j onboardingJournal)bool {
+ passed:=false
+ for _,gate:=range j.Gates {if gate.ID=="heartbeat"&&gate.State=="passed"{passed=true}}
+ if j.HeartbeatRecordedAt==nil&&j.HeartbeatUptimeS==nil{return !passed}
+ return j.HeartbeatRequested&&j.State=="checked"&&passed&&j.HeartbeatRecordedAt!=nil&&
+  !j.HeartbeatRecordedAt.IsZero()&&j.HeartbeatUptimeS!=nil&&*j.HeartbeatUptimeS>=0&&*j.HeartbeatUptimeS<=1<<31-1&&
+  j.LastHeartbeatAt!=nil&&j.LastHeartbeatAt.Equal(*j.HeartbeatRecordedAt)&&
+  j.PlaneCheckedAt!=nil&&j.PlaneCheckedAt.Equal(*j.HeartbeatRecordedAt)
 }
