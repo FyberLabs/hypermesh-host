@@ -279,7 +279,8 @@ artifact set when retried; adding the CLI requires a new version.
 
 - [x] Build and checksum operator CLI binaries for Linux ARM64 and AMD64.
 - [x] Include the CLI in new release signing, upload and integrity verification.
-- [ ] Verify the first post-merge release contains both CLI assets.
+- [x] Verify the first post-merge release contains both CLI assets: test build
+  21-dc11f597a21e, release run 36802906760; merged CI and release passed.
 - [ ] Wire the hyperme.sh package/download experience to verified artifacts.
 - [ ] Provide signed bootstrap discovery/self-update and complete guided install.
 
@@ -294,3 +295,49 @@ CI builds all four Linux binaries using the same helper as publication,
 checks their ELF architecture and checksum membership, and proves tampering
 with the ARM deploy binary fails checksum verification. Actual AGX/N5 execution
 and the website-to-enrollment acceptance flow remain pending.
+
+## Verified CLI download milestone
+
+Implemented: `hypermesh-deploy download` fetches a selected release's deploy
+binary without enrollment, using a separately supplied trusted public key and
+fingerprint allowlist. This is the verified download primitive, not automatic
+latest-release discovery or self-replacement.
+
+```bash
+./hypermesh-deploy download \
+  --release-url https://YOUR_RELEASE_SERVER/IMMUTABLE_RELEASE_DIRECTORY \
+  --channel test --min-build 21 --arch arm64 \
+  --trusted-key /path/to/independently-trusted-release.pub \
+  --fingerprints YOUR_TRUSTED_FINGERPRINT \
+  --output ./hypermesh-deploy.verified
+```
+
+Use the actual release directory, which must serve checksums.txt, its binary
+detached signature, release.json and the deploy binary. No endpoint is assumed
+to be public or anonymously accessible. HTTPS requests have size/time limits;
+the original URL may not carry credentials or query parameters. HTTPS redirects
+are allowed for asset delivery, with a bounded count. Error messages exclude
+URLs and server response bodies.
+
+The signature is checked with the existing GPG verifier before signed metadata
+is used. The downloader checks release.json's hash, channel, build floor, commit,
+version and release ID, then verifies the chosen architecture's binary hash.
+The caller supplies the build floor: zero permits any positive build and
+does not establish freshness. Persisted rollback protection and authenticated
+latest-release discovery remain separate tasks.
+
+Only verified bytes are published, with owner-executable permissions, through
+an atomic no-overwrite link. Existing files and symlinks are not replaced.
+The output directory must exist and support hard links. Downloads never run
+the new CLI, install packages, alter services or enroll a device.
+
+- [x] Verified, bounded CLI download with channel/build constraints and no-overwrite output.
+- [ ] Ship trusted bootstrap key material through an independently trusted channel.
+- [ ] Add latest-release discovery and persisted minimum-build state.
+- [ ] Add reviewed self-update/restart and rollback behavior.
+- [ ] Integrate website package delivery and full device authorization enrollment.
+
+Tests cover signature rejection, metadata/binary tampering, wrong channel,
+older builds, existing destinations, staging cleanup, size limits and
+cancellation. The existing GPG verifier suite supplies cryptographic coverage.
+Physical AGX/N5 validation remains pending.
