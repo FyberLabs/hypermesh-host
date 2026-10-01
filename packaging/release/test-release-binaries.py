@@ -26,7 +26,7 @@ class ReleaseBinaries(unittest.TestCase):
                     name = f"hypermesh-{program}_0.0.0_linux_{arch}"
                     expected.add(name)
                     header = (dist / name).read_bytes()[:20]
-                    self.assertEqual(header[:4], b"\\x7fELF")
+                    self.assertEqual(header[:4], bytes([127]) + b"ELF")
                     self.assertEqual(header[4:6], bytes([2, 1]))  # ELF64 little endian
                     self.assertEqual(struct.unpack("<H", header[18:20])[0], machine)
             manifest = (dist / "checksums.txt").read_text()
