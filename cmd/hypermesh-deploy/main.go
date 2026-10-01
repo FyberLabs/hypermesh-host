@@ -24,6 +24,12 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+	if name == "plan" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := installer.RunPlan(ctx, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	if name == "check-resources" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		code := installer.RunResourceCheck(ctx, os.Args[2:], os.Stdout, os.Stderr)
@@ -89,6 +95,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan      read-only resource, hardware and HTTPS reachability plan.
+            Resource flags plus --aiuditor-check-url https://HOST/READINESS_PATH
   check-resources  read-only Linux RAM, accelerator capacity and model-filesystem check.
                    --model-dir PATH --memory-mode uma --uma-gib N
                    --model-dir PATH --memory-mode discrete
