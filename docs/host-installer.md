@@ -271,13 +271,56 @@ separately from ready-to-serve time. Define refunds for host/platform-caused
 provisioning failures before enabling setup billing. Exact rounding, overruns,
 refund and token-metering rules remain to be specified.
 
-The installer should offer headless device authorization: display a short code
-and verification URL, let the owner sign in through a browser, choose their
-tenant and approve the host, then complete enrollment. Generate private keys
-locally and register only public keys. Authorization must expire, be single-use
-and bind to the intended enrollment. Retry/resume must not create duplicate
-devices; intentional retirement and reenrollment must create fresh keys while
-archiving the old identity. Do not collect the owner's password in the terminal.
+### Approved automatic registration through device authorization
+
+The owner does not pre-create a device in the dashboard. After local admission
+and approved preflight changes, the installer displays a short device code and
+verification URL. The owner opens the URL on another device, signs in, confirms
+the intended tenant and the enrollment request, and approves registration.
+The installer then registers the actual box and it appears in the dashboard
+automatically. No copying a dashboard UUID into the installer or comparing the
+machine with a placeholder device is part of onboarding.
+
+The approval must identify the pending installation and its reported host name
+and hardware summary. A standard identity-provider device login establishes
+the user's identity; it does not by itself approve hardware claims or grant
+ownership of an arbitrary organization. Panopticon must validate tenant
+membership and derive the authorized host organization on the server before
+creating the dashboard entry. If the identity-provider approval page cannot
+show the enrollment details, the application must provide that confirmation
+within the browser flow.
+
+Use the existing public `hypermesh-native` device-authorization client.
+Do not introduce a client secret, collect the owner's password in the terminal,
+or require copying a user access token. Authorization expires and binds to the
+pending enrollment. Keep device codes and temporary user tokens out of logs,
+plans and support bundles; display only the verification URL and user code.
+
+Generate the host's private key locally and register only its public key.
+The server assigns the device UUID. Reported host names and hardware
+fingerprints are labels and compatibility evidence, not proof of ownership or
+identifiers used to adopt an existing device. A matching name must never
+silently attach an installation to another host's credentials.
+
+Registration creates an uncertified, unavailable-for-rental dashboard entry.
+Show its current onboarding stage, hardware observations, outstanding checks,
+failure reason and the action needed to proceed. Registration alone does not
+enable selling, mark a hardware class certified or bypass authenticated
+AIuditor, tunnel, benchmark and service-activation gates.
+
+Persist enough private local enrollment state to recover an interrupted
+attempt. A lost registration response, process restart or retry must recover
+the same authorized device without duplicating it or rotating its working
+credentials. Enforce public-key uniqueness across tenants, including concurrent
+registrations. Reject attempts to reuse another device's identity with a clear
+recovery action. An owner-requested retirement archives the old device and
+revokes its access; re-adding the box creates fresh keys and a new server-assigned
+identity.
+
+This is the approved interaction and acceptance contract. The device-flow
+client, automatic registration endpoint, dashboard confirmation/status and
+installer integration remain implementation work; the inactive installed agent
+must not be advertised as having this flow yet.
 
 Implementation and acceptance tasks:
 
@@ -289,7 +332,10 @@ Implementation and acceptance tasks:
   changes without disrupting active leases.
 - [ ] Implement and reconcile one-minute lease charges and token metering
   before advertising those options.
-- [ ] Add device authorization URL/code, tenant/host confirmation and installer polling.
+- [x] Approve automatic dashboard registration through device authorization, without pre-created devices or name/UUID matching.
+- [ ] Add device authorization URL/code, browser tenant/host confirmation and bounded installer polling.
+- [ ] Register the host automatically under the server-authorized organization and display its onboarding state in the dashboard.
+- [ ] Make registration retry-safe across lost responses, restarts and concurrent requests; test tenant and public-key ownership checks.
 - [ ] Test pending, denied, expired, cancelled and replayed authorization.
 - [ ] Test restart/resume without duplicate enrollment and keep credentials out of logs.
 - [ ] Complete ARM download from hyperme.sh through browser approval to enroll
