@@ -207,3 +207,18 @@ Automated tests cover aggregated failures, pass/blocked exit status, protected
 URL rejection, trusted/untrusted TLS, HTTP errors, redirects and cancellation.
 Physical AGX 64 and N5 MAX acceptance remains pending. Complete runtime memory
 validation and authenticated discovery before starting installation mutations.
+
+## Planned end-to-end acceptance after roadmap completion
+
+The test Panopticon plane has been rebuilt. Once the host installer roadmap is
+implemented, the operator will download the ARM host package from hyperme.sh,
+run it on the AGX, and enroll it against the test plane as `AGX-1`.
+This requires a website download path, signed ARM installer packaging,
+bootstrap verification/update, approved preflight changes and enrollment to
+work as one flow. The current agent release and diagnostic CLI alone do not
+satisfy this acceptance target.
+
+Use the newly reported name for discovery. Update the test smoke host setting
+to `AGX-1` when that host is enrolled; do not retain `agx64-1` as an identity
+assumption or seed a device UUID. Physical enrollment and smoke acceptance
+remain pending that operator run. The N5 MAX is the second hardware target.
