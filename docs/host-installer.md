@@ -267,3 +267,30 @@ Implementation and acceptance tasks:
 These tasks span the host installer/agent, Panopticon authorization, lease and
 metering services, pricing, and hyperme.sh interfaces. An installer flag alone
 does not complete an operating mode. Physical acceptance remains pending.
+
+## Signed operator CLI release payload
+
+Implemented in the release publisher: alongside the agent, publish
+`hypermesh-deploy_<version>_linux_arm64` and
+`hypermesh-deploy_<version>_linux_amd64`. Both binaries are included in the same
+GPG-signed checksums, blob release directory, channel artifact manifest, and
+GitHub release. Existing production releases retain their original signed
+artifact set when retried; adding the CLI requires a new version.
+
+- [x] Build and checksum operator CLI binaries for Linux ARM64 and AMD64.
+- [x] Include the CLI in new release signing, upload and integrity verification.
+- [ ] Verify the first post-merge release contains both CLI assets.
+- [ ] Wire the hyperme.sh package/download experience to verified artifacts.
+- [ ] Provide signed bootstrap discovery/self-update and complete guided install.
+
+This completes the binary payload stage, not the full installer. The CLI
+currently provides inspection/preflight and the legacy AGX deployment command;
+it must not be advertised as the finished guided onboarding flow.
+Do not run a downloaded binary until its checksum manifest signature is checked
+against an independently trusted release key. A public key downloaded alongside
+the binary alone does not establish trust.
+
+CI builds all four Linux binaries using the same helper as publication,
+checks their ELF architecture and checksum membership, and proves tampering
+with the ARM deploy binary fails checksum verification. Actual AGX/N5 execution
+and the website-to-enrollment acceptance flow remain pending.
