@@ -24,6 +24,14 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+ if name == "register-agent" || name == "registration-status" {
+  ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+  run := installer.RunRegisterAgent
+  if name == "registration-status" { run = installer.RunRegistrationStatus }
+  code := run(ctx, os.Args[2:], os.Stdout, os.Stderr)
+  stop()
+  os.Exit(code)
+ }
 	if name == "plan-agent" || name == "install-agent" || name == "agent-install-status" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		run := installer.RunPlanAgent
@@ -124,6 +132,10 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  register-agent  device login and browser-approved registration; leaves service inactive.
+                  --plan FILE --approve-plan SHA256 --issuer HTTPS_REALM
+                  --dashboard-url HTTPS_ORIGIN --class-id CLASS
+  registration-status  read redacted registration state; --plan-sha SHA256
   agent-install-status  read persistent install status; --plan-sha SHA256
   plan-agent  verify and plan agent, trust, rollback helper and systemd installation.
                Use plan-agent --help; requires completed prerequisite plan.
