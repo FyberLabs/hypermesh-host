@@ -23,6 +23,9 @@ var certImagePin = regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{6
 // model download, lease creation or sell-state change happens here.
 func (a *Agent) runCertWorkload(ctx context.Context, job api.Job) (result pathb.Result) {
 	fail := func(reason string) pathb.Result { return pathb.Result{Reason: reason} }
+	if strings.TrimSpace(job.JobID) == "" || (job.SuiteID != pathb.SuitePackV1 && job.SuiteID != pathb.SuiteThinV1) {
+		return fail("certification requires job identity and a supported suite")
+	}
 	if strings.TrimSpace(job.CatalogID) == "" || !certImagePin.MatchString(job.ImageDigest) {
 		return fail("certification requires catalog_id and pinned image_digest")
 	}
@@ -72,11 +75,8 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job) (result pathb.
 	}()
 	runner := a.pathb
 	runner.Model = job.CatalogID
-	// Production agent endpoints can point at the lease tunnel. This temporary
-	// container is bound to loopback. Explicit test endpoints remain injectable.
-	if runner.Endpoint == "" || runner.Endpoint == a.liveCompletionsURL() {
-		runner.Endpoint = "http://127.0.0.1:" + a.cfg.PublishPort() + "/v1/chat/completions"
-	}
+	runner.Endpoint = "http://127.0.0.1:" + a.cfg.PublishPort() + "/v1/chat/completions"
+	if a.certEndpoint != "" { runner.Endpoint = a.certEndpoint }
 	wait := a.certReadyWait
 	if wait <= 0 { wait = 3*time.Minute }
 	ready, done := context.WithTimeout(ctx, wait)

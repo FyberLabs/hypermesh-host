@@ -27,6 +27,8 @@ import (
 
 // Agent is the host process.
 type Agent struct {
+	// certEndpoint is a test seam; production certification always uses loopback.
+	certEndpoint string
 	cfg     Config
 	client  *api.Client
 	telem   telem.Source
@@ -691,7 +693,9 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 			a.pendingResult.Store(false)
 			return err
 		}
-		a.reportScorecard(ctx, *job, res.Result)
+		if err := a.reportScorecard(ctx, *job, res.Result); err != nil {
+			a.log.Warn("cert scorecard not accepted", "catalog_id", job.CatalogID)
+		}
 	}
 	posted = true
 	a.log.Info("posted job result", "job_id", job.JobID, "passed", res.Passed, "reason", res.Reason, "backend", jobBackendLog(*job))

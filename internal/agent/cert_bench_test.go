@@ -45,7 +45,8 @@ func certFixture(t *testing.T, status int) (*Agent, api.Job, *[][]string) {
 		})
 	}))
 	t.Cleanup(server.Close)
-	a.pathb.Endpoint = server.URL
+	a.certEndpoint = server.URL
+	a.pathb.Endpoint = "http://unrelated.invalid/v1/chat/completions"
 	a.certReadyWait = 20*time.Millisecond
 	a.inspectCatalog = func(context.Context,string)string { t.Error("mutable image lookup"); return "" }
 	calls := new([][]string)
@@ -82,6 +83,8 @@ func TestCertRejectsUnpinnedOrBusyWorkBeforeDocker(t *testing.T) {
 		{"missing model pin",func(a *Agent,j *api.Job){j.FileHash=""}},
 		{"wrong model",func(a *Agent,j *api.Job){j.FileHash="sha256:"+strings.Repeat("b",64)}},
 		{"missing catalog",func(a *Agent,j *api.Job){j.CatalogID=""}},
+		{"unknown suite",func(a *Agent,j *api.Job){j.SuiteID="unknown"}},
+		{"missing job",func(a *Agent,j *api.Job){j.JobID=""}},
 		{"missing runtime",func(a *Agent,j *api.Job){j.Runtime=""}},
 		{"unsupported backend",func(a *Agent,j *api.Job){j.Backend="llama-cpp-vulkan"}},
 		{"live lease",func(a *Agent,j *api.Job){a.setLease(&runtime.Handle{LeaseID:"busy"})}},
