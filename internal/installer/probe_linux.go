@@ -10,6 +10,10 @@ import (
 )
 
 func probeResources(ctx context.Context, directory, mode string, allocation int64) (Resources, error) {
+	return probeResourcesWithRuntime(ctx, directory, mode, allocation, probeUMARuntime)
+}
+
+func probeResourcesWithRuntime(ctx context.Context, directory, mode string, allocation int64, runtimeProbe func(context.Context) (*UMARuntime, error)) (Resources, error) {
 	r := Resources{UMA: mode == "uma", UMAAllocationBytes: allocation}
 	info, err := os.Stat(directory)
 	if err != nil || !info.IsDir() {
@@ -27,7 +31,16 @@ func probeResources(ctx context.Context, directory, mode string, allocation int6
 		return r, fmt.Errorf("invalid filesystem capacity measurement")
 	}
 	r.DiskFreeBytes = int64(fs.Bavail)*fs.Bsize
-	if !r.UMA {
+	if err := ctx.Err(); err != nil { return r, fmt.Errorf("resource check interrupted") }
+	if r.UMA {
+		r.UMARuntime, err = runtimeProbe(ctx)
+		if err != nil { return r, err }
+		// Resample after driver initialization, which itself consumes memory.
+		data, err = os.ReadFile("/proc/meminfo")
+		if err != nil { return r, fmt.Errorf("cannot refresh system memory") }
+		r.SystemBytes, r.AvailableSystemBytes, err = parseMemory(string(data))
+		if err != nil { return r, err }
+	} else {
 		r.DiscreteVRAMBytes, err = discreteMemory(ctx)
 		if err != nil { return r, err }
 	}

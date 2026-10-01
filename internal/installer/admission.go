@@ -15,10 +15,14 @@ type Resources struct {
 	DiscreteVRAMBytes    int64
 	UMA                  bool
 	UMAAllocationBytes   int64
+	UMARuntime           *UMARuntime
 	DiskFreeBytes        int64
 }
 
 type Admission struct {
+	HostReserveBytes int64 `json:"host_reserve_bytes"`
+	RuntimeReserveBytes int64 `json:"runtime_reserve_bytes"`
+	MaximumUMABytes int64 `json:"maximum_uma_bytes"`
 	Eligible          bool     `json:"eligible"`
 	AcceleratorBytes  int64    `json:"accelerator_bytes"`
 	RequiredDiskBytes int64    `json:"required_disk_bytes"`
@@ -39,6 +43,12 @@ func CheckResources(r Resources) Admission {
 	a.AcceleratorBytes = r.DiscreteVRAMBytes
 	if r.UMA {
 		a.AcceleratorBytes = r.UMAAllocationBytes
+		a.HostReserveBytes, a.RuntimeReserveBytes, a.MaximumUMABytes = umaBudget(r)
+		if !validUMARuntime(r.UMARuntime) {
+			a.Reasons = append(a.Reasons, "UMA runtime capacity is unknown; repair the CUDA/HIP driver and rerun preflight")
+		} else if r.UMAAllocationBytes > a.MaximumUMABytes {
+			a.Reasons = append(a.Reasons, fmt.Sprintf("proposed UMA allocation exceeds safe budget %d bytes after OS/runtime reserves; reduce allocation or free memory and rerun preflight", a.MaximumUMABytes))
+		}
 		if r.UMAAllocationBytes > r.AvailableSystemBytes {
 			a.Reasons = append(a.Reasons, "proposed UMA allocation exceeds currently available system memory")
 		}
