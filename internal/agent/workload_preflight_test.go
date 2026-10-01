@@ -60,7 +60,7 @@ func TestLocalFullContextFailureStillCleans(t *testing.T){
 			case "/tokenize":writeJSON(w,200,map[string]any{"tokens":[]int{123}})
 			case "/completion":
 				time.Sleep(2*time.Millisecond)
-				writeJSON(w,200,map[string]any{"model":r.CatalogID,"tokens_evaluated":496,"tokens_predicted":16,
+				writeJSON(w,200,map[string]any{"model":"/models/model.gguf","tokens_evaluated":496,"tokens_predicted":16,
 					"truncated":!pass,"stop":true,"stop_type":"limit","generation_settings":map[string]int{"n_ctx":512}})
 			default:
 				time.Sleep(2*time.Millisecond)

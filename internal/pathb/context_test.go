@@ -11,7 +11,7 @@ import (
 )
 
 func TestFullContextEvidence(t *testing.T){
-	for _,kind:=range []string{"pass","truncated","short-prompt","short-generation","wrong-context","wrong-model","missing-truncation","missing-stop","early-stop","invalid-tokens","missing-tokenizer","oversized","malformed","http-error"}{
+	for _,kind:=range []string{"pass","truncated","short-prompt","short-generation","wrong-context","native-model-path","missing-truncation","missing-stop","early-stop","invalid-tokens","missing-tokenizer","oversized","malformed","http-error"}{
 		t.Run(kind,func(t *testing.T){
 			server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
 				if r.URL.Path=="/tokenize"{
@@ -33,7 +33,7 @@ func TestFullContextEvidence(t *testing.T){
 				case "short-prompt":response["tokens_evaluated"]=100
 				case "short-generation":response["tokens_predicted"]=1
 				case "wrong-context":response["generation_settings"]=map[string]int{"n_ctx":1024}
-				case "wrong-model":response["model"]="another"
+				case "wrong-model":response["model"]="/models/approved.gguf"
 				case "missing-truncation":delete(response,"truncated")
 				case "missing-stop":delete(response,"stop")
 				case "early-stop":response["stop_type"]="eos"
@@ -42,7 +42,7 @@ func TestFullContextEvidence(t *testing.T){
 				_ = json.NewEncoder(w).Encode(response)
 			}));defer server.Close()
 			fit,err:=(Runner{Endpoint:server.URL+"/v1/chat/completions",Model:"fixture"}).CheckContextFit(context.Background(),512)
-			if kind=="pass"{if err!=nil||fit==nil||!fit.ValidFor(512){t.Fatalf("%+v %v",fit,err)}}else{
+			if kind=="pass"||kind=="native-model-path"{if err!=nil||fit==nil||!fit.ValidFor(512){t.Fatalf("%+v %v",fit,err)}}else{
 				if err==nil||fit!=nil{t.Fatalf("accepted %s: %+v",kind,fit)}
 				if strings.Contains(err.Error(),"PRIVATE"){t.Fatal("raw response leaked")}
 			}

@@ -1568,10 +1568,12 @@ For this mode the temporary NVIDIA runtime has one slot and context shifting
 disabled. The installer tokenizes fixed synthetic text, submits exactly
 `N - 16` token IDs, disables prompt-cache reuse, and requests 16 generated tokens
 with EOS stopping disabled. Success requires the runtime's response to report
-the exact model alias, exact context size, all requested prompt/generated tokens,
+the exact context size and all requested prompt/generated tokens,
 completed generation at the limit, and explicit `truncated=false`. Missing or
 incompatible native API evidence fails closed. The short timed completion,
-model rehash, container cleanup and fresh postflight must also succeed.
+model rehash, container cleanup and fresh postflight must also succeed. Model
+identity is bound by the pinned container and verified GGUF hash; the native
+response's model path is not compared with the OpenAI-facing alias.
 
 The receipt's optional `context_fit` records protocol, requested context size,
 prompt/generated token counts and elapsed milliseconds. A full-context plan

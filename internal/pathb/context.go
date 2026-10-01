@@ -32,6 +32,8 @@ func (f ContextFit) ValidFor(tokens int) bool {
 
 // CheckContextFit uses llama.cpp's native token-array completion so chat
 // templates/BOS insertion cannot change the requested prompt length.
+// The native response model is a file path, not the OpenAI alias. Model
+// identity is bound by the caller's pinned container and verified GGUF hash.
 func (r Runner) CheckContextFit(ctx context.Context,tokens int)(*ContextFit,error){
 	fail:=func()(*ContextFit,error){return nil,fmt.Errorf("full-context evidence unavailable or mismatched")}
 	if tokens<512||tokens>131072||r.Model==""{return fail()}
@@ -61,7 +63,6 @@ func (r Runner) CheckContextFit(ctx context.Context,tokens int)(*ContextFit,erro
 	prompt:=make([]int,tokens-contextDecodeTokens)
 	for i:=range prompt{prompt[i]=seed.Tokens[i%len(seed.Tokens)]}
 	var response struct {
-		Model string `json:"model"`
 		Evaluated *int `json:"tokens_evaluated"`
 		Predicted *int `json:"tokens_predicted"`
 		Truncated *bool `json:"truncated"`
@@ -75,7 +76,7 @@ func (r Runner) CheckContextFit(ctx context.Context,tokens int)(*ContextFit,erro
 		"stream":false,"cache_prompt":false,"ignore_eos":true,"temperature":0,
 		"stop":[]string{},"id_slot":0,
 	},&response)
-	if err!=nil||ctx.Err()!=nil||response.Model!=r.Model||response.Evaluated==nil||
+	if err!=nil||ctx.Err()!=nil||response.Evaluated==nil||
 		response.Predicted==nil||response.Truncated==nil||*response.Truncated||
 		response.Stopped==nil||!*response.Stopped||response.StopType!="limit"||
 		response.Settings.Context==nil||*response.Settings.Context!=tokens{return fail()}
