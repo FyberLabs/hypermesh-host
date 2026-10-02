@@ -254,6 +254,26 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintln(g.ui.out,"Preparing the model and runtime test required for this host…")
   if _,err=g.plan(ctx,"plan-certification","certification.json","--agent-plan",agentPath);err!=nil{return err}
   var p certificationPlan;if err=guidedRead(certPath,&p,true);err!=nil{return err}
+  expired:=!p.Run.ExpiresAt.IsZero()&&!p.Run.ExpiresAt.After(time.Now())
+  var journal certificationJournal
+  journalPath:=certificationStatePath(defaultSetupState,p.SHA256)
+  retryTerminal:=false
+  if _,e:=os.Lstat(journalPath);e==nil {
+   if e=guidedRead(journalPath,&journal,true);e!=nil{return e}
+   if !validCertificationJournal(journal)||journal.PlanSHA256!=p.SHA256{return fmt.Errorf("certification history is inconsistent; preserve it for recovery")}
+   // Submitted evidence and completed runs must reconcile their original run.
+   if journal.State=="evidence-ready"||journal.State=="passed"||journal.State=="activating"||journal.State=="active"{expired=false}
+   retryTerminal=journal.State=="failed"&&journal.FailureCode=="class_band"
+  }else if !os.IsNotExist(e){return e}
+  if expired||retryTerminal {
+   if err=validateCertificationPlan(p,p.SHA256);err!=nil{return err}
+   if err=g.ui.confirm("The previous model test plan expired or failed its class target. Obtain a new plan for review?");err!=nil{return err}
+   archive:=filepath.Join(g.dir,"certification-history-"+p.SHA256+".json")
+   if _,e:=os.Lstat(archive);!os.IsNotExist(e){return fmt.Errorf("certification plan archive already exists or is unavailable; preserve history")}
+   if err=os.Rename(certPath,archive);err!=nil{return err}
+   if _,err=g.plan(ctx,"plan-certification","certification.json","--agent-plan",agentPath);err!=nil{return err}
+   if err=guidedRead(certPath,&p,true);err!=nil{return err}
+  }
   fmt.Fprintf(g.ui.out,"Model: %s (%d bytes)\nStored at: %s\nRuntime: %s\n",p.Run.Manifest.CatalogID,p.Run.Manifest.SizeBytes,p.ModelPath,p.Run.Manifest.ImageDigest)
   token,e:=g.ui.ask("Private model-token file, only if this model requires a license/token (Enter to skip)","");if e!=nil{return e}
   extra:=[]string{"--run"};if token!=""{extra=append(extra,"--model-token-file",token)}
@@ -316,6 +336,16 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
     fmt.Fprintln(out,"The model directory does not exist. Its parent filesystem must be the disk you intend to use.")
     if err=ui.confirm("Create "+s.Directory+" without changing partitions or mounts?");err==nil {err=agentDirectory(s.Directory,true)}
    } else if e!=nil||!info.IsDir(){err=fmt.Errorf("model storage must be an accessible directory")}
+  }
+  if err==nil&&s.Mode=="uma"{
+   measured,e:=probeResources(ctx,s.Directory,"uma",12*GiB)
+   if e!=nil {err=e} else {
+    budget:=CheckResources(measured).MaximumUMABytes/GiB
+    diskBudget:=measured.DiskFreeBytes/11*5/GiB
+    if diskBudget<budget {budget=diskBudget}
+    if s.Allocation<=0||s.Allocation>budget{s.Allocation=budget}
+    if s.Allocation<12{err=fmt.Errorf("fewer than 12 GiB can be allocated safely with the current RAM, runtime and model-storage capacity")}
+   }
   }
   if err==nil&&s.Mode=="uma"{
    var answer string;answer,err=ui.ask("Memory available to models (GiB)",strconv.FormatInt(s.Allocation,10))
