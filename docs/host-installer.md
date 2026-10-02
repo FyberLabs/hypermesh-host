@@ -144,7 +144,8 @@ disabled with consent, not that other services are disabled.
 - [ ] Enrollment-gated service activation, guided approval and automatic reboot/resume.
 - [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
 - [x] Redacted installer support bundle with stage summaries and recovery guidance.
-- [ ] Repair/uninstall recovery commands and unified live status presentation.
+- [x] Unified read-only local service and authenticated plane status for the certified installation flow.
+- [ ] Repair/uninstall recovery commands and guided reboot/resume.
 - [ ] Enrollment plus benchmark/connectivity gates before selling.
 - [ ] Hardware acceptance runs below.
 
@@ -1439,7 +1440,7 @@ the remaining stages without treating simulated tests as hardware acceptance:
 
 1. Provision reviewed catalog pins and a measured AIuditor class envelope, then
    perform real AGX-1 download, registration, context certification and paused startup.
-2. Add guided start/reboot/resume, unified live status and repair/uninstall.
+2. Add guided start/reboot/resume and repair/uninstall; live diagnostic status is implemented.
    Installer self-update still needs its own reviewed transition.
 3. Complete independent website bootstrap trust and guided public download flow.
 4. Run the full recovery/installation acceptance suite and the AGX-1 clean install
@@ -1654,6 +1655,26 @@ across installer builds.
 
 Automated tests cover every recorded state and failure stage, incomplete/corrupt
 evidence, privacy, immutable reads, locking, cancellation and CLI partial exports.
-This completes certification recovery visibility. Unified live status, guided
-reboot/resume, repair/uninstall, installer self-update and physical acceptance
+This completes certification recovery visibility. Live status is implemented below;
+guided reboot/resume, repair/uninstall, installer self-update and physical acceptance
 remain open. See [the recovery procedure](authenticated-certification.md#read-only-certification-recovery).
+
+### Completed: live installation and plane diagnostics (2026-10-02)
+
+`host-status --plan certification-plan.json` now combines read-only local
+installation/identity/activation checks, reboot and systemd observations, and
+the existing authenticated plane snapshot. It reports individual blockers and
+next actions for intake, class, certification, holds, AIuditor and heartbeat
+freshness. It detects a changed service invocation across network I/O and binds
+historical certification evidence to the selected run and model pins.
+
+The command never creates a heartbeat, changes service state or grants selling
+authority. It shares the installer read lock, redacts private identifiers and
+raw errors, and returns a nonzero status for blockers or unavailable observations.
+Tests cover green/blocked/partial observations, restart detection, clock and
+heartbeat anomalies, identity/evidence binding, reboot markers, locking and CLI
+privacy. See [live host status](authenticated-certification.md#live-host-status).
+
+Guided reboot/resume, repair/uninstall, signed-update reconciliation against the
+original installation, physical AGX-1 acceptance and sustained workload checks
+remain open. This diagnostic does not replace those operations.
