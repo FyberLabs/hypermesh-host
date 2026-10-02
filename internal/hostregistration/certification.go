@@ -94,7 +94,7 @@ func (c *Client) certification(ctx context.Context,r Request,device,secret,runID
  if op=="activation"{
   if out.State!="passed"||out.ActivationAllowed==nil||!*out.ActivationAllowed||
   out.PermitExpiresAt==nil||!out.PermitExpiresAt.After(time.Now())||
-  out.PermitExpiresAt.After(time.Now().Add(3*time.Minute)){return CertificationRun{},fmt.Errorf("activation permit unavailable or expired")}
+  out.PermitExpiresAt.After(out.ExpiresAt)||out.PermitExpiresAt.After(time.Now().Add(3*time.Minute)){return CertificationRun{},fmt.Errorf("activation permit unavailable or expired")}
  }
  return out,nil
 }

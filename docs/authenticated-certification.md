@@ -77,8 +77,10 @@ Keep the same plan and private installer state. The command prints the run ID,
 plan digest, stage and fixed failure code. A lost result acknowledgment retries
 the exact saved evidence without redownloading or rerunning the workload.
 Pre-upload failures can retry the same unexpired plan after correcting the cause.
-A class-envelope failure is terminal for that run; review the cause and suspended
-device state before preparing a new run. Expired plans or changed pins need a
+A class-envelope failure is terminal for that run; review the cause before
+preparing a new run. A fresh plan resets only the
+suspension belonging to that same failed inactive run; unrelated suspensions
+still require operator resolution. Expired plans or changed pins need a
 new reviewed run. Never edit journal verdicts or create activation markers by hand.
 
 An interrupted startup remains `activating`; rerun the same approved

@@ -121,3 +121,14 @@ func TestActivationRollbackAndDurableIntent(t *testing.T){
   })
  }
 }
+
+func TestCertificationJournalRejectsUnconfirmedSuccess(t *testing.T){
+ id,_:=hostregistration.NewRunID()
+ j:=certificationJournal{Schema:1,PlanSHA256:strings.Repeat("a",64),RunID:id,RecordedAt:time.Now()}
+ for _,state:=range []string{"evidence-ready","passed","activating","active","unknown"}{
+  j.State=state
+  if validCertificationJournal(j){t.Fatal("accepted incomplete journal",state)}
+ }
+ j.State="running"
+ if !validCertificationJournal(j){t.Fatal("cannot recover interrupted execution")}
+}

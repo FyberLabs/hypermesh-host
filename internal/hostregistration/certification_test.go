@@ -10,7 +10,7 @@ import (
  "time"
 )
 func TestCertificationResponseBinding(t *testing.T){
- for _,kind:=range []string{"pass","nonce","tenant","device","manifest","selling","permit"}{
+ for _,kind:=range []string{"pass","nonce","tenant","device","manifest","selling","permit","run-expiry"}{
   t.Run(kind,func(t *testing.T){
    r:=fixture(t);r.ClassID="agx-large";id,_:=NewRunID()
    m:=CertificationManifest{SuiteID:"pack-v1",CatalogID:"model",ClassID:r.ClassID,FileHash:"sha256:"+strings.Repeat("a",64),
@@ -31,6 +31,7 @@ func TestCertificationResponseBinding(t *testing.T){
     case "manifest":s.Manifest.ContextTokens++
     case "selling":s.SellingAllowed=flagValue(true)
     case "permit":s.PermitExpiresAt=nil
+    case "run-expiry":s.ExpiresAt=time.Now().Add(time.Second)
     }
     json.NewEncoder(w).Encode(s)
    }));defer server.Close()

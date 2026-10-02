@@ -1471,22 +1471,19 @@ to authenticated dispatch. Null source pins stay null; populate reviewed catalog
 metadata rather than inventing a seed hash. This is a dispatch snapshot, not an
 immutable per-job attestation across retries. Hardware tests remain pending.
 
-**Still pending before installation-to-ready is complete:** an approved installer
-entry point to pull and execute the pinned workload while services remain
-inactive; full advertised-context fit and sustained benchmark testing; a frozen
-per-run evidence contract with AIuditor; and the guarded certification/service
-activation transition. The short completion proves basic inference only. HIP
-and Metal remain blocked for pinned certification until their runners mount the
-verified model and configure its alias. This change does not enable selling or
-create the service activation marker.
+**Current status:** approved local execution, full-context checks, authenticated
+acquisition, immutable run evidence and guarded activation are implemented in
+the following sections. Sustained benchmarks and physical acceptance remain
+pending. HIP and Metal remain blocked until their runners bind the model and
+runtime correctly. Selling remains a separate controlled owner action.
 
 
 ### Completed: approved local workload preflight (2026-10-01)
 
 The Linux NVIDIA installer now exposes the pinned runner without starting the
 agent or requiring enrollment. This is an operator-facing stage for a **local,
-reviewed model**; automatic discovery/acquisition of AIuditor's model pack is
-still pending. It does not replace the public website's eventual guided flow.
+reviewed model**; authenticated acquisition now has its own reviewed flow in
+[authenticated certification](authenticated-certification.md). It does not replace the public website's eventual guided flow.
 
 1. Finish the prerequisite plan and place the reviewed GGUF in that plan's
    models directory. Obtain the model SHA-256 and OCI runtime digest from the
@@ -1545,8 +1542,8 @@ budget. Kernel/filesystem stalls retain normal OS limitations.
 
 **Limits:** this measures a short completion at the requested runtime context
 setting. It does not prove full-context fit, sustained throughput or AIuditor
-certification. These checks, authenticated model-pack acquisition, the controlled
-certification/service-start transition, recovery integration and physical AGX/N5
+certification. Full-context checks, recovery export and authenticated certification are
+implemented in the following sections; sustained benchmarks and physical AGX/N5
 acceptance remain pending. HIP and macOS workload preflight are not enabled.
 
 
@@ -1580,9 +1577,8 @@ the existing workload deadline. Timeout is failure, never reduced-context succes
 
 This proves one synthetic token-window exercise for the pinned runtime/model.
 It is not a model-quality test, sustained benchmark, GPU-residency measurement,
-certification verdict or authorization to start selling. Physical AGX/N5 checks,
-authenticated model acquisition and controlled certification/activation remain
-pending. Older runtime images missing the required native response fields must
+certification verdict or authorization to start selling. Authenticated acquisition and controlled certification/activation are now
+implemented below. Physical AGX/N5 checks remain pending. Older runtime images missing the required native response fields must
 be upgraded through a reviewed digest; there is no silent short-check fallback.
 
 Native API references: [llama.cpp server protocol](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
@@ -1625,8 +1621,8 @@ A successfully collected failure is still a failure: `collection_complete`
 describes export completeness, never host readiness.
 
 This closes support-export integration for local workload/context checks.
-Authenticated model acquisition, immutable AIuditor run evidence, controlled
-certification/service activation, guided repair/reboot and physical AGX/N5
+Authenticated model acquisition, immutable run evidence and controlled
+activation are implemented below. Guided repair/reboot and physical AGX/N5
 acceptance remain open. The export is historical and never starts services,
 retries a workload or authorizes selling.
 
@@ -1637,6 +1633,5 @@ The Linux NVIDIA installer now supports `plan-certification`, `certify-agent`, a
 `activate-agent`, backed by tenant/device-bound frozen SQL runs and original-owner
 approval. See [authenticated certification](authenticated-certification.md) for
 configuration, review, commands, retry behavior and remaining acceptance work.
-Earlier references above to these two milestones being pending are historical.
 Guided orchestration, self-update, repair/uninstall, sustained benchmarks and the
 remaining hardware/platform acceptance tasks are still open.
