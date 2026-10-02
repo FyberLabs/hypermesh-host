@@ -47,7 +47,10 @@ func certFixture(t *testing.T, status int) (*Agent, api.Job, *[][]string) {
 	t.Cleanup(server.Close)
 	a.certEndpoint = server.URL
 	a.pathb.Endpoint = "http://unrelated.invalid/v1/chat/completions"
-	a.certReadyWait = 20*time.Millisecond
+	// Successful HTTP fixtures need scheduling headroom under race-enabled CI.
+ // The failure test keeps a short deadline so it still exercises timeout cleanup.
+ a.certReadyWait = 2*time.Second
+ if status != http.StatusOK { a.certReadyWait = 20*time.Millisecond }
 	a.inspectCatalog = func(context.Context,string)string { t.Error("mutable image lookup"); return "" }
 	calls := new([][]string)
 	a.runtime = &runtime.NVIDIA{Run:func(_ context.Context,_ string,args ...string)([]byte,error) {

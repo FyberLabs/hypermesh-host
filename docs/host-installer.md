@@ -1655,8 +1655,8 @@ across installer builds.
 
 Automated tests cover every recorded state and failure stage, incomplete/corrupt
 evidence, privacy, immutable reads, locking, cancellation and CLI partial exports.
-This completes certification recovery visibility. Unified live status, guided
-reboot/resume, repair/uninstall, installer self-update and physical acceptance
+This completes certification recovery visibility. Live status is implemented below;
+guided reboot/resume, repair/uninstall, installer self-update and physical acceptance
 remain open. See [the recovery procedure](authenticated-certification.md#read-only-certification-recovery).
 
 ### Completed: live installation and plane diagnostics (2026-10-02)
