@@ -22,7 +22,7 @@ func fixtureGuided(t *testing.T,answers string)(guidedFlow,*[]string,*string) {
  calls:=[]string{};failure:=""
  state:=&guidedState{Network:"test",Host:"fixture",Directory:"/models",Mode:"uma",Allocation:40,Class:"agx-large"}
  sha:=strings.Repeat("a",64)
- g:=guidedFlow{dir:dir,state:state,ui:guidedUI{bufio.NewReader(strings.NewReader(answers)),io.Discard},diagnostic:io.Discard,
+ g:=guidedFlow{dir:dir,state:state,ui:guidedUI{in:bufio.NewReader(strings.NewReader(answers)),out:io.Discard},diagnostic:io.Discard,
  save:func()error{return nil},rebootNeeded:func(SetupPlan)(bool,error){return false,nil},
  boot:func()(string,string,error){return "machine","boot",nil}}
  g.run=func(name string)guidedRunner{return func(_ context.Context,args []string,out,diagnostic io.Writer)int {
@@ -100,4 +100,11 @@ func TestGuidedPlansPreserveIntegerPrecision(t *testing.T){
  if _,err:=g.plan(context.Background(),"plan-agent","precise.json");err!=nil{t.Fatal(err)}
  raw,err:=os.ReadFile(filepath.Join(g.dir,"precise.json"));if err!=nil{t.Fatal(err)}
  if !strings.Contains(string(raw),"9007199254740993"){t.Fatal("integer rounded",string(raw))}
+}
+
+func TestGuidedPromptCancellation(t *testing.T){
+ reader,writer:=io.Pipe();defer reader.Close();defer writer.Close()
+ ctx,cancel:=context.WithCancel(context.Background());cancel()
+ ui:=guidedUI{in:bufio.NewReader(reader),out:io.Discard,ctx:ctx}
+ if _,err:=ui.ask("Continue?","");err==nil{t.Fatal("cancelled prompt accepted")}
 }

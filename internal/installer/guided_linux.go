@@ -53,10 +53,20 @@ func installationNetwork(name string)(guidedNetwork,error) {
  switch name {case "production":case "test":suffix="test.";default:return guidedNetwork{},fmt.Errorf("choose production or test")}
  return guidedNetwork{"https://api."+suffix+"hyperme.sh","https://auth."+suffix+"hyperme.sh/realms/controlplane","https://portal."+suffix+"hyperme.sh"},nil
 }
-type guidedUI struct { in *bufio.Reader; out io.Writer }
+type guidedUI struct { in *bufio.Reader; out io.Writer; ctx context.Context }
 func (u guidedUI) ask(label,def string)(string,error) {
  if def!="" {fmt.Fprintf(u.out,"%s [%s]: ",label,def)} else {fmt.Fprintf(u.out,"%s: ",label)}
- line,err:=u.in.ReadString('\n')
+ var line string;var err error
+ if u.ctx==nil {line,err=u.in.ReadString('\n')} else {
+  if u.ctx.Err()!=nil{return "",fmt.Errorf("setup cancelled; run the same installer to resume")}
+  type answer struct{line string;err error}
+  result:=make(chan answer,1)
+  go func(){line,err:=u.in.ReadString('\n');result<-answer{line,err}}()
+  select {
+  case value:=<-result:line,err=value.line,value.err
+  case <-u.ctx.Done():return "",fmt.Errorf("setup cancelled; run the same installer to resume")
+  }
+ }
  if err!=nil{return "",fmt.Errorf("setup paused: interactive input ended; run the same installer again to resume")}
  answer:=strings.TrimSpace(line);if answer==""{answer=def}
  for _,r:=range answer {if r<32||r==127{return "",fmt.Errorf("invalid control character in answer")}}
@@ -300,7 +310,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if flags.NArg()!=0{return 2}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
  if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
- ui:=guidedUI{bufio.NewReader(input),out}
+ ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx}
  fmt.Fprintln(out,"Hypermesh host setup\nThis guide checks your host, installs required software, connects your account and tests readiness. You approve machine changes before they run.")
  dir:=filepath.Join(defaultSetupState,"guided")
  unlock,err:=lockSetupState(dir);if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
