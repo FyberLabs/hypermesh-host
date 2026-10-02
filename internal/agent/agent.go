@@ -112,6 +112,7 @@ type Agent struct {
 
 	leaseMu  sync.RWMutex
 	sellMu   sync.Mutex
+ maintenanceMu sync.Mutex
 	cacheMu  sync.Mutex
 	healthMu sync.Mutex
 	hbStreak int
@@ -787,6 +788,10 @@ func (a *Agent) attachEgressObservation(ctx context.Context, res *jobOutcome) {
 }
 
 func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
+ a.maintenanceMu.Lock();defer a.maintenanceMu.Unlock()
+ if a.maintenanceHeld()&&job.Kind!=api.KindLeaseStop&&job.Kind!=api.KindLeaseCancel&&job.Kind!=api.KindLeaseExpiry&&job.Kind!=api.KindSellPause{
+  return jobOutcome{Result:pathb.Result{Passed:false,Reason:"host maintenance hold"}}
+ }
 	_ = a.effectiveSell()
 	switch job.Kind {
 	case api.KindPathB, api.KindInstanceCheck, api.KindCompactCert:

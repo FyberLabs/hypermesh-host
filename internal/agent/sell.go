@@ -71,6 +71,7 @@ func (a *Agent) effectiveSell() SellPosture {
 }
 
 func (a *Agent) effectiveSellLocked() SellPosture {
+ if a.maintenanceHeld(){return SellPosture{SellState:api.SellPaused}}
 	p := a.loadSell()
 	if p.SellState == "" || p.SellState == api.SellNA {
 		p = SellPosture{SellState: api.SellSelling}
@@ -157,7 +158,8 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 		storeUntil = formatUntil(t)
 	}
 
-	next := SellPosture{SellState: api.SellPaused, Until: storeUntil}
+	if a.maintenanceHeld(){storeUntil=""}
+ next := SellPosture{SellState: api.SellPaused, Until: storeUntil}
 	if current.SellState == api.SellPaused && current.Until == storeUntil {
 		a.log.Info("sell_pause", "reason", "already paused", "until", storeUntil)
 	} else if err := a.saveSell(next); err != nil {

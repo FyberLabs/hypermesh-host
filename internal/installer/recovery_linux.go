@@ -56,7 +56,7 @@ func recoverySnapshot(root,path string)(recoveryFile,error){
  for {if _,err:=os.Lstat(parent);!os.IsNotExist(err){break};parent=filepath.Dir(parent)}
  if err:=agentDirectory(parent,false);err!=nil{return r,err}
  info,err:=os.Lstat(full);if os.IsNotExist(err){return r,nil}
- if err!=nil||!info.Mode().IsRegular()||info.Size()>256<<20||info.Mode()&os.ModeType!=0{return r,fmt.Errorf("unsafe recovery payload")}
+ if err!=nil||!info.Mode().IsRegular()||info.Size()>256<<20||info.Mode()&(os.ModeType|os.ModeSetuid|os.ModeSetgid|os.ModeSticky)!=0{return r,fmt.Errorf("unsafe recovery payload")}
  st,ok:=info.Sys().(*syscall.Stat_t)
  if !ok||st.Uid!=uint32(os.Geteuid())||st.Nlink!=1||info.Mode().Perm()&0022!=0{return r,fmt.Errorf("unsafe recovery ownership or permissions")}
  f,err:=os.OpenFile(full,os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK,0);if err!=nil{return r,err};defer f.Close()
@@ -72,6 +72,7 @@ func recoveryGuard(ctx context.Context,root string,p agentInstallPlan,source set
   raw,err:=source.output(ctx,"systemctl","--system","show","--all",unit,"-p","UnitFileState","--value")
   if err!=nil||!supportOneOf(strings.TrimSpace(string(raw)),"","disabled","static","masked"){return fmt.Errorf("disable host units before recovery so they cannot start at boot")}
  }
+ if err:=noMaintenanceContainers(ctx);err!=nil{return err}
  return ctx.Err()
 }
 func saveRecovery(dir string,j recoveryJournal)error{

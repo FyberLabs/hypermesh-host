@@ -24,6 +24,7 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+ if name=="plan-maintenance"||name=="maintain-agent"||name=="resume-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanMaintenance;if name=="maintain-agent"{run=installer.RunMaintainAgent};if name=="resume-agent"{run=installer.RunResumeAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-recovery"||name=="recover-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanRecovery;if name=="recover-agent"{run=installer.RunRecoverAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-reboot"||name=="reboot-setup"||name=="resume-setup"||name=="reboot-status" {
   ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
@@ -178,6 +179,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan-maintenance  review enrolled-host stop/reboot; --plan CERTIFICATION_PLAN --operation stop|reboot
+  maintain-agent  drain and stop; --plan FILE --approve-plan SHA256 --apply [--reboot]
+  resume-agent  verify and resume paused; --plan FILE --approve-plan SHA256 --start
   plan-recovery  review inactive host repair/uninstall; --agent-plan FILE --operation repair|uninstall
   recover-agent  apply recovery while preserving identity/models; --plan FILE --approve-plan SHA256 --apply
   plan-reboot  review a pre-enrollment prerequisite reboot; --setup-plan FILE
