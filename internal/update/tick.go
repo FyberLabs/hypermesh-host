@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+ "path/filepath"
 	"strings"
 	"time"
 )
@@ -187,7 +188,11 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	if strings.TrimSpace(previous) == "" {
 		previous = cfg.CurrentCommit
 	}
-	backup, err := install(cfg.BinaryPath, bin, previous)
+	// Keep independently verifiable evidence before exposing updated bytes.
+ if h.Install==nil {
+  if err:=WriteEvidence(filepath.Dir(cfg.MarkerPath),Evidence{Schema:1,Checksums:sums,Signature:sig,Manifest:manRaw,Binary:binName,SHA256:binArt.SHA256});err!=nil{return Plan{},err}
+ }
+ backup, err := install(cfg.BinaryPath, bin, previous)
 	if err != nil {
 		return Plan{}, err
 	}

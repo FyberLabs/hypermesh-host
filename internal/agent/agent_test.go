@@ -1988,7 +1988,8 @@ func TestHeartbeatLogsNVIDIABackend(t *testing.T) {
 	waitLoop(t, a, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return heartbeats >= 1
+		// Receiving the request does not mean the agent has handled its response.
+		return heartbeats >= 1 && strings.Contains(logBuf.String(), "backend="+runtime.HostLogLabel())
 	})
 	out := logBuf.String()
 	if !strings.Contains(out, "backend="+runtime.HostLogLabel()) {

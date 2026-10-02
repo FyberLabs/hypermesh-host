@@ -21,6 +21,7 @@ var _ update.IdleGate = (*Agent)(nil)
 // The job loop calls it at the start of a check and again before
 // install and restart. Heartbeat does not call it.
 func (a *Agent) Busy() bool {
+ if a.maintenanceHeld(){return true}
 	h := a.currentLease()
 	if h != nil && strings.TrimSpace(h.LeaseID) != "" {
 		return true
@@ -71,6 +72,8 @@ func (a *Agent) startUpdateWatch(ctx context.Context) {
 }
 
 func (a *Agent) maybeSelfUpdate(ctx context.Context) {
+ a.maintenanceMu.Lock();defer a.maintenanceMu.Unlock()
+ if a.maintenanceHeld(){return}
 	if strings.TrimSpace(a.cfg.UpdateChannel) == "" {
 		return
 	}

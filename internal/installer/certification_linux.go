@@ -301,6 +301,9 @@ func verifyAgentStartup(ctx context.Context)error{
    })
 }
 func activateCertified(ctx context.Context,p certificationPlan,identity registrationJournal,c *hostregistration.Client,j *certificationJournal,save func(certificationJournal)error,diagnostic io.Writer)error{
+ return activateCertifiedMode(ctx,p,identity,c,j,save,diagnostic,false)
+}
+func activateCertifiedMode(ctx context.Context,p certificationPlan,identity registrationJournal,c *hostregistration.Client,j *certificationJournal,save func(certificationJournal)error,diagnostic io.Writer,resume bool)error{
  if !supportOneOf(j.State,"passed","activating","active")||j.Evidence==nil{return fmt.Errorf("complete certification before activation")}
  marker:=activationMarker(p)
  own,err:=agentFileMatches(marker.Path,marker);if err!=nil{return err}
@@ -329,8 +332,15 @@ func activateCertified(ctx context.Context,p certificationPlan,identity registra
  if err=c.Login(ctx,token.Bearer(),func(sub string)error{
   if sub!=identity.Owner{return fmt.Errorf("original registration owner required")};return nil
  });err!=nil{return err}
- if err=c.ApproveActivation(ctx,p.Run);err!=nil{return err}
- permit,err:=c.ActivationPermit(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret,p.Run);if err!=nil{return err}
+ var permit hostregistration.CertificationRun
+ if resume{
+  if err=c.ApproveResume(ctx,p.Run);err!=nil{return err}
+  permit,err=c.ResumePermit(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret,p.Run)
+ }else{
+  if err=c.ApproveActivation(ctx,p.Run);err!=nil{return err}
+  permit,err=c.ActivationPermit(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret,p.Run)
+ }
+ if err!=nil{return err}
  // Recheck local authority immediately before publishing the startup marker.
  if err=verifyInstalledForActivation(ctx,"",p.Agent,own);err!=nil{return err}
  if err=checkRegistrationIdentity("",identity,true);err!=nil{return err}

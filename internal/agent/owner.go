@@ -73,6 +73,8 @@ type ownerLeaseStopResponse struct {
 
 // ownerStatusResponse is GET /v0/status. JSON only. No secrets.
 type ownerStatusResponse struct {
+ Maintenance bool `json:"maintenance"`
+ WorkPending bool `json:"work_pending"`
 	DeviceID  string            `json:"device_id"`
 	SellState api.SellState     `json:"sell_state"`
 	Until     string            `json:"until,omitempty"`
@@ -174,6 +176,7 @@ func (a *Agent) startOwner(ctx context.Context) error {
 func (a *Agent) ownerHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v0/status", a.handleOwnerStatus)
+ mux.HandleFunc("/v0/maintenance",a.handleOwnerMaintenance)
 	mux.HandleFunc("/v0/console", a.handleOwnerConsole)
 	mux.HandleFunc("/", a.handleOwnerConsole)
 	mux.HandleFunc("/v0/sell_pause", a.handleOwnerSellPause)
@@ -233,6 +236,7 @@ func (a *Agent) handleOwnerConsole(w http.ResponseWriter, r *http.Request) {
 func (a *Agent) ownerStatus(ctx context.Context) ownerStatusResponse {
 	sell := a.effectiveSell()
 	out := ownerStatusResponse{
+ Maintenance:a.maintenanceHeld(), WorkPending:a.pendingResult.Load(),
 		DeviceID:  strings.TrimSpace(a.state.DeviceID),
 		SellState: sell.SellState,
 		Until:     sell.Until,

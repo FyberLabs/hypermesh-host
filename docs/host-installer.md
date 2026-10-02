@@ -1715,3 +1715,25 @@ driver/kernel upgrade policy, repair/uninstall and signed-update reconciliation
 remain separate unfinished tasks.
 
 Agent planning and installation enforce the live reboot/headless gate and require verified current-boot evidence for a recorded prerequisite reboot. All reboot commands accept the prerequisite `--state-dir`; `plan-agent --setup-state-dir` binds that location into the installation approval. Installation and reboot share both custom and canonical locks. See the procedure above for custom-directory support export.
+
+
+### Completed: Linux lifecycle implementations; AGX acceptance pending (2026-10-02)
+
+The five approved pre-AGX implementation areas are now implemented:
+reviewed repair/uninstall preserving identity and models; enrolled drain/stop/
+reboot and paused resume; reviewed installer update/rollback plus independently
+verified signed agent-update receipts; bundled bootstrap trust and the companion
+website/API download guide; and automated lifecycle/failure-injection coverage
+with a bounded live acceptance collector.
+
+See [lifecycle completion](host-lifecycle-completion.md),
+[the first-install guide](first-install-guide.md) and
+[AGX physical acceptance](agx-acceptance.md). The maintenance resume API requires
+fresh original-owner authority and current certification/pins even after the
+original acquisition window expires. Uninstall is explicitly recorded and does
+not retire the remote host.
+
+This entry supersedes earlier implementation-pending notes for these five areas.
+It does not close physical AGX reboot/reconnect, actual model/runtime compatibility,
+sustained-load testing, broader driver/kernel upgrades, workload modes, macOS or
+other hardware-backend certification. Those remain separate acceptance/future work.

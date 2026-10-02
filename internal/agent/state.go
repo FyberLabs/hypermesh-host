@@ -99,6 +99,7 @@ func writeJSON0600(path string, v any) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil { _ = tmp.Close(); return err }
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -106,5 +107,5 @@ func writeJSON0600(path string, v any) error {
 		return err
 	}
 	cleanup = false
-	return nil
+	d, err := os.Open(dir); if err != nil { return err }; defer d.Close(); return d.Sync()
 }

@@ -42,6 +42,7 @@ jobs:
           python3 packaging/release/test-index-build.py
           python3 packaging/release/test-bootstrap.py
           python3 internal/installer/test_uma_probe.py
+          python3 scripts/test-host-acceptance.py
 
       - name: Verify release binary payload
         run: python3 packaging/release/test-release-binaries.py

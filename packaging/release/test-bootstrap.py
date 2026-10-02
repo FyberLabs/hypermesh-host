@@ -53,7 +53,7 @@ class BootstrapTests(unittest.TestCase):
         cls.workspace.cleanup()
 
     def test_download_verification_and_no_overwrite(self):
-        for mode in ("valid", "tamper", "signature", "fingerprint", "rollback", "channel", "existing"):
+        for mode in ("valid", "tamper", "signature", "fingerprint", "rollback", "channel", "existing", "release-substitution"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "deploy"
                 if mode == "existing":
@@ -65,7 +65,7 @@ class BootstrapTests(unittest.TestCase):
                 def fetch(address, limit):
                     return files[address.rsplit("/", 1)[1]]
                 def run():
-                    return bootstrap.bootstrap("https://example.invalid/release", "prod" if mode == "channel" else "test",
+                    return bootstrap.bootstrap("https://example.invalid/test/" + ("25-" if mode == "release-substitution" else "24-") + "a"*12, "prod" if mode == "channel" else "test",
                                                25 if mode == "rollback" else 24, "arm64", self.key,
                                                "0"*40 if mode == "fingerprint" else self.fingerprint, output, fetch)
                 if mode == "valid":
@@ -78,6 +78,28 @@ class BootstrapTests(unittest.TestCase):
                     if mode == "existing": self.assertEqual(output.read_bytes(), b"preserve")
                     else: self.assertFalse(output.exists())
                 self.assertFalse(list(Path(directory).glob(".hypermesh-bootstrap-*")))
+
+    def test_bundled_trust_matches_reviewed_primary_fingerprint(self):
+        self.assertEqual(bootstrap.TRUSTED_KEY, (SOURCE.parent / "trust/hypermesh-release.pub").read_bytes())
+        key_path = self.home / "bundled.pub"
+        key_path.write_bytes(bootstrap.TRUSTED_KEY)
+        rows = self.gpg("--with-colons", "--show-keys", str(key_path)).decode().splitlines()
+        primary = next(row.split(":")[9] for row in rows if row.startswith("fpr:"))
+        self.assertEqual(primary, bootstrap.TRUSTED_FINGERPRINT)
+
+    def test_cli_uses_bundled_trust_and_exports_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "release.pub"
+            argv = ["bootstrap", "--release-url", "https://example.invalid/release",
+                    "--channel", "test", "--min-build", "24", "--arch", "arm64",
+                    "--output", str(Path(directory) / "deploy"), "--key-output", str(key)]
+            with mock.patch("sys.argv", argv), mock.patch.object(bootstrap, "bootstrap", return_value=json.loads(self.meta)) as run:
+                bootstrap.main()
+                self.assertEqual(run.call_args.args[4:6], (bootstrap.TRUSTED_KEY, bootstrap.TRUSTED_FINGERPRINT))
+                self.assertEqual(key.read_bytes(), bootstrap.TRUSTED_KEY)
+                with self.assertRaises(SystemExit):
+                    bootstrap.main()
+                self.assertEqual(key.read_bytes(), bootstrap.TRUSTED_KEY)
 
     def test_reject_url_credentials_and_plaintext(self):
         for url in ("http://example.invalid", "https://user:pass@example.invalid", "https://example.invalid/?token=x"):
