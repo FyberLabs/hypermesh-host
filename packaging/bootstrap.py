@@ -16,6 +16,40 @@ import urllib.parse
 import urllib.request
 
 
+# Reviewed trust anchor copied from infra/config/environments/production.yaml.
+# Changes require a reviewed rotation; never learn trust from release storage.
+TRUSTED_FINGERPRINT = "1540ED8CD1EC4BDF72949FC78D741FF786A369FD"
+TRUSTED_KEY = b"""-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBGq8kr8BEAC0mtkwL86ZiG3SD0mhF1x1P/HAUvLGsDuVQDfqQywnXS5dwzou
+ZaXLYJbcaO7UT3p/pdyWOkh0TE6e8YWZyNPELlKW/P0X17CixCVtEciJMpsBsHoN
+i6aq9DPNEeFRhqB5o7B+VowHIt+3dXRTKLb2qBCcgbsSnmwPSm7Fjsh/Rq8/VqZN
+e7dKh1cZZpTBBmAZQpg7Vj9PJLxCfgV2R4SVZ27uVeea2++Iz6mM6lL4DV8LKYgP
+PdjxdxWCzApLslBzEfZZBKCty6lS+0b6hAlvImw7f40Es2U9acw94Cct0h0V+VH3
+LQt4f0Pni1AJ4cvgw5LgOZO+kh9knxynvSwFOqdqjaR5NMAE1DVdDebca4Rlvnmz
+louok8UdWgZN7EbCXuI33ETEJll+Ns03r3Qrsqs7cuwZsd2yZh+7YxsZrtNUbSnd
+ezAWWSjOz4FQSO2KbORs9f2WriKKhbs7CVroSQVrGctNLwPgv551+UwLEX86ZIhZ
+H3GlzKUe1mXYPnQJdJBzAzwKGEXsrTeeEmjgUJg5SfgDI+7n0JVdCA8gnKhoNM/k
+5I4MR+QK2IBPRGOLfwlQxNOHNUzM1d9PKdV0QCm3rqrQ9c/dJSpTVUq/GqpppAeC
+D+xLhTS4kZ+q3L1boZrrEtgUtj0iVNWfpkAYMh6bH1GSvbg1et92/egslwARAQAB
+tCxIeXBlcm1lc2ggQWdlbnQgUmVsZWFzZSA8cmVsZWFzZUBoeXBlcm1lLnNoPokC
+UQQTAQoAOxYhBBVA7YzR7EvfcpSfx410H/eGo2n9BQJqvJK/AhsDBQsJCAcCAiIC
+BhUKCQgLAgQWAgMBAh4HAheAAAoJEI10H/eGo2n9M+sQAJUW0d+O6VBW7r29NxC+
+H8plpf7CGk0+w7hQG/U6XsHwYVH7Di9e8AIlIqBQw2isO+/+sc4DXBw2rpM98re8
+p7UEgWKn1nPXQHw/ghb5PK9V94SpI6Z9IuAeNhGqSGUG8sx4xo0bhtPVWE5VOz2g
+ZBCKYu3VudaG2GSttOcA+9u4ALlrcAOuPO7V9ThJ49XHhFps5VQ9qcwJ/Sj7fwMk
+YzBPAKFnUM3h4o2aBnyO4e5hJm0rXM6XKC2ssmpwC2tlvbkNcV8OAKkONHdXSKqa
+6BKIY98d6I05QS0GrrldvsKOTrYHn4pSXg6E7+/CQ8ZW1dzAIXl8yTzretThDmCB
+G1QaKUduopskRy2NAY4XhJWL6+sT+WKMq9gGXLmFHcG8v5FYTPs/MBYnbPikZCss
+l+RlKffvA4oP0bxKWvfGduVIdZecGzRaiaZGI3BDMt1cARrh/Rk9340Hx6NMmu31
+uFd+LWewRRcF+NntWWXwXs1wxvGI1tDhFNvhR/lbxr+VWUl/9hm0qKUmS8RcmMcg
+Hf1IQvOl6IpWxcOY52ijpS5MCVkG9LV/DrqXNRxZAWZnqZINitIPwJV0XY1l5pEa
+HYmpXoHk8t4pdsp+6UheLpHdNNYRXrxvwUWxafZaYOVfWagNTtfUT4sHdTYL3KDi
+BTuaMpuY8awSyEzVcdD79sJY
+=t2ke
+-----END PGP PUBLIC KEY BLOCK-----
+"""
+
 class Rejected(Exception):
     pass
 
@@ -170,17 +204,27 @@ def main():
     parser.add_argument("--channel", required=True, choices=["test", "prod"])
     parser.add_argument("--min-build", required=True, type=int)
     parser.add_argument("--arch", required=True, choices=["arm64", "amd64"])
-    parser.add_argument("--trusted-key", required=True, type=Path)
-    parser.add_argument("--fingerprint", required=True)
+    parser.add_argument("--trusted-key", type=Path, help="explicit trust override; default is the bundled reviewed key")
+    parser.add_argument("--fingerprint", default=TRUSTED_FINGERPRINT)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--key-output", type=Path, help="save bundled/selected public trust to a NEW file for subsequent plans")
     args = parser.parse_args()
     try:
-        with args.trusted_key.open("rb") as stream:
-            key = stream.read((1 << 20) + 1)
+        key = TRUSTED_KEY
+        if args.trusted_key:
+            with args.trusted_key.open("rb") as stream:
+                key = stream.read((1 << 20) + 1)
         if not key or len(key) > 1 << 20:
             raise Rejected("trusted key is empty or too large")
         meta = bootstrap(args.release_url, args.channel, args.min_build, args.arch,
                          key, args.fingerprint, args.output)
+        if args.key_output:
+            with tempfile.NamedTemporaryFile(prefix=".hypermesh-trust-", dir=args.key_output.parent) as stage:
+                stage.write(key)
+                stage.flush()
+                os.fchmod(stage.fileno(), 0o644)
+                os.fsync(stage.fileno())
+                os.link(stage.name, args.key_output)
     except Rejected as error:
         parser.exit(1, f"bootstrap: {error}\n")
     except OSError:
