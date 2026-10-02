@@ -95,3 +95,41 @@ Automated tests cover download integrity/deadlines, immutable/idempotent result
 upload, owner and state gates, SQL rollback/concurrency, and startup rollback.
 Physical AGX-1 installation, real AIuditor baseline compatibility, reboot recovery,
 and model license/source provisioning still require operator acceptance.
+
+## Read-only certification recovery
+
+Inspect the private journal without contacting the plane, rerunning a workload,
+or changing services:
+
+```sh
+sudo hypermesh-deploy certification-status --plan-sha CERTIFICATION_PLAN_SHA256
+sudo hypermesh-deploy support-bundle \
+  --certification-plan-sha CERTIFICATION_PLAN_SHA256 \
+  --output /root/hypermesh-support-new.json
+```
+
+The status command prints the same redacted certification stage that the support
+bundle exports. You can combine the certification selector with agent, setup
+and workload plan selectors to collect their independent historical records.
+A combined bundle does not establish that independently selected plans belong
+to the same installation.
+
+Both commands acquire a shared installer lock, read private regular files and
+validate state/evidence consistency. They never create missing state or retry an
+operation. Missing, unsafe, corrupt or incomplete records produce an explicit
+collection status and exit 1; support-bundle still saves a partial redacted
+artifact. Exit 0 means collection succeeded, including when the recorded
+certification failed. Use the stage's state, failure_code and next_action to
+understand the outcome.
+
+The summary distinguishes an unconfirmed upload, a terminal class-envelope
+failure, rollback after failed startup, unconfirmed activation/cleanup, and
+recorded stable startup. It includes dated context, throughput, cleanup and
+tunnel observations, but omits run/device IDs, model hashes, registry/source
+addresses, local model paths and credentials. Keep the original plan and journal
+locally; the redacted export cannot restore them.
+
+All observations are historical. The journal alone cannot revalidate the frozen
+manifest, plan expiry, server verdict, current service state or selling gates.
+An active record does not authorize selling or prove that the agent is still
+running. Guided reboot/resume and unified live readiness remain roadmap work.
