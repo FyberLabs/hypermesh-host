@@ -1752,3 +1752,12 @@ to the existing validated operations; its progress cursor never authorizes selli
 Unsupported hardware and inconsistent existing installations stop for recovery.
 Deploy the Panopticon host-installation metadata endpoint before publishing the
 new guided website instructions. Use a host release containing this guide.
+
+### AGX guided reboot correction (implementation complete; physical retest pending)
+
+- [x] Submit owner-approved initial reboots through logind with root shutdown-inhibitor enforcement, avoiding systemctl's rejection of the operator's own sudo/SSH session.
+- [x] Show bounded local reboot failure details while retaining redacted durable checkpoints.
+- [x] Offer a confirmed retry in the guide and verify a changed boot without another request.
+- [x] Allow newer verified builds to replan only pre-install prerequisites, preserving old approvals and selected model storage.
+- [x] Keep pending headless transitions visible after the default target was already changed.
+- [ ] Repeat the signed-build AGX installation through reboot, reconnect and automatic continuation.

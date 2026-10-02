@@ -44,7 +44,7 @@ func setupRebootDigest(p setupRebootPlan)string{p.SHA256="";raw,_:=json.Marshal(
 func validateSetupRebootPlan(p setupRebootPlan,approved string)error{
  if p.Schema!=1||p.Scope!="pre-enrollment"||!setupDigestRE.MatchString(approved)||p.SHA256!=approved||
   setupRebootDigest(p)!=approved||!setupDigestRE.MatchString(p.MachineSHA256)||!hostregistration.UUID.MatchString(p.BootID)||
-  (!p.OSRequired&&!p.Headless)||(p.Headless&&!(p.Setup.HeadlessRequested&&p.Setup.Platform.DefaultTarget=="graphical.target")){
+  (!p.OSRequired&&!p.Headless)||(p.Headless&&!p.Setup.HeadlessRequested){
   return fmt.Errorf("reboot approval does not match a supported pre-enrollment plan")
  }
  return validateSetupApproval(p.Setup,p.Setup.PlanSHA256)
@@ -180,7 +180,10 @@ func requestSetupReboot(ctx context.Context,p setupRebootPlan,j *setupRebootJour
  if err!=nil||boot!=p.BootID||ctx.Err()!=nil{return fail("preflight")}
  // A successful return confirms only request submission. The durable requested
  // state intentionally survives process termination or a lost systemd reply.
- if err=d.Request(ctx);err!=nil{return fail("request_unconfirmed")}
+ if err=d.Request(ctx);err!=nil{
+  checkpointErr:=fail("request_unconfirmed")
+  return fmt.Errorf("%v\n%w",err,checkpointErr)
+ }
  return nil
 }
 func resumeSetupReboot(ctx context.Context,p setupRebootPlan,j *setupRebootJournal,d setupRebootDeps)error{
@@ -333,19 +336,64 @@ func rebootInventoryCommand(ctx context.Context,args ...string)*exec.Cmd{
  return cmd
 }
 
+func setupLogindCommand(ctx context.Context,args ...string)*exec.Cmd{
+ cmd:=exec.CommandContext(ctx,"/usr/bin/busctl",append([]string{"--system","--allow-interactive-authorization=no","--timeout=20s"},args...)...)
+ cmd.Env=[]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin","LC_ALL=C","SYSTEMD_COLORS=0","SYSTEMD_PAGER="}
+ cmd.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
+ cmd.Cancel=func()error{return syscall.Kill(-cmd.Process.Pid,syscall.SIGKILL)}
+ cmd.WaitDelay=time.Second
+ return cmd
+}
 func setupRebootCommand(ctx context.Context)(*exec.Cmd,error){
- return liveSystemdCommand(ctx,"systemctl","--system","--no-ask-password","--check-inhibitors=yes","reboot")
+ // systemctl's explicit inhibitor check also rejects the sudo caller's
+ // non-root login session. Call logind directly after the reviewed approval.
+ // Flag 1 is SD_LOGIND_ROOT_CHECK_INHIBITORS: real shutdown inhibitors still
+ // block root, and logind retains its normal delay-inhibitor handling.
+ cmd:=setupLogindCommand(ctx,"call","org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","RebootWithFlags","t","1")
+ return cmd,nil
 }
 func submitSetupReboot(ctx context.Context)error{
  ctx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  cmd,err:=setupRebootCommand(ctx);if err!=nil{return err}
- cmd.Stdout=io.Discard;cmd.Stderr=io.Discard
- if cmd.Run()!=nil{return fmt.Errorf("reboot submission unconfirmed; inspect inhibitors and system logs")}
+ probe:=setupLogindCommand(ctx,"--json=short","get-property","org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","BlockInhibited")
+ return submitSetupRebootChecked(ctx,probe,cmd)
+}
+
+func submitSetupRebootChecked(ctx context.Context,probe,request *exec.Cmd)error{
+ // logind excludes blockers owned by the caller UID on older systemd.
+ // Observe the aggregate property first so root-owned blockers also stop us.
+ raw,err:=runSetupLogindCommand(ctx,probe);if err!=nil{return err}
+ if err=checkSetupShutdownInhibitors(raw);err!=nil{return err}
+ return runSetupRebootCommand(ctx,request)
+}
+func checkSetupShutdownInhibitors(raw []byte)error{
+ var value struct{Type string `json:"type"`;Data *string `json:"data"`}
+ if json.Unmarshal(raw,&value)!=nil||value.Type!="s"||value.Data==nil{return fmt.Errorf("cannot verify logind shutdown inhibitors; reboot not submitted")}
+ for _,what:=range strings.Split(*value.Data,":"){
+  if what=="shutdown"{return fmt.Errorf("shutdown is blocked by a systemd inhibitor; reboot not submitted. Inspect systemd-inhibit --list and resolve the blocking operation before retrying")}
+ }
  return nil
 }
 
+// Keep bounded local diagnostics; never put arbitrary child output in support
+// journals. The checkpoint remains unconfirmed on any error or lost reply.
+func runSetupRebootCommand(ctx context.Context,cmd *exec.Cmd)error{
+ _,err:=runSetupLogindCommand(ctx,cmd);return err
+}
+func runSetupLogindCommand(ctx context.Context,cmd *exec.Cmd)([]byte,error){
+ var output setupOutput
+ cmd.Stdout=&output;cmd.Stderr=&output
+ err:=cmd.Run()
+ if err==nil{return output.Bytes(),nil}
+ detail:=strings.Map(func(r rune)rune{if r=='\n'||r=='\t'||(r>=32&&r!=127){return r};return -1},output.String())
+ detail=strings.TrimSpace(detail)
+ if len(detail)>4096{detail=detail[:4096]+" [truncated]"}
+ if ctx.Err()!=nil{return nil,fmt.Errorf("logind reboot reply unconfirmed (%v): %s",ctx.Err(),detail)}
+ return nil,fmt.Errorf("logind reboot request failed (%v): %s",err,detail)
+}
+
 func headlessRebootNeeded(ctx context.Context,p SetupPlan,source setupSource)(bool,error){
- if !p.HeadlessRequested||p.Platform.DefaultTarget!="graphical.target"{return false,nil}
+ if !p.HeadlessRequested{return false,nil}
  raw,err:=source.output(ctx,"systemctl","--system","show","graphical.target","-p","ActiveState","--value")
  state:=strings.TrimSpace(string(raw))
  if err!=nil||!supportOneOf(state,"active","inactive"){return false,fmt.Errorf("cannot determine current graphical target state")}

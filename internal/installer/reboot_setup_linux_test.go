@@ -8,6 +8,7 @@ import (
  "encoding/json"
  "fmt"
  "os"
+ "os/exec"
  "path/filepath"
  "strings"
  "testing"
@@ -244,7 +245,7 @@ func TestRebootPlanAndJournalRejectInconsistentAuthority(t *testing.T){
 func TestRebootCommandsNeverInheritOverridesOrBypassInhibitors(t *testing.T){
  for _,key:=range []string{"PATH","LD_PRELOAD","SYSTEMD_HOST","DBUS_SYSTEM_BUS_ADDRESS"}{t.Setenv(key,"PRIVATE_OVERRIDE")}
  cmd,err:=setupRebootCommand(context.Background());if err!=nil{t.Fatal(err)}
- want:=[]string{"/usr/bin/systemctl","--system","--no-ask-password","--check-inhibitors=yes","reboot"}
+ want:=[]string{"/usr/bin/busctl","--system","--allow-interactive-authorization=no","--timeout=20s","call","org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","RebootWithFlags","t","1"}
  if !sameSetupJSON(cmd.Args,want)||strings.Contains(strings.Join(cmd.Environ(),"\n"),"PRIVATE_OVERRIDE"){t.Fatal("unsafe reboot command")}
  inventory:=rebootInventoryCommand(context.Background(),"-W")
  if inventory.Path!="/usr/bin/dpkg-query"||strings.Contains(strings.Join(inventory.Environ(),"\n"),"PRIVATE_OVERRIDE"){t.Fatal("unsafe inventory")}
@@ -349,4 +350,59 @@ func TestRebootCustomStateAndCanonicalHistory(t *testing.T){
  if code:=runRebootSetup(context.Background(),args[:6],&out,&diagnostic,true,filepath.Join(root,"wrong"),true,&d);code!=0{t.Fatalf("%d %s",code,diagnostic.String())}
  if code:=runRebootStatus(context.Background(),[]string{"--plan-sha",p.SHA256,"--state-dir",custom},&out,&diagnostic,filepath.Join(root,"wrong"),true);code!=0{t.Fatalf("%d %s",code,diagnostic.String())}
  if agentSetupState(agentInstallPlan{SetupStateDir:custom})!=custom{t.Fatal("agent approval lost setup state directory")}
+}
+
+func TestRebootFailurePreservesLocalReasonButNotJournalOutput(t *testing.T){
+ p,_:=rebootFixture(t);d:=rebootDepsFixture(p);var j setupRebootJournal
+ d.Request=func(ctx context.Context)error{
+  return runSetupRebootCommand(ctx,exec.CommandContext(ctx,"/bin/sh","-c","echo 'Access denied to root due to active block inhibitor' >&2; exit 1"))
+ }
+ err:=requestSetupReboot(context.Background(),p,&j,false,d)
+ if err==nil||!strings.Contains(err.Error(),"active block inhibitor")||!strings.Contains(err.Error(),"exit status 1"){t.Fatalf("lost reason: %v",err)}
+ raw,_:=json.Marshal(j)
+ if j.State!="requested"||j.FailureCode!="request_unconfirmed"||bytes.Contains(raw,[]byte("Access denied")){t.Fatal("incorrect checkpoint",string(raw))}
+}
+func TestRebootCommandErrorsAreBoundedAndCancellationIsVisible(t *testing.T){
+ ctx,cancel:=context.WithCancel(context.Background());cancel()
+ err:=runSetupRebootCommand(ctx,exec.CommandContext(ctx,"/bin/true"))
+ if err==nil||!strings.Contains(err.Error(),"context canceled"){t.Fatal(err)}
+ err=runSetupRebootCommand(context.Background(),exec.Command("/bin/sh","-c","i=0; while [ $i -lt 5000 ]; do printf x; i=$((i+1)); done; exit 1"))
+ if err==nil||len(err.Error())>4300||!strings.Contains(err.Error(),"[truncated]"){t.Fatal("unbounded or missing error")}
+}
+func TestReplannedHeadlessSetupStillRequiresActualReboot(t *testing.T){
+ p,f:=rebootFixture(t)
+ p.Setup.Platform.DefaultTarget="multi-user.target"
+ // A new plan sees the changed default, but the old graphical boot is active.
+ source:=rebootSource(f);base:=source.Output
+ source.Output=func(ctx context.Context,name string,args ...string)([]byte,error){
+  if strings.Contains(strings.Join(args," "),"graphical.target"){return []byte("active"),nil}
+  return base(ctx,name,args...)
+ }
+ needed,err:=headlessRebootNeeded(context.Background(),p.Setup,source)
+ if err!=nil||!needed{t.Fatal("new installer skipped pending graphical transition",err)}
+}
+
+func TestRebootChecksRootOwnedShutdownInhibitorsBeforeSubmission(t *testing.T){
+ for _,tc:=range []struct{response string;allowed bool}{
+  {`{"type":"s","data":""}`,true},
+  {`{"type":"s","data":"sleep:handle-power-key"}`,true},
+  {`{"type":"s","data":"shutdown"}`,false},
+  {`{"type":"s","data":"sleep:shutdown"}`,false},
+  {`{"type":"as","data":[]}`,false},
+  {`not-json`,false},
+  {`{"type":"s"}`,false},
+  {`{"type":"s","data":null}`,false},
+ }{
+  marker:=filepath.Join(t.TempDir(),"requested")
+  // Only harmless fixture processes: never connect to the runner's logind.
+  probe:=exec.Command("/bin/echo",tc.response)
+  request:=exec.Command("/usr/bin/touch",marker)
+  err:=submitSetupRebootChecked(context.Background(),probe,request)
+  _,statErr:=os.Stat(marker)
+  if (err==nil)!=tc.allowed||(statErr==nil)!=tc.allowed{t.Fatalf("%s: %v / %v",tc.response,err,statErr)}
+ }
+ marker:=filepath.Join(t.TempDir(),"requested")
+ err:=submitSetupRebootChecked(context.Background(),exec.Command("/bin/false"),exec.Command("/usr/bin/touch",marker))
+ if err==nil{t.Fatal("failed inhibitor observation accepted")}
+ if _,err:=os.Stat(marker);!os.IsNotExist(err){t.Fatal("request ran after failed observation")}
 }
