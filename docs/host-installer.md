@@ -141,11 +141,14 @@ disabled with consent, not that other services are disabled.
 - [x] Approved first installation of verified agent, rollback helper, update trust, configuration and inactive systemd units; journaled retry/status.
 - [x] Device login and browser-approved registration CLI, fresh-key persistence, owner-bound recovery and redacted registration status.
 - [ ] Generic hardware-class admission for AMD/N5 and additional platform classes.
-- [ ] Enrollment-gated service activation, guided approval and automatic reboot/resume.
-- [ ] Package/driver/kernel installation, headless setup, systemd and reboot.
+- [x] Enrollment-gated certification/activation with fresh original-owner approval.
+- [x] Explicitly approved pre-enrollment reboot and verified operator-invoked resume.
+- [ ] Enrolled-host drain/maintenance reboot and unattended boot-time continuation.
+- [x] Approved prerequisite additions, headless target, inactive systemd installation and initial-setup reboot.
+- [ ] Reviewed driver/kernel transitions beyond preserving the installed vendor stack.
 - [x] Redacted installer support bundle with stage summaries and recovery guidance.
 - [x] Unified read-only local service and authenticated plane status for the certified installation flow.
-- [ ] Repair/uninstall recovery commands and guided reboot/resume.
+- [ ] Repair/uninstall recovery commands and enrolled-host maintenance resume.
 - [ ] Enrollment plus benchmark/connectivity gates before selling.
 - [ ] Hardware acceptance runs below.
 
@@ -1440,7 +1443,7 @@ the remaining stages without treating simulated tests as hardware acceptance:
 
 1. Provision reviewed catalog pins and a measured AIuditor class envelope, then
    perform real AGX-1 download, registration, context certification and paused startup.
-2. Add guided start/reboot/resume and repair/uninstall; live diagnostic status is implemented.
+2. Add enrolled-host maintenance reboot/resume and repair/uninstall. Live status and pre-enrollment prerequisite reboot/resume are implemented.
    Installer self-update still needs its own reviewed transition.
 3. Complete independent website bootstrap trust and guided public download flow.
 4. Run the full recovery/installation acceptance suite and the AGX-1 clean install
@@ -1678,3 +1681,35 @@ privacy. See [live host status](authenticated-certification.md#live-host-status)
 Guided reboot/resume, repair/uninstall, signed-update reconciliation against the
 original installation, physical AGX-1 acceptance and sustained workload checks
 remain open. This diagnostic does not replace those operations.
+
+### Completed: approved prerequisite reboot and verified resume (2026-10-02)
+
+The Linux installer now provides a complete pre-enrollment reboot stage:
+`plan-reboot`, `reboot-setup`, `resume-setup` and `reboot-status`.
+The plan binds the reviewed prerequisite setup, machine identity digest and
+current boot ID. A reboot requires its exact plan digest plus an explicit
+`--reboot` flag. The command saves a private, durable checkpoint before
+submitting the systemd request with inhibitor checking enabled.
+
+This stage refuses installed/enrolled hosts, lease/identity files, prior agent
+registration history, systemd units/drop-ins and cached/transient host services.
+It never stops an agent to make the preflight pass. Repeating an unconfirmed
+request on the same boot requires the separate `--retry-request` flag.
+No boot-time job or automatic retry loop is installed.
+
+After reconnecting, `resume-setup` requires a different boot ID and freshly
+rechecks approved packages, OS/kernel, hardware, resource admission and headless
+state. The OS reboot-required marker must be clear. Changed prerequisites need
+a fresh reviewed plan; success does not silently accept a kernel upgrade.
+Verification intent is journaled before probing, so interrupted verification
+cannot leave a previous success presented as the current result.
+
+Reboot recovery is included in `support-bundle --reboot-plan-sha SHA256`.
+Tests cover durable ordering, explicit retry, lost replies, changed-machine/boot
+rejection, postflight failures, unsafe journals, credential-free exports and
+inhibitor-preserving command construction. See [the operator procedure](setup-reboot.md).
+
+Physical reboot/SSH reconnection and AGX-1 acceptance remain unverified.
+Enrolled-host draining and maintenance reboot, unattended boot-time continuation,
+driver/kernel upgrade policy, repair/uninstall and signed-update reconciliation
+remain separate unfinished tasks.

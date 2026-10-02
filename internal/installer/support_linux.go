@@ -30,6 +30,7 @@ type supportBundle struct {
 	SetupPlanSHA256 string `json:"setup_plan_sha256,omitempty"`
 	WorkloadPlanSHA256 string `json:"workload_plan_sha256,omitempty"`
 	CertificationPlanSHA256 string `json:"certification_plan_sha256,omitempty"`
+	RebootPlanSHA256 string `json:"reboot_plan_sha256,omitempty"`
 	HistoricalOnly bool `json:"historical_only"`
 	CollectionComplete bool `json:"collection_complete"`
 	Stages []supportStage `json:"stages"`
@@ -280,11 +281,15 @@ func collectSupportWithWorkload(ctx context.Context, dir, agentSHA, setupSHA, wo
 }
 
 func collectSupportWithCertification(ctx context.Context, dir, agentSHA, setupSHA, workloadSHA, certificationSHA string) (supportBundle, error) {
+ return collectSupportWithReboot(ctx,dir,agentSHA,setupSHA,workloadSHA,certificationSHA,"")
+}
+func collectSupportWithReboot(ctx context.Context, dir, agentSHA, setupSHA, workloadSHA, certificationSHA,rebootSHA string) (supportBundle,error) {
 	var bundle supportBundle
-	if (agentSHA=="" && setupSHA=="" && workloadSHA=="" && certificationSHA=="") || (agentSHA!="" && !setupDigestRE.MatchString(agentSHA)) ||
+	if (agentSHA=="" && setupSHA=="" && workloadSHA=="" && certificationSHA=="" && rebootSHA=="") || (agentSHA!="" && !setupDigestRE.MatchString(agentSHA)) ||
 		(setupSHA!="" && !setupDigestRE.MatchString(setupSHA)) ||
         (workloadSHA!="" && !setupDigestRE.MatchString(workloadSHA)) ||
-        (certificationSHA!="" && !setupDigestRE.MatchString(certificationSHA)) { return bundle, fmt.Errorf("select valid installer plan digests") }
+        (certificationSHA!="" && !setupDigestRE.MatchString(certificationSHA)) ||
+        (rebootSHA!="" && !setupDigestRE.MatchString(rebootSHA)) { return bundle, fmt.Errorf("select valid installer plan digests") }
 	unlock, err := supportLock(dir)
 	if err != nil { return bundle, err }
 	defer unlock()
@@ -292,8 +297,8 @@ func collectSupportWithCertification(ctx context.Context, dir, agentSHA, setupSH
 	commit := buildinfo.Current()
 	if !regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(commit) { commit = "unknown" }
 	bundle = supportBundle{Schema:1, GeneratedAt:time.Now().UTC(), CollectorCommit:commit, CollectorBuild:buildinfo.CurrentBuild(),
-		Architecture:runtime.GOARCH, AgentPlanSHA256:agentSHA, SetupPlanSHA256:setupSHA, WorkloadPlanSHA256:workloadSHA, CertificationPlanSHA256:certificationSHA, HistoricalOnly:true, CollectionComplete:true}
-	bundle.Stages = []supportStage{supportSetup(dir,setupSHA), supportAgent(dir,agentSHA), supportRegistration(dir,agentSHA), supportOnboarding(dir,agentSHA), supportRuntimeMemory(dir,setupSHA),supportWorkload(dir,workloadSHA,setupSHA),supportCertification(dir,certificationSHA)}
+		Architecture:runtime.GOARCH, AgentPlanSHA256:agentSHA, SetupPlanSHA256:setupSHA, WorkloadPlanSHA256:workloadSHA, CertificationPlanSHA256:certificationSHA, RebootPlanSHA256:rebootSHA, HistoricalOnly:true, CollectionComplete:true}
+	bundle.Stages = []supportStage{supportSetup(dir,setupSHA), supportAgent(dir,agentSHA), supportRegistration(dir,agentSHA), supportOnboarding(dir,agentSHA), supportRuntimeMemory(dir,setupSHA),supportWorkload(dir,workloadSHA,setupSHA),supportCertification(dir,certificationSHA),supportReboot(dir,rebootSHA)}
 	for _, stage := range bundle.Stages {
 		if stage.Collection!="collected" && stage.Collection!="not-requested" { bundle.CollectionComplete=false }
 	}
@@ -336,14 +341,15 @@ func runSupportBundle(ctx context.Context,args []string,out,diagnostic io.Writer
 	setupSHA:=flags.String("setup-plan-sha","","optional prerequisite plan digest")
 	workloadSHA:=flags.String("workload-plan-sha","","optional workload plan digest; includes pinned inference and context evidence")
 	certificationSHA:=flags.String("certification-plan-sha","","optional certification plan digest; includes acquisition and activation recovery")
+	rebootSHA:=flags.String("reboot-plan-sha","","optional prerequisite reboot plan digest")
 	output:=flags.String("output","","new absolute output file in an owner-controlled directory (0600)")
 	if err:=flags.Parse(args);err!=nil { if err==flag.ErrHelp{return 0};return 2 }
-	if flags.NArg()!=0 || *output=="" || (*agentSHA=="" && *setupSHA=="" && *workloadSHA=="" && *certificationSHA=="") ||
-		(*agentSHA!="" && !setupDigestRE.MatchString(*agentSHA)) || (*setupSHA!="" && !setupDigestRE.MatchString(*setupSHA)) || (*workloadSHA!="" && !setupDigestRE.MatchString(*workloadSHA)) || (*certificationSHA!="" && !setupDigestRE.MatchString(*certificationSHA)) {
-		fmt.Fprintln(diagnostic,"require --output and at least one of --plan-sha, --setup-plan-sha --workload-plan-sha or --certification-plan-sha");return 2
+	if flags.NArg()!=0 || *output=="" || (*agentSHA=="" && *setupSHA=="" && *workloadSHA=="" && *certificationSHA=="" && *rebootSHA=="") ||
+		(*agentSHA!="" && !setupDigestRE.MatchString(*agentSHA)) || (*setupSHA!="" && !setupDigestRE.MatchString(*setupSHA)) || (*workloadSHA!="" && !setupDigestRE.MatchString(*workloadSHA)) || (*certificationSHA!="" && !setupDigestRE.MatchString(*certificationSHA)) || (*rebootSHA!="" && !setupDigestRE.MatchString(*rebootSHA)) {
+		fmt.Fprintln(diagnostic,"require --output and at least one of --plan-sha, --setup-plan-sha, --workload-plan-sha, --certification-plan-sha or --reboot-plan-sha");return 2
 	}
 	if !root { fmt.Fprintln(diagnostic,"support-bundle requires root to read private installer journals");return 1 }
-	bundle,err:=collectSupportWithCertification(ctx,stateDir,*agentSHA,*setupSHA,*workloadSHA,*certificationSHA)
+	bundle,err:=collectSupportWithReboot(ctx,stateDir,*agentSHA,*setupSHA,*workloadSHA,*certificationSHA,*rebootSHA)
 	if err==nil { err=writeSupport(ctx,*output,bundle) }
 	if err!=nil { fmt.Fprintln(diagnostic,err);return 1 }
 	if !bundle.CollectionComplete { fmt.Fprintln(diagnostic,"Partial redacted bundle saved; see each stage's collection status. Preserve the original journals locally.");return 1 }
