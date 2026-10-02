@@ -267,7 +267,7 @@ Dev install: go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy
 }
 
 func usage() {
- fmt.Fprintln(os.Stderr, `Hypermesh host installer
+ fmt.Fprint(os.Stderr, `Hypermesh host installer
 
 Run without arguments to start or resume guided setup:
   sudo ./hypermesh-deploy
