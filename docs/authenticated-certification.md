@@ -132,7 +132,7 @@ locally; the redacted export cannot restore them.
 All observations are historical. The journal alone cannot revalidate the frozen
 manifest, plan expiry, server verdict, current service state or selling gates.
 An active record does not authorize selling or prove that the agent is still
-running. Use host-status below for current service and plane observations. Guided reboot/resume remains roadmap work.
+running. Use host-status below for current service and plane observations. Reviewed maintenance reboot/resume is implemented; see [lifecycle completion](host-lifecycle-completion.md).
 
 ## Live host status
 
@@ -175,7 +175,4 @@ For a stopped service or interrupted activation, retain the original plan and
 use certification-status guidance and the controlled activation flow. Do not
 start the agent by creating its activation marker manually.
 
-The installation integrity check compares against the original approved payloads.
-After an agent update, a changed binary is reported for inspection rather than
-silently trusted; reconcile it with the signed update history. Cross-release
-installation/update reconciliation and automated reboot/resume remain pending.
+The installation integrity check compares configuration and units with the original approved payloads. A changed agent binary is accepted only with matching signed update evidence, original trust, channel, architecture and minimum build. Reviewed maintenance resume remains paused and uses fresh owner authority. See [lifecycle completion](host-lifecycle-completion.md) and [AGX acceptance](agx-acceptance.md).

@@ -5,6 +5,8 @@ import (
  "fmt"
  "os"
  "path/filepath"
+ "regexp"
+ "strconv"
 )
 // Evidence retains public, signed release material, never artifact URLs or SAS tokens.
 // Installed hashes are reverified against this proof by the installer.
@@ -22,7 +24,10 @@ func (e Evidence) Validate(pub []byte,fingerprints []string,channel,arch string,
  if err:=verify(e.Checksums,e.Signature,pub,fingerprints);err!=nil{return m,err}
  if err:=CheckHash(e.Checksums,ManifestName,e.Manifest);err!=nil{return m,err}
  if json.Unmarshal(e.Manifest,&m)!=nil||m.Channel!=channel||m.Build<minimum||m.Build<=0{return m,fmt.Errorf("signed update channel/build mismatch")}
- name,err:=SelectBinary(string(e.Checksums),arch);if err!=nil||name!=e.Binary{return m,fmt.Errorf("signed update architecture mismatch")}
+ if !semverOK(m.Version)||!regexp.MustCompile("^[0-9a-f]{40}$").MatchString(m.Commit){return m,fmt.Errorf("invalid signed release identity")}
+ expected:=m.Version;if channel==ChannelTest{expected=strconv.Itoa(m.Build)+"-"+m.Commit[:12]}
+ if m.ReleaseID!=expected{return m,fmt.Errorf("signed release ID mismatch")}
+ name,err:=SelectBinary(string(e.Checksums),arch);if err!=nil||name!=e.Binary||name!="hypermesh-agent_"+m.Version+"_linux_"+arch{return m,fmt.Errorf("signed update architecture mismatch")}
  hash,err:=checksumFor(string(e.Checksums),name);if err!=nil||hash!=e.SHA256{return m,fmt.Errorf("signed update binary hash mismatch")}
  return m,nil
 }

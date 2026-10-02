@@ -95,7 +95,7 @@ func supportAgent(dir, sha string) supportStage {
 	var j agentInstallJournal
 	state := supportRead(dir, "agent-"+sha+".json", &j)
 	if state != "collected" { return supportUnavailable("agent", state) }
-	if j.Schema != 1 || j.PlanSHA256 != sha || !supportOneOf(j.State, "pending", "installing", "failed", "installed-awaiting-enrollment") {
+	if j.Schema != 1 || j.PlanSHA256 != sha || !supportOneOf(j.State, "pending", "installing", "failed", "installed-awaiting-enrollment", "uninstalled") {
 		return supportUnavailable("agent", "invalid")
 	}
 	seen := map[string]bool{}
@@ -109,7 +109,7 @@ func supportAgent(dir, sha string) supportStage {
 	if !j.Started && len(j.Completed)>0 { return supportUnavailable("agent", "invalid") }
 	if j.State=="installing" && !j.Started { return supportUnavailable("agent", "invalid") }
 	if j.State=="pending" && (j.Started || len(j.Completed)>0) { return supportUnavailable("agent", "invalid") }
-	if j.State=="installed-awaiting-enrollment" {
+	if j.State=="installed-awaiting-enrollment" || j.State=="uninstalled" {
 		if !j.Started { return supportUnavailable("agent", "invalid") }
 		// Every mode installs these five payloads. The optional userspace unit
 		// cannot be inferred from a journal alone; this is not plan verification.
@@ -120,6 +120,7 @@ func supportAgent(dir, sha string) supportStage {
 	}
 	action := "Preserve the installation journal and retry install-agent with the same approved plan after resolving local conflicts."
 	if j.State == "installed-awaiting-enrollment" { action = "Agent files were recorded installed; use register-agent for browser-approved enrollment." }
+	if j.State=="uninstalled" { action = "Managed files were removed. Identity and model cache remain; use reviewed repair before resuming this host. Remote retirement is a separate dashboard action." }
 	return supportStage{Component:"agent", Collection:"collected", State:j.State, ErrorRecorded:j.Error!="", CompletedFiles:len(j.Completed), NextAction:action}
 }
 func supportRegistration(dir, sha string) supportStage {

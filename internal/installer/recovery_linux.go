@@ -185,8 +185,9 @@ func RunRecoverAgent(ctx context.Context,args []string,out,diagnostic io.Writer)
  journal:=filepath.Join(dir,"journal.json")
  if _,e:=os.Lstat(journal);e==nil{raw,err=readSetupRegular(journal,true);if err==nil{err=decodeSetupJSON(raw,&j)}}else if os.IsNotExist(e){err=saveRecovery(dir,j)}else{err=e}
  if err==nil{err=applyRecovery(ctx,"",dir,p,files,&j,guard,func(v recoveryJournal)error{return saveRecovery(dir,v)})}
- if err==nil&&p.Operation=="repair"{
-  installed:=agentInstallJournal{Schema:1,PlanSHA256:p.Agent.SHA256,State:"installed-awaiting-enrollment",Started:true}
+ if err==nil{
+  state:="installed-awaiting-enrollment";if p.Operation=="uninstall"{state="uninstalled"}
+  installed:=agentInstallJournal{Schema:1,PlanSHA256:p.Agent.SHA256,State:state,Started:true}
   for _,file:=range p.Agent.Files{installed.Completed=append(installed.Completed,file.Path)}
   err=saveAgentJournal(filepath.Join(defaultSetupState,"agent-"+p.Agent.SHA256+".json"),installed)
  }

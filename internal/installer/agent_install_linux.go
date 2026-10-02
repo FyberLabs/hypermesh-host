@@ -304,6 +304,7 @@ func RunInstallAgent(ctx context.Context,args []string,out,diagnostic io.Writer)
 		if err==nil{err=decodeSetupJSON(raw,&j)}
 		if err==nil&&(j.Schema!=1||j.PlanSHA256!=p.SHA256){err=fmt.Errorf("agent journal does not match")}
 		if err!=nil{fmt.Fprintln(diagnostic,"invalid agent journal; preserve it for recovery");return 1}
+		if j.State=="uninstalled"{fmt.Fprintln(diagnostic,"host was uninstalled; use reviewed recovery to restore its preserved identity");return 1}
 		resume=j.Started
 	} else if !os.IsNotExist(statErr){fmt.Fprintln(diagnostic,"cannot inspect agent journal");return 1}
 	save:=func(value agentInstallJournal)error{return saveAgentJournal(journalPath,value)}

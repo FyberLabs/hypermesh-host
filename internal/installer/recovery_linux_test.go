@@ -6,6 +6,7 @@ import (
  "fmt"
  "os"
  "path/filepath"
+ "strings"
  "testing"
  "time"
 )
@@ -85,4 +86,13 @@ func TestRecoveryApprovalBindsOperationAndExactSnapshot(t *testing.T){
  if validateRecovery(p,p.SHA256)==nil{t.Fatal("snapshot not bound")}
  p.SHA256=recoveryDigest(p);p.Before[0].Path="/etc/passwd";p.SHA256=recoveryDigest(p)
  if validateRecovery(p,p.SHA256)==nil{t.Fatal("arbitrary destination accepted")}
+}
+
+func TestUninstalledSupportNeverRecommendsRegistration(t *testing.T){
+ p:=agentInstallFixture(t);dir:=t.TempDir()
+ j:=agentInstallJournal{Schema:1,PlanSHA256:p.SHA256,State:"uninstalled",Started:true}
+ for _,f:=range p.Files{j.Completed=append(j.Completed,f.Path)}
+ if err:=saveAgentJournal(filepath.Join(dir,"agent-"+p.SHA256+".json"),j);err!=nil{t.Fatal(err)}
+ report:=supportAgent(dir,p.SHA256)
+ if report.Collection!="collected"||report.State!="uninstalled"||!strings.Contains(report.NextAction,"repair"){t.Fatal(report)}
 }

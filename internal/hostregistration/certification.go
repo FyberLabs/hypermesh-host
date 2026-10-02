@@ -39,6 +39,7 @@ type CertificationRun struct {
  ExpiresAt time.Time `json:"expires_at"`
  SellingAllowed *bool `json:"selling_allowed"`
  ActivationAllowed *bool `json:"activation_allowed,omitempty"`
+ MaintenanceResume bool `json:"maintenance_resume,omitempty"`
  PermitExpiresAt *time.Time `json:"permit_expires_at,omitempty"`
 }
 type CertificationEvidence struct {
@@ -91,10 +92,10 @@ func (c *Client) certification(ctx context.Context,r Request,device,secret,runID
  !oneOf(out.State,"planned","passed","failed")||out.ExpiresAt.IsZero()||
  out.SellingAllowed==nil||*out.SellingAllowed{return CertificationRun{},fmt.Errorf("certification response does not match this installation")}
  if previous!=nil&&(out.ManifestSHA256!=previous.ManifestSHA256||!SameManifest(out.Manifest,previous.Manifest)){return CertificationRun{},fmt.Errorf("certification workload changed")}
- if op=="activation"{
+ if op=="activation"||op=="resume"{
   if out.State!="passed"||out.ActivationAllowed==nil||!*out.ActivationAllowed||
   out.PermitExpiresAt==nil||!out.PermitExpiresAt.After(time.Now())||
-  out.PermitExpiresAt.After(out.ExpiresAt)||out.PermitExpiresAt.After(time.Now().Add(3*time.Minute)){return CertificationRun{},fmt.Errorf("activation permit unavailable or expired")}
+  (op=="activation"&&out.PermitExpiresAt.After(out.ExpiresAt))||(op=="resume"&&!out.MaintenanceResume)||out.PermitExpiresAt.After(time.Now().Add(3*time.Minute)){return CertificationRun{},fmt.Errorf("activation permit unavailable or expired")}
  }
  return out,nil
 }
@@ -107,10 +108,15 @@ func(c *Client) ReportCertification(ctx context.Context,r Request,device,secret 
 func(c *Client) ActivationPermit(ctx context.Context,r Request,device,secret string,run CertificationRun)(CertificationRun,error){
  return c.certification(ctx,r,device,secret,run.RunID,"activation",&run,nil)
 }
-func(c *Client) ApproveActivation(ctx context.Context,run CertificationRun)error{
+func(c *Client) ResumePermit(ctx context.Context,r Request,device,secret string,run CertificationRun)(CertificationRun,error){
+ return c.certification(ctx,r,device,secret,run.RunID,"resume",&run,nil)
+}
+func(c *Client) ApproveActivation(ctx context.Context,run CertificationRun)error{return c.approveStart(ctx,run,"approve-activation")}
+func(c *Client) ApproveResume(ctx context.Context,run CertificationRun)error{return c.approveStart(ctx,run,"approve-resume")}
+func(c *Client) approveStart(ctx context.Context,run CertificationRun,operation string)error{
  if c.bearer==""{return fmt.Errorf("original owner login required")}
  var out struct{RunID string `json:"run_id"`;ManifestSHA256 string `json:"manifest_sha256"`;Approved bool `json:"approved"`}
- if err:=c.request(ctx,"POST","/api/v1/hypermesh/host-onboarding/approve-activation",c.bearer,
+ if err:=c.request(ctx,"POST","/api/v1/hypermesh/host-onboarding/"+operation,c.bearer,
  map[string]string{"run_id":run.RunID,"manifest_sha256":run.ManifestSHA256},&out);err!=nil{return err}
  if !out.Approved||out.RunID!=run.RunID||out.ManifestSHA256!=run.ManifestSHA256{return fmt.Errorf("owner activation approval unconfirmed")}
  return nil

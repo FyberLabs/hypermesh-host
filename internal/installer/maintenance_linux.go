@@ -182,7 +182,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
    raw,err=readSetupRegular(certificationStatePath(defaultSetupState,p.Certification.SHA256),true)
    if err==nil{err=decodeSetupJSON(raw,&cert)}
    if err==nil&&(!validCertificationJournal(cert)||cert.PlanSHA256!=p.Certification.SHA256||cert.RunID!=p.Certification.Run.RunID){err=fmt.Errorf("invalid certification checkpoint")}
-   if err==nil{err=activateCertified(ctx,p.Certification,identity,client,&cert,func(v certificationJournal)error{return saveCertification(certificationStatePath(defaultSetupState,p.Certification.SHA256),v)},diagnostic)}
+   if err==nil{err=activateCertifiedMode(ctx,p.Certification,identity,client,&cert,func(v certificationJournal)error{return saveCertification(certificationStatePath(defaultSetupState,p.Certification.SHA256),v)},diagnostic,true)}
   }
   if err==nil{
    var local struct{DeviceID string `json:"device_id"`;SellState string `json:"sell_state"`;Until string `json:"until"`}
