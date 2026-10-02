@@ -280,12 +280,12 @@ func activeInvocation(raw []byte)(serviceInvocation,error){
  return serviceInvocation{pid,restarts,invocation},nil
 }
 func waitStableAgent(ctx context.Context,window,poll time.Duration,probe func(context.Context)([]byte,error))error{
- started:=time.Now()
+ var started time.Time
  var first serviceInvocation
  for{
   raw,err:=probe(ctx);if err!=nil{return fmt.Errorf("cannot verify agent startup")}
   current,err:=activeInvocation(raw);if err!=nil{return err}
-  if first.PID==0{first=current}else if current!=first{return fmt.Errorf("agent restarted during startup")}
+  if first.PID==0{first=current;started=time.Now()}else if current!=first{return fmt.Errorf("agent restarted during startup")}
   if ctx.Err()!=nil{return fmt.Errorf("startup verification interrupted")}
   if time.Since(started)>=window{return nil}
   timer:=time.NewTimer(poll)
