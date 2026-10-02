@@ -24,6 +24,7 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+ if name=="plan-recovery"||name=="recover-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanRecovery;if name=="recover-agent"{run=installer.RunRecoverAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-reboot"||name=="reboot-setup"||name=="resume-setup"||name=="reboot-status" {
   ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
   run:=installer.RunPlanReboot
@@ -177,6 +178,8 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan-recovery  review inactive host repair/uninstall; --agent-plan FILE --operation repair|uninstall
+  recover-agent  apply recovery while preserving identity/models; --plan FILE --approve-plan SHA256 --apply
   plan-reboot  review a pre-enrollment prerequisite reboot; --setup-plan FILE
   reboot-setup  save a checkpoint and request reboot; --plan FILE --approve-plan SHA256 --reboot
                 An unconfirmed request requires explicit --retry-request; never retry in a loop.
