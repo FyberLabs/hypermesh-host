@@ -27,9 +27,16 @@ prerequisites and absence of Hypermesh installation/enrollment, saves
 `reboot-PLAN_SHA256.json` privately in the installer state directory, rechecks
 the host, then submits a normal systemd reboot request.
 
-The request uses `--check-inhibitors=yes`, including for noninteractive root
-execution. It never uses force or ignores inhibitors. See the
-[systemd inhibitor option](https://github.com/systemd/systemd/blob/v249/man/systemctl.xml).
+The request calls logind's `RebootWithFlags` through `/usr/bin/busctl`, with
+`SD_LOGIND_ROOT_CHECK_INHIBITORS` (flag 1). This lets the operator approve a
+reboot from their own sudo/SSH session without systemctl treating that session
+as an unrelated logged-in user. Logind still enforces shutdown block inhibitors
+for root and handles delay inhibitors. There is no force, inhibitor bypass,
+interactive authorization, or fallback to an unchecked reboot.
+See [systemd's reboot authorization](https://github.com/systemd/systemd/blob/v255/src/login/logind-dbus.c)
+and [flag definition](https://github.com/systemd/systemd/blob/v255/src/basic/login-util.h).
+The local terminal receives bounded command error output and exit/timeout details;
+raw child output is not copied into support journals.
 A refusal, timeout, disconnect or lost reply is an unconfirmed outcome, not proof
 that reboot failed or completed. Keep the plan and checkpoint.
 
@@ -100,3 +107,22 @@ draining/reboot of enrolled hosts and physical AGX acceptance remain pending.
 Agent planning and installation reject an OS reboot requirement or an active graphical target when headless setup was approved. A recorded reboot for that setup must have a verified checkpoint for this machine and current boot; run `resume-setup` again after a later reboot. These checks run before downloading and again before installation writes. A setup with no current reboot requirement and no recorded request can proceed without an unnecessary reboot.
 
 If `apply-setup` used `--state-dir /absolute/private/path`, pass that same option to `plan-reboot`, `reboot-setup`, `resume-setup`, `reboot-status` and reboot `support-bundle` exports. Pass `--setup-state-dir /absolute/private/path` to `plan-agent`; that path is included in the approval digest and used by `install-agent`. Agent/registration journals continue to use the canonical installer directory. Reboot operations also lock and inspect that canonical directory so selecting a custom prerequisite directory cannot bypass an installed or enrolled host.
+
+## Guided recovery from the AGX reboot failure
+
+The default wizard now offers a separately confirmed retry on the original boot,
+after validating the recorded checkpoint. It reruns preflight and never retries
+automatically. If the boot has changed, it verifies that boot instead of requesting
+another reboot.
+
+Before agent installation (wizard stages 0–1), a newer signed installer on the
+same software channel can recover an older wizard session. Run the new verifier
+and executable together, then approve rechecking prerequisites. The wizard keeps
+the chosen network, host name, memory and model path; preserves old plans and
+journals; and writes newly reviewed plans under a separate build directory.
+It never rewrites old approval hashes or adopts an installed host. Headless
+rechecking considers the currently active graphical target even when the default
+was already changed to multi-user by the earlier attempt.
+
+Implementation and regression coverage are complete; the signed release still
+needs physical AGX verification. Preserve the failing AGX checkpoint as evidence.

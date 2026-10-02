@@ -73,3 +73,16 @@ available through `./hypermesh-deploy advanced-help`. They are not required
 for the normal guided installation. Manual installations made without a
 guided session retain their original plans; the guide does not adopt them
 or discard an existing identity.
+
+### Recovering a prerequisite reboot
+
+If a reboot request fails, the guide now displays the local logind error. Running
+the installer again offers a fresh confirmation to retry on the same boot;
+after a reboot it verifies and continues automatically. No reboot is retried
+without confirmation.
+
+A newer verified installer can restart prerequisite checks before agent
+installation. It asks for approval, retains your selections and old evidence,
+and creates fresh plans instead of reusing approvals from the older executable.
+Keep the new executable and its verifier receipt together. Model files are
+preserved. See [reboot recovery](setup-reboot.md#guided-recovery-from-the-agx-reboot-failure).

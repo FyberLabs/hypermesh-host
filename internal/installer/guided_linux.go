@@ -13,6 +13,7 @@ import (
  "net/http"
  "os"
  "path/filepath"
+ "regexp"
  "strconv"
  "strings"
  "time"
@@ -46,6 +47,7 @@ type guidedState struct {
  Headless bool `json:"headless"`
  Class string `json:"class"`
  Stage int `json:"stage"`
+ PlanDirectory string `json:"plan_directory,omitempty"`
 }
 type guidedNetwork struct { Plane, Issuer, Dashboard string }
 func installationNetwork(name string)(guidedNetwork,error) {
@@ -221,11 +223,11 @@ func (g guidedFlow) finish(ctx context.Context)error {
    var rp setupRebootPlan;if err=guidedRead(rebootPath,&rp,true);err!=nil{return err}
    _,boot,e:=g.boot();if e!=nil{return e}
    if boot==rp.BootID {
-    // Never automatically repeat an already requested or uncertain reboot.
-    if _,e=os.Lstat(setupRebootPath(defaultSetupState,rp.SHA256));!os.IsNotExist(e){
-     return fmt.Errorf("a reboot was already requested; restart the machine when safe, then run this installer again")}
-    fmt.Fprintln(g.ui.out,"A reboot is required. Reconnect afterwards and run the same installer; it will continue here.")
-    if err=g.apply(ctx,"reboot-setup","reboot.json","Reboot this machine now?","--reboot");err!=nil{return err}
+    extra,prompt,e:=guidedRebootRetry(setupRebootPath(defaultSetupState,rp.SHA256),rp)
+    if e!=nil{return e}
+    fmt.Fprintln(g.ui.out,"A reboot is required. This will disconnect all login sessions. Reconnect afterwards and run the same installer; it will continue here.")
+    if len(extra)>1{fmt.Fprintln(g.ui.out,"The previous reboot has not been observed. Retrying requires your approval and repeats the safety checks; shutdown inhibitors remain enforced.")}
+    if err=g.apply(ctx,"reboot-setup","reboot.json",prompt,extra...);err!=nil{return err}
     return nil
    }
    if err=g.execute(ctx,"resume-setup","--plan",rebootPath,"--approve-plan",rp.SHA256);err!=nil{return err}
@@ -320,6 +322,11 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if _,e:=os.Lstat(statePath);e==nil{
   err=guidedRead(statePath,&s,true)
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
+  if err==nil && (s.Download.Build!=buildinfo.CurrentBuild()||s.Download.Commit!=buildinfo.Current()) {
+   if *receipt==""{*receipt=exe+".install.json"}
+   err=upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
+    func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())})
+  }
   if err==nil{err=validateGuidedDownload(s.Download)}
   if err==nil{fmt.Fprintf(out,"Resuming setup for %s on %s. Completed steps will be checked by the installation gates.\n",s.Host,s.Network)}
  }else if !os.IsNotExist(e){err=e}else{
@@ -389,7 +396,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil{err=writeGuided(statePath,s)}
  }
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
- flow:=guidedFlow{dir:dir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
+ planDir,err:=guidedPlanDirectory(dir,s)
+ if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
   rebootNeeded:func(p SetupPlan)(bool,error){
    needed,e:=liveRebootRequired("");if e!=nil{return false,e}
    headless,e:=headlessRebootNeeded(ctx,p,rebootSetupSource());return needed||headless,e
@@ -397,4 +406,55 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if err=flow.finish(ctx);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  if s.Stage==7{fmt.Fprintf(out,"Setup completed. Review %s to manage your host. Selling is enabled separately in the dashboard.\n",s.Host)}
  return 0
+}
+
+func guidedRebootRetry(path string,p setupRebootPlan)([]string,string,error){
+ if _,err:=os.Lstat(path);os.IsNotExist(err){return []string{"--reboot"},"Reboot this machine now?",nil
+ }else if err!=nil{return nil,"",err}
+ var j setupRebootJournal
+ if err:=guidedRead(path,&j,true);err!=nil{return nil,"",fmt.Errorf("cannot read previous reboot checkpoint; preserve it: %w",err)}
+ if !validSetupRebootJournal(j)||j.State!="requested"||j.PlanSHA256!=p.SHA256||
+ j.SetupPlanSHA256!=p.Setup.PlanSHA256||j.MachineSHA256!=p.MachineSHA256||j.BootID!=p.BootID{
+  return nil,"",fmt.Errorf("previous reboot checkpoint is inconsistent; preserve it for recovery")
+ }
+ return []string{"--reboot","--retry-request"},"Request the reboot again now?",nil
+}
+
+func guidedPlanDirectory(dir string,s guidedState)(string,error){
+ if s.PlanDirectory==""{return dir,nil}
+ if s.PlanDirectory!="run-"+s.Download.Commit||!regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(s.Download.Commit){
+  return "",fmt.Errorf("invalid saved plan directory")
+ }
+ path:=filepath.Join(dir,s.PlanDirectory)
+ if err:=secureSetupDirectory(path,false);err!=nil{return "",err}
+ return path,nil
+}
+
+// Before agent installation, a newer verified CLI can re-observe prerequisites.
+// Preserve every old plan/journal and atomically switch only the wizard cursor;
+// never rewrite an old approval to pretend it belongs to the new executable.
+func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,guard func()error)error{
+ if s.Stage>1{return fmt.Errorf("an installed host must resume with its original installer; existing approvals were preserved")}
+ var download guidedDownload
+ if err:=guidedRead(receipt,&download,false);err!=nil{return fmt.Errorf("new installer needs its matching verifier receipt: %w",err)}
+ if err:=validateGuidedDownload(download);err!=nil{return err}
+ if download.Build<=s.Download.Build||download.Channel!=s.Download.Channel{
+  return fmt.Errorf("prerequisite recovery requires a newer verified build on the same software channel")
+ }
+ if err:=guard();err!=nil{return err}
+ if err:=ui.confirm("Use this newer installer to recheck prerequisites and review fresh plans? Previous plans and model files will be preserved.");err!=nil{return err}
+ if err:=ctx.Err();err!=nil{return err}
+ next:=*s;next.Download=download;next.Stage=0;next.PlanDirectory="run-"+download.Commit
+ path:=filepath.Join(dir,next.PlanDirectory)
+ if err:=secureSetupDirectory(path,true);err!=nil{return err}
+ key,err:=readSetupRegular(download.TrustedKey,false);if err!=nil{return err}
+ keyPath:=filepath.Join(path,"trusted-release.pub")
+ payload:=agentPayload{agentFile{keyPath,digestSetupBytes(key),0o600},key}
+ matches,err:=agentFileMatches(keyPath,payload);if err!=nil{return err}
+ if !matches{if err=writeAgentFile(keyPath,payload);err!=nil{return err}}
+ next.Download.TrustedKey=keyPath
+ if err=guard();err!=nil{return err}
+ if err=writeGuided(statePath,next);err!=nil{return err}
+ *s=next
+ return nil
 }
