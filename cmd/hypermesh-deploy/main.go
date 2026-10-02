@@ -19,11 +19,20 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help" {
-		usage()
-		os.Exit(2)
-	}
-	name := os.Args[1]
+ if len(os.Args) < 2 || os.Args[1] == "install" {
+  args := []string{}
+  if len(os.Args) > 1 { args = os.Args[2:] }
+  ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+  code := installer.RunGuidedInstall(ctx, args, os.Stdin, os.Stdout, os.Stderr)
+  stop()
+  os.Exit(code)
+ }
+ if os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help" {
+  usage()
+  return
+ }
+ if os.Args[1] == "advanced-help" { advancedUsage(); return }
+ name := os.Args[1]
  if name=="plan-installer-update"||name=="update-installer"||name=="rollback-installer"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanInstallerUpdate;if name=="update-installer"{run=installer.RunUpdateInstaller};if name=="rollback-installer"{run=installer.RunRollbackInstaller};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-maintenance"||name=="maintain-agent"||name=="resume-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanMaintenance;if name=="maintain-agent"{run=installer.RunMaintainAgent};if name=="resume-agent"{run=installer.RunResumeAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-recovery"||name=="recover-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanRecovery;if name=="recover-agent"{run=installer.RunRecoverAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
@@ -176,7 +185,7 @@ func main() {
 	}
 }
 
-func usage() {
+func advancedUsage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
@@ -254,5 +263,21 @@ It is not a command-line flag. A box that already has device.json can rerun
 without a fresh token.
 
 Dev install: go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
+`)
+}
+
+func usage() {
+ fmt.Fprint(os.Stderr, `Hypermesh host installer
+
+Run without arguments to start or resume guided setup:
+  sudo ./hypermesh-deploy
+
+The installer detects hardware, checks resources, proposes required changes,
+connects your account through browser approval, and checks host readiness.
+Keep the download receipt and signing key beside the verified executable.
+If interrupted or rebooted, run the same command again.
+
+  install --help    Guided setup options
+  advanced-help     Individual operations for automation and recovery
 `)
 }

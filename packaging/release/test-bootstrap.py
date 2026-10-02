@@ -52,6 +52,37 @@ class BootstrapTests(unittest.TestCase):
         subprocess.run(["gpgconf", "--homedir", str(cls.home), "--kill", "all"], capture_output=True)
         cls.workspace.cleanup()
 
+    def test_guided_receipt_and_next_command(self):
+        import contextlib
+        import io
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "hypermesh-deploy"
+            key = Path(directory) / "trusted.asc"
+            key.write_bytes(self.key)
+            args = ["verifier", "--release-url", "https://example.invalid/test/24-" + "a"*12,
+                    "--channel", "test", "--min-build", "24", "--arch", "arm64",
+                    "--output", str(output), "--trusted-key", str(key),
+                    "--fingerprint", self.fingerprint]
+            text = io.StringIO()
+            with mock.patch.object(sys, "argv", args), mock.patch.object(
+                    bootstrap, "bootstrap", return_value=json.loads(self.meta)), contextlib.redirect_stdout(text):
+                bootstrap.main()
+            receipt = Path(str(output) + ".install.json")
+            body = json.loads(receipt.read_text())
+            self.assertEqual(body["build"], 24)
+            self.assertEqual(body["commit"], "a"*40)
+            self.assertEqual(body["channel"], "test")
+            self.assertEqual(Path(body["trusted_key"]).read_bytes(), self.key)
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            self.assertIn("sudo ", text.getvalue())
+            self.assertIn("has not run yet", text.getvalue())
+            with mock.patch.object(sys, "argv", args), mock.patch.object(
+                    bootstrap, "bootstrap", return_value=json.loads(self.meta)):
+                with self.assertRaises(SystemExit):
+                    bootstrap.main()
+            self.assertEqual(json.loads(receipt.read_text()), body)
+
     def test_download_verification_and_no_overwrite(self):
         for mode in ("valid", "tamper", "signature", "fingerprint", "rollback", "channel", "existing", "release-substitution"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
