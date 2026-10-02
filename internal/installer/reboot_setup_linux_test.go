@@ -221,7 +221,7 @@ func TestRebootPlanAndJournalRejectInconsistentAuthority(t *testing.T){
   case "machine":changed.MachineSHA256="private"
   case "boot":changed.BootID="private"
   case "setup":changed.Setup.InstallAuthorized=true
-  case "headless":changed.Headless=false;changed.OSRequired=true
+  case "headless":changed.Setup.HeadlessRequested=false;changed.Setup.PlanSHA256=setupPlanDigest(changed.Setup)
   }
   if kind!="digest"{changed.SHA256=setupRebootDigest(changed)}
   if validateSetupRebootPlan(changed,changed.SHA256)==nil{t.Fatal("invalid plan accepted",kind)}
@@ -283,4 +283,18 @@ func TestRebootSupportRefusesIncompleteAndUnsafeCheckpoints(t *testing.T){
    if bytes.Contains(raw,[]byte("PRIVATE_")){t.Fatal("private checkpoint leaked")}
   })
  }
+}
+
+func TestHeadlessRebootReasonDoesNotRepeatCompletedTransition(t *testing.T){
+ p,f:=rebootFixture(t)
+ source:=rebootSource(f)
+ if needed,err:=headlessRebootNeeded(context.Background(),p.Setup,source);err!=nil||needed{t.Fatal("already headless boot requested another reboot")}
+ base:=source.Output
+ source.Output=func(ctx context.Context,name string,args ...string)([]byte,error){
+  if strings.Contains(strings.Join(args," "),"graphical.target"){return []byte("active"),nil}
+  return base(ctx,name,args...)
+ }
+ if needed,err:=headlessRebootNeeded(context.Background(),p.Setup,source);err!=nil||!needed{t.Fatal("missed pending headless transition")}
+ source.Output=func(context.Context,string,...string)([]byte,error){return []byte("activating"),nil}
+ if _,err:=headlessRebootNeeded(context.Background(),p.Setup,source);err==nil{t.Fatal("transient target accepted")}
 }

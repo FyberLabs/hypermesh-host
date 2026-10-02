@@ -2,7 +2,8 @@
 
 This Linux stage is for a new host **before agent installation or enrollment**.
 It applies to an OS reboot-required marker or the approved change from a
-graphical default target to headless operation. It does not reboot an installed,
+graphical default target to headless operation while the graphical target is
+still active. An already-headless boot does not request another transition reboot. It does not reboot an installed,
 registered or leased Hypermesh host.
 
 Finish `apply-setup` first. Retain the original setup plan and the matching

@@ -42,7 +42,7 @@ func setupRebootDigest(p setupRebootPlan)string{p.SHA256="";raw,_:=json.Marshal(
 func validateSetupRebootPlan(p setupRebootPlan,approved string)error{
  if p.Schema!=1||p.Scope!="pre-enrollment"||!setupDigestRE.MatchString(approved)||p.SHA256!=approved||
   setupRebootDigest(p)!=approved||!setupDigestRE.MatchString(p.MachineSHA256)||!hostregistration.UUID.MatchString(p.BootID)||
-  (!p.OSRequired&&!p.Headless)||p.Headless!=(p.Setup.HeadlessRequested&&p.Setup.Platform.DefaultTarget=="graphical.target"){
+  (!p.OSRequired&&!p.Headless)||(p.Headless&&!(p.Setup.HeadlessRequested&&p.Setup.Platform.DefaultTarget=="graphical.target")){
   return fmt.Errorf("reboot approval does not match a supported pre-enrollment plan")
  }
  return validateSetupApproval(p.Setup,p.Setup.PlanSHA256)
@@ -127,7 +127,11 @@ func checkSetupReboot(ctx context.Context,p setupRebootPlan,root,state string,so
  needed,err:=liveRebootRequired(root);if err!=nil{return err}
  if post&&needed{return fmt.Errorf("OS still reports a reboot requirement; inspect packages before continuing")}
  if !post&&needed!=p.OSRequired{return fmt.Errorf("reboot requirement changed; review a fresh reboot plan")}
- if post&&p.Headless{
+ if !post {
+  transition,err:=headlessRebootNeeded(ctx,p.Setup,source)
+  if err!=nil||transition!=p.Headless{return fmt.Errorf("headless reboot requirement changed; review a fresh reboot plan")}
+ }
+ if post&&p.Setup.HeadlessRequested{
   raw,err:=source.output(ctx,"systemctl","--system","show","graphical.target","-p","ActiveState","--value")
   if err!=nil||strings.TrimSpace(string(raw))!="inactive"{return fmt.Errorf("approved headless boot has not been observed")}
  }
@@ -238,7 +242,7 @@ func runPlanReboot(ctx context.Context,args []string,out,diagnostic io.Writer,st
  ctx,cancel:=context.WithTimeout(ctx,3*time.Minute);defer cancel()
  p.MachineSHA256,p.BootID,err=rebootIdentity("")
  if err==nil{p.OSRequired,err=liveRebootRequired("")}
- p.Headless=p.Setup.HeadlessRequested&&p.Setup.Platform.DefaultTarget=="graphical.target"
+ if err==nil{p.Headless,err=headlessRebootNeeded(ctx,p.Setup,rebootSetupSource())}
  p.SHA256=setupRebootDigest(p)
  if err==nil&&!p.OSRequired&&!p.Headless{err=fmt.Errorf("no OS reboot requirement or approved headless transition was found")}
  if err==nil{err=validateSetupRebootPlan(p,p.SHA256)}
@@ -319,4 +323,12 @@ func submitSetupReboot(ctx context.Context)error{
  cmd.Stdout=io.Discard;cmd.Stderr=io.Discard
  if cmd.Run()!=nil{return fmt.Errorf("reboot submission unconfirmed; inspect inhibitors and system logs")}
  return nil
+}
+
+func headlessRebootNeeded(ctx context.Context,p SetupPlan,source setupSource)(bool,error){
+ if !p.HeadlessRequested||p.Platform.DefaultTarget!="graphical.target"{return false,nil}
+ raw,err:=source.output(ctx,"systemctl","--system","show","graphical.target","-p","ActiveState","--value")
+ state:=strings.TrimSpace(string(raw))
+ if err!=nil||!supportOneOf(state,"active","inactive"){return false,fmt.Errorf("cannot determine current graphical target state")}
+ return state=="active",nil
 }
