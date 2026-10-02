@@ -141,7 +141,15 @@ func guidedCommand(name string)guidedRunner {
 }
 func (g guidedFlow) execute(ctx context.Context,name string,args ...string)error {
  var output bytes.Buffer
- if g.run(name)(ctx,args,&output,g.diagnostic)!=0{return fmt.Errorf("%s could not finish; resolve the message above and run the same installer again",name)}
+ code:=g.run(name)(ctx,args,&output,g.diagnostic)
+ if name=="host-status"||name=="check-agent" {
+  var report struct {Gates []onboardingGate `json:"gates"`;PlaneSellState string `json:"plane_sell_state"`}
+  if json.Unmarshal(output.Bytes(),&report)==nil {
+   for _,gate:=range report.Gates {fmt.Fprintf(g.ui.out," - %s: %s\n",gate.State,gate.NextAction)}
+   if report.PlaneSellState!=""{fmt.Fprintln(g.ui.out,"Dashboard selling state:",report.PlaneSellState)}
+  }
+ }
+ if code!=0{return fmt.Errorf("%s could not finish; resolve the message above and run the same installer again",name)}
  return nil
 }
 func (g guidedFlow) plan(ctx context.Context,name,file string,args ...string)(map[string]any,error) {
@@ -227,8 +235,13 @@ func (g guidedFlow) finish(ctx context.Context)error {
  if err=guidedRead(agentPath,&ap,true);err!=nil{return err}
  if s.Stage==3 {
   fmt.Fprintln(g.ui.out,"Connect this host to your account. Open the sign-in link on any device, then approve this host in your dashboard.")
-  if err=g.execute(ctx,"register-agent","--plan",agentPath,"--approve-plan",ap.SHA256,
-   "--issuer",n.Issuer,"--dashboard-url",n.Dashboard,"--class-id",s.Class);err!=nil{return err}
+  args:=[]string{"--plan",agentPath,"--approve-plan",ap.SHA256,"--issuer",n.Issuer,"--dashboard-url",n.Dashboard,"--class-id",s.Class}
+  var registration registrationJournal
+  if guidedRead(registrationPath(defaultSetupState,ap.SHA256),&registration,true)==nil && (registration.State=="denied"||registration.State=="expired") {
+   if err=g.ui.confirm("The previous browser approval ended. Start a new approval with fresh keys?");err!=nil{return err}
+   args=append(args,"--restart-approval")
+  }
+  if err=g.execute(ctx,"register-agent",args...);err!=nil{return err}
   if err=g.advance();err!=nil{return err}
  }
  if s.Stage==4 {

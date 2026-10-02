@@ -210,6 +210,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--key-output", type=Path, help="save bundled/selected public trust to a NEW file for subsequent plans")
     args = parser.parse_args()
+    if __import__("shutil").which("gpg") is None:
+        parser.exit(1, "Verifier needs GnuPG (gpg). On Ubuntu: sudo apt-get install gnupg\n")
     if args.key_output is None:
         args.key_output = Path(str(args.output) + ".pub")
     try:
