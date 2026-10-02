@@ -67,8 +67,10 @@ Activation requires a fresh browser/device login by the original owner, current
 program/catalog pins, accepted intake, no holds/jobs/leases and a short-lived
 server permit. The installer revalidates installed payloads, identity and systemd
 unit paths. It saves an indefinite paused sell posture before creating the
-activation marker and enabling the agent. It verifies startup and attempts
-bounded stop/disable/marker removal on failure. Starting the agent does not
+activation marker and enabling the agent. It requires 15 seconds of stable running state with the same systemd invocation,
+PID and restart count before recording activation, and attempts
+bounded stop/disable/marker removal on failure. This is a startup stability
+check, not a guarantee of future service uptime. Starting the agent does not
 enable selling; that remains a separate owner action under the existing gates.
 
 ## Retry and recovery

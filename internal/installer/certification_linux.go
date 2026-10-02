@@ -11,6 +11,7 @@ import (
  "os"
  "path/filepath"
  "strings"
+ "strconv"
  "time"
 
  "github.com/FyberLabs/hypermesh-host/internal/agent"
@@ -263,6 +264,42 @@ func startCertified(ctx context.Context,j *certificationJournal,permit time.Time
  return nil
 }
 
+
+type serviceInvocation struct { PID int; Restarts int; Invocation string }
+func activeInvocation(raw []byte)(serviceInvocation,error){
+ values:=map[string]string{}
+ for _,line:=range strings.Split(strings.TrimSpace(string(raw)),"\n"){
+  key,value,ok:=strings.Cut(line,"=");if !ok||values[key]!=""{return serviceInvocation{},fmt.Errorf("invalid systemd status")}
+  values[key]=value
+ }
+ pid,pe:=strconv.Atoi(values["MainPID"]);restarts,re:=strconv.Atoi(values["NRestarts"])
+ invocation:=values["InvocationID"]
+ if values["ActiveState"]!="active"||values["SubState"]!="running"||pe!=nil||pid<=0||re!=nil||restarts<0||len(invocation)!=32||strings.Trim(invocation,"0123456789abcdef")!=""{
+  return serviceInvocation{},fmt.Errorf("agent is not running in a stable invocation")
+ }
+ return serviceInvocation{pid,restarts,invocation},nil
+}
+func waitStableAgent(ctx context.Context,window,poll time.Duration,probe func(context.Context)([]byte,error))error{
+ started:=time.Now()
+ var first serviceInvocation
+ for{
+  raw,err:=probe(ctx);if err!=nil{return fmt.Errorf("cannot verify agent startup")}
+  current,err:=activeInvocation(raw);if err!=nil{return err}
+  if first.PID==0{first=current}else if current!=first{return fmt.Errorf("agent restarted during startup")}
+  if ctx.Err()!=nil{return fmt.Errorf("startup verification interrupted")}
+  if time.Since(started)>=window{return nil}
+  timer:=time.NewTimer(poll)
+  select{case <-ctx.Done():timer.Stop();return fmt.Errorf("startup verification interrupted");case <-timer.C:}
+ }
+}
+
+func verifyAgentStartup(ctx context.Context)error{
+   verify,cancel:=context.WithTimeout(ctx,25*time.Second);defer cancel()
+   return waitStableAgent(verify,15*time.Second,500*time.Millisecond,func(ctx context.Context)([]byte,error){
+    return (setupSource{}).output(ctx,"systemctl","--system","show","hypermesh-agent.service",
+     "-p","ActiveState","-p","SubState","-p","MainPID","-p","NRestarts","-p","InvocationID")
+   })
+}
 func activateCertified(ctx context.Context,p certificationPlan,identity registrationJournal,c *hostregistration.Client,j *certificationJournal,save func(certificationJournal)error,diagnostic io.Writer)error{
  if !supportOneOf(j.State,"passed","activating","active")||j.Evidence==nil{return fmt.Errorf("complete certification before activation")}
  marker:=activationMarker(p)
@@ -277,7 +314,7 @@ func activateCertified(ctx context.Context,p certificationPlan,identity registra
  // A repeat command must not restart an already active installation.
  if own&&j.State=="active"{
   raw,e:=(setupSource{}).output(ctx,"systemctl","is-active","hypermesh-agent.service")
-  if e==nil&&strings.TrimSpace(string(raw))=="active"{return nil}
+  if e==nil&&strings.TrimSpace(string(raw))=="active"{return verifyAgentStartup(ctx)}
  }
  // Retry after a crash first returns our previously started service to inactive.
  if own {
@@ -313,8 +350,7 @@ func activateCertified(ctx context.Context,p certificationPlan,identity registra
    _,err:=(setupSource{}).output(ctx,"systemctl","enable","--now","hypermesh-agent.service");return err
   },
   Verify:func(ctx context.Context)error{
-   raw,err:=(setupSource{}).output(ctx,"systemctl","is-active","hypermesh-agent.service")
-   if err!=nil||strings.TrimSpace(string(raw))!="active"{return fmt.Errorf("agent failed to start")};return nil
+   return verifyAgentStartup(ctx)
   },
   Rollback:func(ctx context.Context)error{
    if _,err:=(setupSource{}).output(ctx,"systemctl","disable","--now","hypermesh-agent.service");err!=nil{return err}

@@ -132,3 +132,28 @@ func TestCertificationJournalRejectsUnconfirmedSuccess(t *testing.T){
  j.State="running"
  if !validCertificationJournal(j){t.Fatal("cannot recover interrupted execution")}
 }
+
+func TestActivationRequiresStableSystemdInvocation(t *testing.T){
+ stable:="ActiveState=active\nSubState=running\nMainPID=123\nNRestarts=0\nInvocationID="+strings.Repeat("a",32)
+ for _,kind:=range []string{"pass","exited","pid","restarts","invocation","cancel","invalid"}{
+  t.Run(kind,func(t *testing.T){
+   count:=0;ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel()
+   err:=waitStableAgent(ctx,5*time.Millisecond,time.Millisecond,func(context.Context)([]byte,error){
+    count++;raw:=stable
+    if count>1{
+     switch kind{
+     case "exited":raw=strings.Replace(raw,"SubState=running","SubState=auto-restart",1)
+     case "pid":raw=strings.Replace(raw,"MainPID=123","MainPID=124",1)
+     case "restarts":raw=strings.Replace(raw,"NRestarts=0","NRestarts=1",1)
+     case "invocation":raw=strings.Replace(raw,strings.Repeat("a",32),strings.Repeat("b",32),1)
+     case "cancel":cancel()
+     }
+    }
+    if kind=="invalid"{raw="ActiveState=active"}
+    return []byte(raw),nil
+   })
+   if (err==nil)!=(kind=="pass"){t.Fatalf("%s: %v",kind,err)}
+   if kind=="pass"&&count<2{t.Fatal("accepted one instantaneous state")}
+  })
+ }
+}

@@ -61,7 +61,70 @@ func NewRunID()(string,error){
  return fmt.Sprintf("%x-%x-%x-%x-%x",b[:4],b[4:6],b[6:8],b[8:10],b[10:]),nil
 }
 func (m CertificationManifest) Validate()error{
- if !oneOf(m.SuiteID,"pack-v1","thin-v1")||!nameRE.MatchString(m.CatalogID)||
+ if !oneOf(m.SuiteID,"pack-v1","thin-v1")||!regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}package hostregistration
+
+import (
+ "context"
+ "crypto/rand"
+ "encoding/hex"
+ "encoding/json"
+ "fmt"
+ "regexp"
+ "math"
+ "time"
+)
+
+type CertificationManifest struct {
+ SuiteID string `json:"suite_id"`
+ CatalogID string `json:"catalog_id"`
+ ClassID string `json:"class_id"`
+ FileHash string `json:"file_hash"`
+ ImageDigest string `json:"image_digest"`
+ SourceRef string `json:"source_ref"`
+ SizeBytes int64 `json:"size_bytes"`
+ Runtime string `json:"runtime"`
+ Backend string `json:"backend"`
+ ContextTokens int `json:"context_tokens"`
+ FullContext bool `json:"full_context"`
+ DecodeTokS float64 `json:"decode_tok_s"`
+ ThermalC *float64 `json:"thermal_c"`
+}
+type CertificationRun struct {
+ ProtocolVersion int `json:"protocol_version"`
+ Nonce string `json:"nonce"`
+ RunID string `json:"run_id"`
+ TenantID string `json:"tenant_id"`
+ DeviceID string `json:"device_id"`
+ RequestID string `json:"request_id"`
+ Manifest CertificationManifest `json:"manifest"`
+ ManifestSHA256 string `json:"manifest_sha256"`
+ State string `json:"state"`
+ ExpiresAt time.Time `json:"expires_at"`
+ SellingAllowed *bool `json:"selling_allowed"`
+ ActivationAllowed *bool `json:"activation_allowed,omitempty"`
+ PermitExpiresAt *time.Time `json:"permit_expires_at,omitempty"`
+}
+type CertificationEvidence struct {
+ HostImageHash string `json:"host_image_hash"`
+ FileHash string `json:"file_hash"`
+ ImageDigest string `json:"image_digest"`
+ SampleMS int `json:"sample_ms"`
+ TokensPerSecond float64 `json:"tokens_per_second"`
+ ThermalC *float64 `json:"thermal_c"`
+ ContextTokens int `json:"context_tokens"`
+ PromptTokens int `json:"prompt_tokens"`
+ GeneratedTokens int `json:"generated_tokens"`
+ ContextElapsedMS int64 `json:"context_elapsed_ms"`
+ CleanupComplete bool `json:"cleanup_complete"`
+ TunnelVerified bool `json:"tunnel_verified"`
+}
+func NewRunID()(string,error){
+ b:=make([]byte,16);if _,err:=rand.Read(b);err!=nil{return "",fmt.Errorf("cannot create run identity")}
+ b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128
+ return fmt.Sprintf("%x-%x-%x-%x-%x",b[:4],b[4:6],b[6:8],b[8:10],b[10:]),nil
+}
+func (m CertificationManifest) Validate()error{
+ if !oneOf(m.SuiteID,"pack-v1","thin-v1")||).MatchString(m.CatalogID)||
  !oneOf(m.ClassID,"agx-large","nx-volume")||
  !regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(m.FileHash)||
  !regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$`).MatchString(m.ImageDigest)||
