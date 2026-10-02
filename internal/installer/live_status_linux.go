@@ -51,14 +51,15 @@ func liveService(raw []byte)(serviceInvocation,bool,error) {
  values:=map[string]string{}
  for _,line:=range strings.Split(strings.TrimSpace(string(raw)),"\n"){
   key,value,ok:=strings.Cut(line,"=")
-  if !ok || !supportOneOf(key,"LoadState","UnitFileState","ActiveState","SubState","MainPID","NRestarts","InvocationID"){
+  if !ok || !supportOneOf(key,"LoadState","UnitFileState","ActiveState","SubState","MainPID","NRestarts","InvocationID","NeedDaemonReload","FragmentPath","DropInPaths"){
    return serviceInvocation{},false,fmt.Errorf("unsupported service observation")
   }
   if _,exists:=values[key];exists{return serviceInvocation{},false,fmt.Errorf("duplicate service property")}
   values[key]=value
  }
- if len(values)!=7{return serviceInvocation{},false,fmt.Errorf("incomplete service observation")}
- if values["LoadState"]!="loaded" || values["UnitFileState"]!="enabled" {return serviceInvocation{},false,nil}
+ if len(values)!=10{return serviceInvocation{},false,fmt.Errorf("incomplete service observation")}
+ if values["LoadState"]!="loaded" || values["UnitFileState"]!="enabled" || values["NeedDaemonReload"]!="no" ||
+  values["FragmentPath"]!="/etc/systemd/system/hypermesh-agent.service" || values["DropInPaths"]!="" {return serviceInvocation{},false,nil}
  if values["ActiveState"]!="active" || values["SubState"]!="running" {return serviceInvocation{},false,nil}
  v,err:=activeInvocation([]byte("ActiveState=active\nSubState=running\nMainPID="+values["MainPID"]+
   "\nNRestarts="+values["NRestarts"]+"\nInvocationID="+values["InvocationID"]))
@@ -114,6 +115,9 @@ func collectLiveHostStatus(ctx context.Context,p certificationPlan,d liveStatusD
    add(liveGate("heartbeat",heartbeatOK,"The plane has a heartbeat no older than 120 seconds; this is not a tunnel test.",
     "Heartbeat is absent, future-dated or older than 120 seconds. Inspect agent service and connectivity; this status command does not send a heartbeat."))
    if supportOneOf(s.SellState,"paused","selling","draining","off","n/a","unknown"){report.PlaneSellState=s.SellState}
+   add(liveGate("selling_state",supportOneOf(s.SellState,"paused","selling","draining","off"),
+    "Plane selling posture is recognized; it is reported without changing it or granting permission.",
+    "Plane selling posture is unknown or not applicable to a model host. Inspect the host dashboard before changing it."))
   }
  } else {
   add(onboardingGate{"control_plane","blocked","Plane was not queried because local identity was unverified or the check was interrupted."})
@@ -125,7 +129,7 @@ func collectLiveHostStatus(ctx context.Context,p certificationPlan,d liveStatusD
   serviceOK=err==nil&&e==nil&&active&&last==first
  }
  add(liveGate("agent_service",serviceOK,"Agent is enabled and running with the same invocation across this observation.",
-  "Agent is stopped, disabled, restarting or unobservable. Inspect systemd locally and certification-status. Use the controlled activation flow for an incomplete startup; do not bypass its approval gates."))
+  "Agent is stopped, disabled, restarting, has unreviewed or stale loaded configuration, or is unobservable. Inspect systemd locally and certification-status. Use the controlled activation flow for an incomplete startup; do not bypass its approval gates."))
  return finish()
 }
 
@@ -195,7 +199,8 @@ func runHostStatus(ctx context.Context,args []string,out,diagnostic io.Writer,st
   Service:func(ctx context.Context)([]byte,error){
    return (setupSource{}).output(ctx,"systemctl","--system","show","hypermesh-agent.service",
     "-p","LoadState","-p","UnitFileState","-p","ActiveState","-p","SubState",
-    "-p","MainPID","-p","NRestarts","-p","InvocationID")
+    "-p","MainPID","-p","NRestarts","-p","InvocationID",
+    "-p","NeedDaemonReload","-p","FragmentPath","-p","DropInPaths")
   },
   Reboot:func()(bool,error){return liveRebootRequired("")},
   Remote:func(ctx context.Context)(hostregistration.OnboardingSnapshot,error){

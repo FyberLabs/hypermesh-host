@@ -37,7 +37,7 @@ func livePlanFixture(t *testing.T)(certificationPlan,registrationJournal) {
  return p,j
 }
 func liveServiceFixture()[]byte {
- return []byte("LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nMainPID=123\nNRestarts=0\nInvocationID="+strings.Repeat("a",32))
+ return []byte("NeedDaemonReload=no\nFragmentPath=/etc/systemd/system/hypermesh-agent.service\nDropInPaths=\nLoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nMainPID=123\nNRestarts=0\nInvocationID="+strings.Repeat("a",32))
 }
 func liveDepsFixture(now time.Time)liveStatusDeps {
  yes,no:=true,false
@@ -57,7 +57,7 @@ func liveDepsFixture(now time.Time)liveStatusDeps {
  }
 }
 func TestLiveHostStatusGatesAndRedaction(t *testing.T) {
- for _,kind:=range []string{"pass","installation","identity","history","activating","marker","marker-error","service","restart","disabled","reboot","reboot-error","remote","clock-old","clock-future","class","intake","certification","hold","aiuditor","heartbeat-missing","heartbeat-old","heartbeat-future","cancel"} {
+ for _,kind:=range []string{"pass","installation","identity","history","activating","marker","marker-error","service","restart","disabled","reboot","reboot-error","remote","clock-old","clock-future","class","intake","certification","hold","aiuditor","heartbeat-missing","heartbeat-old","heartbeat-future","sell-unknown","cancel"} {
   t.Run(kind,func(t *testing.T){
    now:=time.Now().UTC();d:=liveDepsFixture(now);calls:=0
    original:=d.Remote
@@ -71,6 +71,7 @@ func TestLiveHostStatusGatesAndRedaction(t *testing.T) {
     case "intake":s.PathAState="rejected"
     case "certification":s.PathBState="suspended"
     case "hold":*s.ScheduleHold=true
+    case "sell-unknown":s.SellState="unknown"
     case "aiuditor":s.AIuditorProgramState="unauthorized"
     case "heartbeat-missing":s.LastHeartbeatAt=nil
     case "heartbeat-old":stamp:=now.Add(-121*time.Second);s.LastHeartbeatAt=&stamp
@@ -98,16 +99,19 @@ func TestLiveHostStatusGatesAndRedaction(t *testing.T) {
    if report.AttentionRequired!=(kind!="pass"){t.Fatalf("%s: %+v",kind,report)}
    if report.ActivationAllowed||report.SellingAllowed||report.TunnelProbed{t.Fatal("observation granted authority")}
    if (kind=="identity"||kind=="cancel")&&calls!=0{t.Fatal("queried plane without verified identity")}
-   if kind=="pass"&&(calls!=1||report.HeartbeatAgeSeconds==nil||*report.HeartbeatAgeSeconds!=30||len(report.Gates)!=13){t.Fatalf("%+v",report)}
+   if kind=="pass"&&(calls!=1||report.HeartbeatAgeSeconds==nil||*report.HeartbeatAgeSeconds!=30||len(report.Gates)!=14){t.Fatalf("%+v",report)}
    raw,_:=json.Marshal(report)
    if strings.Contains(string(raw),"PRIVATE_")||strings.Contains(string(raw),"private.invalid"){t.Fatal("untrusted output leaked")}
   })
  }
 }
 func TestLiveServiceRejectsIncompleteAndUnstableState(t *testing.T) {
- for _,kind:=range []string{"valid","absent","masked","exited","pid","invocation","restarts","duplicate-empty","missing","extra"}{
+ for _,kind:=range []string{"valid","reload","fragment","dropin","absent","masked","exited","pid","invocation","restarts","duplicate-empty","missing","extra"}{
   raw:=string(liveServiceFixture())
   switch kind {
+  case "reload":raw=strings.Replace(raw,"NeedDaemonReload=no","NeedDaemonReload=yes",1)
+  case "fragment":raw=strings.Replace(raw,"FragmentPath=/etc/systemd/system/hypermesh-agent.service","FragmentPath=/run/systemd/system/hypermesh-agent.service",1)
+  case "dropin":raw=strings.Replace(raw,"DropInPaths=","DropInPaths=/private/override.conf",1)
   case "absent":raw=strings.Replace(raw,"LoadState=loaded","LoadState=not-found",1)
   case "masked":raw=strings.Replace(raw,"UnitFileState=enabled","UnitFileState=masked",1)
   case "exited":raw=strings.Replace(raw,"SubState=running","SubState=exited",1)
