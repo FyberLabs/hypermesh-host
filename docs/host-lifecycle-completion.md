@@ -31,3 +31,13 @@ Use the matching signed installer and retain the original agent and certificatio
 For repair/uninstall, stop first, then review and apply the recovery plan. Backups remain in the private installer recovery directory. Uninstall preserves enrollment and cached models; it does not retire the host. Repair restores the original signed installation and its install journal. Use the retained maintenance plan to resume after repair.
 
 The agent must include the maintenance owner endpoint. Older agents refuse the request; the installer does not substitute a forced stop. Missing connectivity, unexpected units/drop-ins, active workloads, unknown local state or a failed checkpoint prevent progress. Physical SSH reconnect and actual systemd/driver behavior still need AGX-1 acceptance.
+
+## Reviewed installer updates and signed agent evidence
+
+Install the verified CLI as a root-owned executable (for example `sudo install -m 0755 ./hypermesh-deploy /usr/local/bin/hypermesh-deploy`) before using in-place self-update. Keep the original downloaded executable available for recovery.
+
+`plan-installer-update --release-url IMMUTABLE_URL --channel test|prod --trusted-key FILE --fingerprints LIST` verifies a strictly newer signed release and binds the exact existing executable, destination, target release and target hash. Apply the reviewed digest with `update-installer --plan FILE --approve-plan SHA256 --apply`. The current process finishes; invoke the CLI again to use the new version. No child executable is run implicitly and no agent is restarted.
+
+The private `installer-update-PLAN_SHA256/previous` backup survives retries and explicit `rollback-installer --plan FILE --approve-plan SHA256 --apply`. Changed executables or backups are refused. Rollback restores bytes without lowering the persistent download build floor. Old host plans still require their matching signed installer; updating the CLI does not silently approve new prerequisite plans.
+
+The agent updater now retains public signed checksums, detached signature and release metadata under private `update-history` before replacing the binary. Installer verification can accept a changed agent binary only when its actual hash matches that evidence, the original signing trust, expected architecture/channel and minimum installation build. Other managed configuration and unit bytes must still match their original approval. No SAS URL or authentication token is retained.

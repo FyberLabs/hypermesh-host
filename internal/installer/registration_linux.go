@@ -155,7 +155,11 @@ func verifyInstalledForActivation(ctx context.Context,root string,p agentInstall
   after,e:=file.Stat()
   if e!=nil||!os.SameFile(info,after){file.Close();return fmt.Errorf("installed payload changed")}
   hash:=sha256.New();_,e=io.Copy(hash,io.LimitReader(file,256<<20));file.Close()
-  if e!=nil||hex.EncodeToString(hash.Sum(nil))!=f.SHA256||info.Size()>256<<20{return fmt.Errorf("installed payload differs from approved plan")}
+  got:=hex.EncodeToString(hash.Sum(nil))
+  if e!=nil||info.Size()>256<<20{return fmt.Errorf("installed payload differs from approved plan")}
+  if got!=f.SHA256 {
+   if i!=0||verifyInstalledUpdate(root,p,got)!=nil{return fmt.Errorf("installed payload differs and has no matching trusted signed update evidence")}
+  }
  }
  return nil
 }

@@ -24,6 +24,7 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+ if name=="plan-installer-update"||name=="update-installer"||name=="rollback-installer"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanInstallerUpdate;if name=="update-installer"{run=installer.RunUpdateInstaller};if name=="rollback-installer"{run=installer.RunRollbackInstaller};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-maintenance"||name=="maintain-agent"||name=="resume-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanMaintenance;if name=="maintain-agent"{run=installer.RunMaintainAgent};if name=="resume-agent"{run=installer.RunResumeAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-recovery"||name=="recover-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanRecovery;if name=="recover-agent"{run=installer.RunRecoverAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-reboot"||name=="reboot-setup"||name=="resume-setup"||name=="reboot-status" {
@@ -179,6 +180,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan-installer-update  review signed CLI replacement; --release-url URL --channel test|prod --trusted-key FILE --fingerprints LIST
+  update-installer  replace reviewed CLI with retained backup; --plan FILE --approve-plan SHA256 --apply
+  rollback-installer  explicitly restore that backup; --plan FILE --approve-plan SHA256 --apply
   plan-maintenance  review enrolled-host stop/reboot; --plan CERTIFICATION_PLAN --operation stop|reboot
   maintain-agent  drain and stop; --plan FILE --approve-plan SHA256 --apply [--reboot]
   resume-agent  verify and resume paused; --plan FILE --approve-plan SHA256 --start
