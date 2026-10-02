@@ -53,7 +53,7 @@ class BootstrapTests(unittest.TestCase):
         cls.workspace.cleanup()
 
     def test_download_verification_and_no_overwrite(self):
-        for mode in ("valid", "tamper", "signature", "fingerprint", "rollback", "channel", "existing"):
+        for mode in ("valid", "tamper", "signature", "fingerprint", "rollback", "channel", "existing", "release-substitution"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "deploy"
                 if mode == "existing":
@@ -65,7 +65,7 @@ class BootstrapTests(unittest.TestCase):
                 def fetch(address, limit):
                     return files[address.rsplit("/", 1)[1]]
                 def run():
-                    return bootstrap.bootstrap("https://example.invalid/release", "prod" if mode == "channel" else "test",
+                    return bootstrap.bootstrap("https://example.invalid/test/" + ("25-" if mode == "release-substitution" else "24-") + "a"*12, "prod" if mode == "channel" else "test",
                                                25 if mode == "rollback" else 24, "arm64", self.key,
                                                "0"*40 if mode == "fingerprint" else self.fingerprint, output, fetch)
                 if mode == "valid":

@@ -180,7 +180,8 @@ def bootstrap(release_url, channel, minimum, arch, key, fingerprint, output, fet
                 or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)):
             raise ValueError()
         release_id = version if channel == "prod" else f"{build}-{commit[:12]}"
-        if meta["release_id"] != release_id:
+        if (meta["release_id"] != release_id or
+                urllib.parse.urlsplit(base).path.rstrip("/").split("/")[-2:] != [channel, release_id]):
             raise ValueError()
     except (ValueError, KeyError, TypeError):
         raise Rejected("signed metadata does not meet release constraints") from None

@@ -64,8 +64,8 @@ setup approval, browser registration, model certification, activation and recove
 
 Maintenance resume uses separate original-owner approval and device-authenticated
 resume-permit endpoints. A completed certification may outlive the initial
-24-hour acquisition/first-activation window, but resume requires the latest
-recorded green result, unchanged authoritative program/catalog pins, intact
+24-hour acquisition/first-activation window, but resume requires the current
+green certification and completed evidence, unchanged authoritative program/catalog pins, intact
 evidence, accepted intake, no holds/jobs/leases and owner approval within ten
 minutes. A permit lasts at most two minutes. First-activation expiry is unchanged.
 The host accepts an expired acquisition window only for an explicitly marked
