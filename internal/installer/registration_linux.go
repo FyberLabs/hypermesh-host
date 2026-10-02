@@ -129,8 +129,11 @@ func validateRegistration(j registrationJournal,p agentInstallPlan,issuer,dashbo
 // Verify every installed payload before authentication. Stream the executable
 // rather than using the 2 MiB JSON reader; refuse missing, linked or altered files.
 func verifyRegistrationInstallation(ctx context.Context,root string,p agentInstallPlan)error {
+ return verifyInstalledForActivation(ctx,root,p,false)
+}
+func verifyInstalledForActivation(ctx context.Context,root string,p agentInstallPlan,ownMarker bool)error {
  if err:=secureSetupDirectory(agentDest(root,"/var/lib/hypermesh"),false);err!=nil{return err}
- if _,err:=os.Lstat(agentDest(root,"/var/lib/hypermesh/activation-approved"));!os.IsNotExist(err){return fmt.Errorf("registration requires an inactive first installation")}
+ if _,err:=os.Lstat(agentDest(root,"/var/lib/hypermesh/activation-approved"));!ownMarker&&!os.IsNotExist(err){return fmt.Errorf("registration requires an inactive first installation")}
  var installed agentInstallJournal
  raw,err:=readSetupRegular(agentDest(root,filepath.Join(defaultSetupState,"agent-"+p.SHA256+".json")),true)
  if err==nil{err=decodeSetupJSON(raw,&installed)}

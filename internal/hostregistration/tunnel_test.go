@@ -10,7 +10,7 @@ import (
 )
 
 func TestPrepareTunnelBindsSavedIdentityAndAllocation(t *testing.T){
- for _,bad:=range []string{"","nonce","peer","route","lease","endpoint","selling","capability"}{t.Run(bad,func(t *testing.T){
+ for _,bad:=range []string{"","green","nonce","peer","route","lease","endpoint","selling","capability"}{t.Run(bad,func(t *testing.T){
   r:=fixture(t);secret:="hm_dev_"+strings.Repeat("s",32)
   server:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,req *http.Request){
    if req.URL.Path!="/api/v1/hypermesh/agent/onboarding/tunnel"||req.Header.Get("Authorization")!="Bearer "+secret{t.Error("wrong authenticated operation")}
@@ -20,6 +20,7 @@ func TestPrepareTunnelBindsSavedIdentityAndAllocation(t *testing.T){
    peer:=OnboardingTunnel{TunnelID:r.RequestID,Status:"allocated",Endpoint:"wg.example:51820",
     ServerPublicKey:r.WGPublicKey,PeerPublicKey:r.WGPublicKey,ClientAddress:"10.77.0.2/32",ProbeAddress:"10.77.0.1"}
    switch bad {
+   case "green":s.PathBState="green"
    case "nonce":s.Nonce="replay"
    case "peer":peer.PeerPublicKey="other"
    case "route":peer.ClientAddress="0.0.0.0/0"
@@ -32,6 +33,6 @@ func TestPrepareTunnelBindsSavedIdentityAndAllocation(t *testing.T){
   }));defer server.Close()
   c,_:=New(server.URL,testTenant);c.http=server.Client()
   _,err:=c.PrepareTunnel(context.Background(),r,r.RequestID,secret)
-  if (err==nil)!=(bad==""){t.Fatalf("bad=%q err=%v",bad,err)}
+  if (err==nil)!=(bad==""||bad=="green"){t.Fatalf("bad=%q err=%v",bad,err)}
  })}
 }
