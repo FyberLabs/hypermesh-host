@@ -82,7 +82,7 @@ func TestResumeRechecksNewBootAndPersistsOnlyVerifiedSuccess(t *testing.T){
  for _,kind:=range []string{"pass","same-boot","machine","checkpoint","check","save-intent","save-final","cancel","boot-race"}{
   t.Run(kind,func(t *testing.T){
    p,_:=rebootFixture(t);d:=rebootDepsFixture(p);boot,_:=hostregistration.NewRunID()
-   j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,BootID:p.BootID,State:"requested",RecordedAt:time.Now()}
+   j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,SetupPlanSHA256:p.Setup.PlanSHA256,MachineSHA256:p.MachineSHA256,BootID:p.BootID,State:"requested",RecordedAt:time.Now()}
    durable:=j;checks,identities:=0,0
    d.Identity=func()(string,string,error){
     identities++
@@ -227,7 +227,7 @@ func TestRebootPlanAndJournalRejectInconsistentAuthority(t *testing.T){
   if validateSetupRebootPlan(changed,changed.SHA256)==nil{t.Fatal("invalid plan accepted",kind)}
  }
  next,_:=hostregistration.NewRunID()
- j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,BootID:p.BootID,ObservedBootID:next,State:"verified",RecordedAt:time.Now()}
+ j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,SetupPlanSHA256:p.Setup.PlanSHA256,MachineSHA256:p.MachineSHA256,BootID:p.BootID,ObservedBootID:next,State:"verified",RecordedAt:time.Now()}
  for _,kind:=range []string{"same-boot","missing-boot","requested-with-observation","unknown-state","error","zero-time"}{
   v:=j
   switch kind{
@@ -271,7 +271,7 @@ func TestRebootSupportRefusesIncompleteAndUnsafeCheckpoints(t *testing.T){
    p,_:=rebootFixture(t);dir:=t.TempDir();if err:=os.Chmod(dir,0700);err!=nil{t.Fatal(err)}
    unlock,err:=lockSetupState(dir);if err!=nil{t.Fatal(err)};unlock()
    boot,_:=hostregistration.NewRunID()
-   j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,BootID:p.BootID,ObservedBootID:boot,State:"verified",RecordedAt:time.Now()}
+   j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,SetupPlanSHA256:p.Setup.PlanSHA256,MachineSHA256:p.MachineSHA256,BootID:p.BootID,ObservedBootID:boot,State:"verified",RecordedAt:time.Now()}
    switch kind{case "same-boot":j.ObservedBootID=j.BootID;case "unknown-code":j.FailureCode="PRIVATE_CODE";case "wrong-plan":j.PlanSHA256=strings.Repeat("f",64)}
    path:=setupRebootPath(dir,p.SHA256)
    raw,_:=json.Marshal(j);if kind=="corrupt"{raw=[]byte("PRIVATE_CORRUPT")}
@@ -297,4 +297,56 @@ func TestHeadlessRebootReasonDoesNotRepeatCompletedTransition(t *testing.T){
  if needed,err:=headlessRebootNeeded(context.Background(),p.Setup,source);err!=nil||!needed{t.Fatal("missed pending headless transition")}
  source.Output=func(context.Context,string,...string)([]byte,error){return []byte("activating"),nil}
  if _,err:=headlessRebootNeeded(context.Background(),p.Setup,source);err==nil{t.Fatal("transient target accepted")}
+}
+
+func TestAgentInstallationRequiresRebootPostflight(t *testing.T){
+ for _,kind:=range []string{"no-reboot","verified","os-required","graphical","requested","verifying","verification-failed","old-boot","other-machine","corrupt","unsafe"}{
+  t.Run(kind,func(t *testing.T){
+   p,_,root,state,source:=rebootHostFixture(t)
+   boot,_:=hostregistration.NewRunID()
+   machineID:=strings.Repeat("a",32)
+   for path,value:=range map[string]string{"/etc/machine-id":machineID,"/proc/sys/kernel/random/boot_id":boot}{
+    full:=agentDest(root,path);if err:=os.MkdirAll(filepath.Dir(full),0700);err!=nil{t.Fatal(err)}
+    if err:=os.WriteFile(full,[]byte(value),0600);err!=nil{t.Fatal(err)}
+   }
+   j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,SetupPlanSHA256:p.Setup.PlanSHA256,MachineSHA256:digestSetupBytes([]byte(machineID)),BootID:p.BootID,ObservedBootID:boot,State:"verified",RecordedAt:time.Now()}
+   switch kind{
+   case "os-required":
+    full:=agentDest(root,"/run/reboot-required");if err:=os.MkdirAll(filepath.Dir(full),0700);err!=nil{t.Fatal(err)};if err:=os.WriteFile(full,nil,0600);err!=nil{t.Fatal(err)}
+   case "graphical":source.Output=func(context.Context,string,...string)([]byte,error){return []byte("active"),nil}
+   case "requested":j.State="requested";j.ObservedBootID=""
+   case "verifying":j.State="verifying"
+   case "verification-failed":j.State="verification-failed";j.FailureCode="postflight"
+   case "old-boot":j.ObservedBootID,_=hostregistration.NewRunID()
+   case "other-machine":j.MachineSHA256=strings.Repeat("b",64)
+   }
+   if kind!="no-reboot"{
+    path:=setupRebootPath(state,p.SHA256)
+    if err:=saveSetupReboot(path,j);err!=nil{t.Fatal(err)}
+    if kind=="corrupt"{if err:=os.WriteFile(path,[]byte("{}"),0600);err!=nil{t.Fatal(err)}}
+    if kind=="unsafe"{if err:=os.Chmod(path,0644);err!=nil{t.Fatal(err)}}
+   }
+   err:=checkAgentRebootGate(context.Background(),p.Setup,root,state,source)
+   if (err==nil)!=(kind=="no-reboot"||kind=="verified"){t.Fatalf("%s: %v",kind,err)}
+  })
+ }
+}
+func TestRebootCustomStateAndCanonicalHistory(t *testing.T){
+ p,_,root,canonical,source:=rebootHostFixture(t)
+ custom:=filepath.Join(root,"custom")
+ if err:=secureSetupDirectory(custom,true);err!=nil{t.Fatal(err)}
+ unlock,err:=lockRebootState(root,custom);if err!=nil{t.Fatal(err)}
+ if other,err:=lockSetupState(canonical);err==nil{other();t.Fatal("canonical installer state was not locked")}
+ unlock()
+ if err:=os.WriteFile(filepath.Join(canonical,"registration-old.json"),[]byte("{}"),0600);err!=nil{t.Fatal(err)}
+ if guardRebootHost(context.Background(),root,custom,source)==nil{t.Fatal("custom state bypassed canonical registration history")}
+ path:=filepath.Join(root,"plan.json");raw,_:=json.Marshal(p)
+ if err:=os.WriteFile(path,raw,0600);err!=nil{t.Fatal(err)}
+ d:=rebootDepsFixture(p);var out,diagnostic bytes.Buffer
+ args:=[]string{"--plan",path,"--approve-plan",p.SHA256,"--state-dir",custom,"--reboot"}
+ if code:=runRebootSetup(context.Background(),args,&out,&diagnostic,false,filepath.Join(root,"wrong"),true,&d);code!=0{t.Fatalf("%d %s",code,diagnostic.String())}
+ boot,_:=hostregistration.NewRunID();d.Identity=func()(string,string,error){return p.MachineSHA256,boot,nil}
+ if code:=runRebootSetup(context.Background(),args[:6],&out,&diagnostic,true,filepath.Join(root,"wrong"),true,&d);code!=0{t.Fatalf("%d %s",code,diagnostic.String())}
+ if code:=runRebootStatus(context.Background(),[]string{"--plan-sha",p.SHA256,"--state-dir",custom},&out,&diagnostic,filepath.Join(root,"wrong"),true);code!=0{t.Fatalf("%d %s",code,diagnostic.String())}
+ if agentSetupState(agentInstallPlan{SetupStateDir:custom})!=custom{t.Fatal("agent approval lost setup state directory")}
 }

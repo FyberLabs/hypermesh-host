@@ -32,6 +32,8 @@ type setupRebootPlan struct {
 type setupRebootJournal struct {
  Schema int `json:"schema"`
  PlanSHA256 string `json:"plan_sha256"`
+ SetupPlanSHA256 string `json:"setup_plan_sha256"`
+ MachineSHA256 string `json:"machine_sha256"`
  BootID string `json:"requested_boot_id"`
  ObservedBootID string `json:"observed_boot_id,omitempty"`
  State string `json:"state"`
@@ -48,7 +50,7 @@ func validateSetupRebootPlan(p setupRebootPlan,approved string)error{
  return validateSetupApproval(p.Setup,p.Setup.PlanSHA256)
 }
 func validSetupRebootJournal(j setupRebootJournal)bool{
- if j.Schema!=1||!setupDigestRE.MatchString(j.PlanSHA256)||!hostregistration.UUID.MatchString(j.BootID)||j.RecordedAt.IsZero(){return false}
+ if j.Schema!=1||!setupDigestRE.MatchString(j.PlanSHA256)||!setupDigestRE.MatchString(j.SetupPlanSHA256)||!setupDigestRE.MatchString(j.MachineSHA256)||!hostregistration.UUID.MatchString(j.BootID)||j.RecordedAt.IsZero(){return false}
  switch j.State{
  case "requested":return j.ObservedBootID==""&&supportOneOf(j.FailureCode,"","request_unconfirmed","interrupted","preflight")
  case "verifying":return hostregistration.UUID.MatchString(j.ObservedBootID)&&j.ObservedBootID!=j.BootID&&j.FailureCode==""
@@ -91,13 +93,19 @@ func guardRebootHost(ctx context.Context,root,state string,source setupSource)er
   if err:=agentDirectory(parent,false);err!=nil{return fmt.Errorf("host state path is unsafe")}
   if _,err:=os.Lstat(full);!os.IsNotExist(err){return fmt.Errorf("installed or enrolled host requires a separate maintenance flow")}
  }
- entries,err:=os.ReadDir(state);if err!=nil{return fmt.Errorf("cannot inspect installer state")}
+ dirs:=[]string{state}
+ canonical:=agentDest(root,defaultSetupState)
+ if canonical!=state { if _,err:=os.Lstat(canonical);!os.IsNotExist(err){dirs=append(dirs,canonical)} }
+ for _,dir:=range dirs {
+ if err:=secureSetupDirectory(dir,false);err!=nil{return err}
+ entries,err:=os.ReadDir(dir);if err!=nil{return fmt.Errorf("cannot inspect installer state")}
  for _,entry:=range entries{
   for _,prefix:=range []string{"agent-","registration-","onboarding-","certification-"}{
    if strings.HasPrefix(entry.Name(),prefix){return fmt.Errorf("existing installation history blocks initial-setup reboot")}
   }
  }
- if err=checkAgentUnitPaths(ctx,source,root,nil);err!=nil{return err}
+ }
+ if err:=checkAgentUnitPaths(ctx,source,root,nil);err!=nil{return err}
  for _,unit:=range []string{"hypermesh-agent.service","hypermesh-wg.service"}{
   raw,e:=source.output(ctx,"systemctl","--system","show","--all",unit,"-p","LoadState","-p","ActiveState","-p","MainPID")
   // A cached or transient unit is also outside the pre-install scope.
@@ -154,12 +162,12 @@ func requestSetupReboot(ctx context.Context,p setupRebootPlan,j *setupRebootJour
  boot,err:=matchRebootIdentity(p,d);if err!=nil{return err}
  if boot!=p.BootID{return fmt.Errorf("boot already changed; use resume-setup, not another reboot request")}
  if j.State!="" {
-  if !validSetupRebootJournal(*j)||j.PlanSHA256!=p.SHA256||j.BootID!=p.BootID{return fmt.Errorf("invalid reboot checkpoint; preserve it")}
+  if !validSetupRebootJournal(*j)||j.PlanSHA256!=p.SHA256||j.SetupPlanSHA256!=p.Setup.PlanSHA256||j.MachineSHA256!=p.MachineSHA256||j.BootID!=p.BootID{return fmt.Errorf("invalid reboot checkpoint; preserve it")}
   if j.State!="requested"||!retry{return fmt.Errorf("a reboot request is already recorded; inspect it before explicitly using --retry-request")}
  }
  if ctx.Err()!=nil{return fmt.Errorf("reboot request interrupted")}
  if err=d.Check(ctx,false);err!=nil{return err}
- *j=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,BootID:p.BootID,State:"requested",RecordedAt:d.Now().UTC()}
+ *j=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,SetupPlanSHA256:p.Setup.PlanSHA256,MachineSHA256:p.MachineSHA256,BootID:p.BootID,State:"requested",RecordedAt:d.Now().UTC()}
  if err=d.Save(*j);err!=nil{return fmt.Errorf("cannot durably save reboot checkpoint; no reboot requested")}
  fail:=func(code string)error{
   j.FailureCode=code;j.RecordedAt=d.Now().UTC()
@@ -177,7 +185,7 @@ func requestSetupReboot(ctx context.Context,p setupRebootPlan,j *setupRebootJour
 }
 func resumeSetupReboot(ctx context.Context,p setupRebootPlan,j *setupRebootJournal,d setupRebootDeps)error{
  if err:=validateSetupRebootPlan(p,p.SHA256);err!=nil{return err}
- if !validSetupRebootJournal(*j)||j.PlanSHA256!=p.SHA256||j.BootID!=p.BootID{return fmt.Errorf("matching reboot checkpoint required")}
+ if !validSetupRebootJournal(*j)||j.PlanSHA256!=p.SHA256||j.SetupPlanSHA256!=p.Setup.PlanSHA256||j.MachineSHA256!=p.MachineSHA256||j.BootID!=p.BootID{return fmt.Errorf("matching reboot checkpoint required")}
  boot,err:=matchRebootIdentity(p,d);if err!=nil{return err}
  if boot==p.BootID{return fmt.Errorf("the original boot is still running; no reboot completion can be recorded")}
  candidate:=*j;candidate.ObservedBootID=boot;candidate.RecordedAt=d.Now().UTC()
@@ -231,7 +239,9 @@ func RunPlanReboot(ctx context.Context,args []string,out,diagnostic io.Writer)in
 func runPlanReboot(ctx context.Context,args []string,out,diagnostic io.Writer,state string,root bool)int{
  f:=flag.NewFlagSet("plan-reboot",flag.ContinueOnError);f.SetOutput(diagnostic)
  path:=f.String("setup-plan","","completed prerequisite plan")
+ selectedState:=f.String("state-dir",state,"private prerequisite journal directory")
  if err:=f.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
+ state=*selectedState
  if f.NArg()!=0||*path==""{fmt.Fprintln(diagnostic,"require --setup-plan FILE");return 2}
  if !root{fmt.Fprintln(diagnostic,"plan-reboot requires root");return 1}
  var p setupRebootPlan;p.Schema=1;p.Scope="pre-enrollment"
@@ -259,7 +269,9 @@ func runRebootSetup(ctx context.Context,args []string,out,diagnostic io.Writer,r
  approved:=f.String("approve-plan","","exact reboot plan_sha256")
  reboot:=f.Bool("reboot",false,"request system reboot; disconnects this session")
  retry:=f.Bool("retry-request",false,"explicitly retry an unconfirmed request on the original boot")
+ selectedState:=f.String("state-dir",state,"private prerequisite journal directory")
  if err:=f.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
+ state=*selectedState
  if f.NArg()!=0||*path==""||!setupDigestRE.MatchString(*approved)||(!resume&&!*reboot)||(resume&&(*reboot||*retry)){
   fmt.Fprintln(diagnostic,"require --plan FILE --approve-plan SHA256 and --reboot only for reboot-setup");return 2}
  if !root{fmt.Fprintln(diagnostic,"reboot/resume requires root");return 1}
@@ -267,7 +279,9 @@ func runRebootSetup(ctx context.Context,args []string,out,diagnostic io.Writer,r
  raw,err:=readSetupRegular(*path,false);if err==nil{err=decodeSetupJSON(raw,&p)}
  if err==nil{err=validateSetupRebootPlan(p,*approved)}
  if err!=nil{fmt.Fprintln(diagnostic,"invalid reboot approval or installer build; preserve and review the plan");return 1}
- unlock,err:=lockSetupState(state);if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
+ lock:=func()(func(),error){return lockRebootState("",state)}
+ if override!=nil{lock=func()(func(),error){return lockSetupState(state)}}
+ unlock,err:=lock();if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
  ctx,cancel:=context.WithTimeout(ctx,3*time.Minute);defer cancel()
  journalPath:=setupRebootPath(state,p.SHA256)
  var j setupRebootJournal
@@ -294,14 +308,19 @@ func runRebootSetup(ctx context.Context,args []string,out,diagnostic io.Writer,r
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1};return 0
 }
 func RunRebootStatus(ctx context.Context,args []string,out,diagnostic io.Writer)int{
+ return runRebootStatus(ctx,args,out,diagnostic,defaultSetupState,os.Geteuid()==0)
+}
+func runRebootStatus(ctx context.Context,args []string,out,diagnostic io.Writer,state string,root bool)int{
  f:=flag.NewFlagSet("reboot-status",flag.ContinueOnError);f.SetOutput(diagnostic)
  sha:=f.String("plan-sha","","reboot plan digest")
+ selectedState:=f.String("state-dir",state,"private prerequisite journal directory")
  if err:=f.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
+ state=*selectedState
  if f.NArg()!=0||!setupDigestRE.MatchString(*sha){fmt.Fprintln(diagnostic,"require --plan-sha SHA256");return 2}
- if os.Geteuid()!=0{fmt.Fprintln(diagnostic,"reboot-status requires root");return 1}
- unlock,err:=supportLock(defaultSetupState);if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
+ if !root{fmt.Fprintln(diagnostic,"reboot-status requires root");return 1}
+ unlock,err:=supportLock(state);if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
  if ctx.Err()!=nil{return 1}
- stage:=supportReboot(defaultSetupState,*sha)
+ stage:=supportReboot(state,*sha)
  if json.NewEncoder(out).Encode(stage)!=nil||stage.Collection!="collected"{return 1};return 0
 }
 
@@ -331,4 +350,40 @@ func headlessRebootNeeded(ctx context.Context,p SetupPlan,source setupSource)(bo
  state:=strings.TrimSpace(string(raw))
  if err!=nil||!supportOneOf(state,"active","inactive"){return false,fmt.Errorf("cannot determine current graphical target state")}
  return state=="active",nil
+}
+
+func lockRebootState(root,state string)(func(),error){
+ unlock,err:=lockSetupState(state);if err!=nil{return nil,err}
+ canonical:=agentDest(root,defaultSetupState)
+ if state==canonical{return unlock,nil}
+ second,err:=lockSetupState(canonical)
+ if err!=nil{unlock();return nil,err}
+ return func(){second();unlock()},nil
+}
+
+// Installation cannot bypass an outstanding reboot or its postflight.
+// The setup state directory is frozen into the agent approval.
+func checkAgentRebootGate(ctx context.Context,p SetupPlan,root,state string,source setupSource)error{
+ needed,err:=liveRebootRequired(root)
+ if err!=nil{return err}
+ if needed{return fmt.Errorf("OS reboot required: complete plan-reboot, reboot-setup and resume-setup before installing the agent")}
+ if p.HeadlessRequested{
+  raw,err:=source.output(ctx,"systemctl","--system","show","graphical.target","-p","ActiveState","--value")
+  if err!=nil||strings.TrimSpace(string(raw))!="inactive"{return fmt.Errorf("headless boot not observed; complete the approved reboot and resume-setup")}
+ }
+ if err:=secureSetupDirectory(state,false);err!=nil{return err}
+ entries,err:=os.ReadDir(state);if err!=nil{return err}
+ for _,entry:=range entries{
+  if !strings.HasPrefix(entry.Name(),"reboot-"){continue}
+  var j setupRebootJournal
+  if supportRead(state,entry.Name(),&j)!="collected"||!validSetupRebootJournal(j)||entry.Name()!="reboot-"+j.PlanSHA256+".json"{
+   return fmt.Errorf("invalid reboot checkpoint; preserve it for recovery")
+  }
+  if j.SetupPlanSHA256!=p.PlanSHA256{continue}
+  machine,boot,err:=rebootIdentity(root)
+  if err!=nil||j.State!="verified"||j.MachineSHA256!=machine||j.ObservedBootID!=boot{
+   return fmt.Errorf("matching reboot postflight required; run resume-setup on this boot before installing the agent")
+  }
+ }
+ return ctx.Err()
 }

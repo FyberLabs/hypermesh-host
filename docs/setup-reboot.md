@@ -94,3 +94,9 @@ next action. Retain original private files locally for recovery.
 No unattended boot-time continuation is installed. This explicit request and
 operator-invoked verification complete the pre-enrollment stage; maintenance
 draining/reboot of enrolled hosts and physical AGX acceptance remain pending.
+
+### Installation gate and custom state
+
+Agent planning and installation reject an OS reboot requirement or an active graphical target when headless setup was approved. A recorded reboot for that setup must have a verified checkpoint for this machine and current boot; run `resume-setup` again after a later reboot. These checks run before downloading and again before installation writes. A setup with no current reboot requirement and no recorded request can proceed without an unnecessary reboot.
+
+If `apply-setup` used `--state-dir /absolute/private/path`, pass that same option to `plan-reboot`, `reboot-setup`, `resume-setup`, `reboot-status` and reboot `support-bundle` exports. Pass `--setup-state-dir /absolute/private/path` to `plan-agent`; that path is included in the approval digest and used by `install-agent`. Agent/registration journals continue to use the canonical installer directory. Reboot operations also lock and inspect that canonical directory so selecting a custom prerequisite directory cannot bypass an installed or enrolled host.

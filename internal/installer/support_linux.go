@@ -342,14 +342,16 @@ func runSupportBundle(ctx context.Context,args []string,out,diagnostic io.Writer
 	workloadSHA:=flags.String("workload-plan-sha","","optional workload plan digest; includes pinned inference and context evidence")
 	certificationSHA:=flags.String("certification-plan-sha","","optional certification plan digest; includes acquisition and activation recovery")
 	rebootSHA:=flags.String("reboot-plan-sha","","optional prerequisite reboot plan digest")
-	output:=flags.String("output","","new absolute output file in an owner-controlled directory (0600)")
+	selectedState:=flags.String("state-dir",stateDir,"private installer journal directory")
+ output:=flags.String("output","","new absolute output file in an owner-controlled directory (0600)")
 	if err:=flags.Parse(args);err!=nil { if err==flag.ErrHelp{return 0};return 2 }
 	if flags.NArg()!=0 || *output=="" || (*agentSHA=="" && *setupSHA=="" && *workloadSHA=="" && *certificationSHA=="" && *rebootSHA=="") ||
 		(*agentSHA!="" && !setupDigestRE.MatchString(*agentSHA)) || (*setupSHA!="" && !setupDigestRE.MatchString(*setupSHA)) || (*workloadSHA!="" && !setupDigestRE.MatchString(*workloadSHA)) || (*certificationSHA!="" && !setupDigestRE.MatchString(*certificationSHA)) || (*rebootSHA!="" && !setupDigestRE.MatchString(*rebootSHA)) {
 		fmt.Fprintln(diagnostic,"require --output and at least one of --plan-sha, --setup-plan-sha, --workload-plan-sha, --certification-plan-sha or --reboot-plan-sha");return 2
 	}
 	if !root { fmt.Fprintln(diagnostic,"support-bundle requires root to read private installer journals");return 1 }
-	bundle,err:=collectSupportWithReboot(ctx,stateDir,*agentSHA,*setupSHA,*workloadSHA,*certificationSHA,*rebootSHA)
+	stateDir=*selectedState
+ bundle,err:=collectSupportWithReboot(ctx,stateDir,*agentSHA,*setupSHA,*workloadSHA,*certificationSHA,*rebootSHA)
 	if err==nil { err=writeSupport(ctx,*output,bundle) }
 	if err!=nil { fmt.Fprintln(diagnostic,err);return 1 }
 	if !bundle.CollectionComplete { fmt.Fprintln(diagnostic,"Partial redacted bundle saved; see each stage's collection status. Preserve the original journals locally.");return 1 }
