@@ -9,6 +9,8 @@ import (
  "fmt"
  "io"
  "os"
+ "os/exec"
+ "syscall"
  "strings"
  "time"
 
@@ -192,12 +194,12 @@ func runHostStatus(ctx context.Context,args []string,out,diagnostic io.Writer,st
   Certification:func()supportStage{return liveCertificationHistory(stateDir,p)},
   Installation:func(ctx context.Context)error{
    if err:=verifyInstalledForActivation(ctx,"",p.Agent,true);err!=nil{return err}
-   return checkAgentUnitPaths(ctx,setupSource{},"",agentPayloads(p.Agent,nil))
+   return checkAgentUnitPaths(ctx,setupSource{Output:liveSystemdOutput},"",agentPayloads(p.Agent,nil))
   },
   Identity:func()error{var err error;identity,client,err=liveIdentity("",stateDir,p);return err},
   Marker:func()(bool,error){m:=activationMarker(p);return agentFileMatches(m.Path,m)},
   Service:func(ctx context.Context)([]byte,error){
-   return (setupSource{}).output(ctx,"systemctl","--system","show","hypermesh-agent.service",
+   return liveSystemdOutput(ctx,"systemctl","--system","show","--all","hypermesh-agent.service",
     "-p","LoadState","-p","UnitFileState","-p","ActiveState","-p","SubState",
     "-p","MainPID","-p","NRestarts","-p","InvocationID",
     "-p","NeedDaemonReload","-p","FragmentPath","-p","DropInPaths")
@@ -212,4 +214,25 @@ func runHostStatus(ctx context.Context,args []string,out,diagnostic io.Writer,st
  if json.NewEncoder(out).Encode(report)!=nil{return 1}
  if report.AttentionRequired{return 1}
  return 0
+}
+
+// Fixed local tools and environment prevent PATH, SYSTEMD_HOST and D-Bus
+// overrides from turning a local readiness check into a different machine's
+// observation. Neither tool invocation below performs a mutation.
+func liveSystemdCommand(ctx context.Context,name string,args ...string)(*exec.Cmd,error) {
+ if !supportOneOf(name,"systemctl","systemd-analyze"){return nil,fmt.Errorf("unsupported status tool")}
+ cmd:=exec.CommandContext(ctx,"/usr/bin/"+name,args...)
+ cmd.Env=[]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin","LC_ALL=C","SYSTEMD_COLORS=0","SYSTEMD_PAGER="}
+ cmd.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
+ cmd.Cancel=func()error{return syscall.Kill(-cmd.Process.Pid,syscall.SIGKILL)}
+ cmd.WaitDelay=time.Second
+ return cmd,nil
+}
+func liveSystemdOutput(ctx context.Context,name string,args ...string)([]byte,error) {
+ ctx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
+ cmd,err:=liveSystemdCommand(ctx,name,args...);if err!=nil{return nil,err}
+ var output setupOutput
+ cmd.Stdout=&output;cmd.Stderr=io.Discard
+ if err=cmd.Run();err!=nil{return nil,fmt.Errorf("local systemd observation unavailable")}
+ return output.Bytes(),nil
 }

@@ -187,3 +187,15 @@ func TestHostStatusCLIReadOnlyLockAndExit(t *testing.T) {
  if err=os.WriteFile(path,[]byte("PRIVATE_BAD_PLAN"),0600);err!=nil{t.Fatal(err)}
  if runHostStatus(context.Background(),args,&out,&diagnostic,dir,true,&d)!=1||strings.Contains(diagnostic.String(),"PRIVATE_BAD_PLAN"){t.Fatal("bad plan handling")}
 }
+
+func TestLiveSystemdIgnoresInheritedRemoteAndExecutableOverrides(t *testing.T) {
+ for _,key:=range []string{"PATH","SYSTEMD_HOST","DBUS_SYSTEM_BUS_ADDRESS","SYSTEMD_UNIT_PATH","LD_PRELOAD"} {
+  t.Setenv(key,"PRIVATE_OVERRIDE")
+ }
+ cmd,err:=liveSystemdCommand(context.Background(),"systemctl","--system","show","--all","hypermesh-agent.service")
+ if err!=nil{t.Fatal(err)}
+ if cmd.Path!="/usr/bin/systemctl"||strings.Contains(strings.Join(cmd.Environ(),"\n"),"PRIVATE_OVERRIDE"){
+  t.Fatal("status could inspect an overridden host or executable")
+ }
+ if _,err=liveSystemdCommand(context.Background(),"sh","-c","echo unsafe");err==nil{t.Fatal("unexpected status tool")}
+}
