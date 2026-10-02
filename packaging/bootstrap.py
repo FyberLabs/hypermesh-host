@@ -210,6 +210,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--key-output", type=Path, help="save bundled/selected public trust to a NEW file for subsequent plans")
     args = parser.parse_args()
+    if args.key_output is None:
+        args.key_output = Path(str(args.output) + ".pub")
     try:
         key = TRUSTED_KEY
         if args.trusted_key:
@@ -230,8 +232,26 @@ def main():
         parser.exit(1, f"bootstrap: {error}\n")
     except OSError:
         parser.exit(1, "bootstrap: cannot read trusted key or create output; existing files are never overwritten\n")
+    receipt = Path(str(args.output) + ".install.json")
+    key_path = args.key_output or args.trusted_key
+    if key_path is None:
+        parser.exit(1, "Verifier: use --key-output ./hypermesh-release.pub so guided setup can retain its trusted key.\n")
+    try:
+        with receipt.open("x", encoding="utf-8") as stream:
+            os.chmod(receipt, 0o600)
+            json.dump({"schema": 1, "release_url": args.release_url,
+                       "channel": meta["channel"], "build": meta["build"],
+                       "commit": meta["commit"], "trusted_key": str(key_path.resolve()),
+                       "fingerprint": args.fingerprint}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError:
+        parser.exit(1, "Verifier: cannot save the installation receipt; use a new download directory.\n")
     print(f"Verified Linux/{args.arch} CLI: channel={meta['channel']} build={meta['build']}")
-    print("No program executed and no host enrolled. Run the verified CLI explicitly when ready.")
+    print("Verification complete. The installer has not run yet.")
+    print("Keep the installer, public key and installation receipt together.")
+    print("Next: start guided setup (or resume it after an interruption):")
+    print("  sudo " + __import__("shlex").quote(str(args.output.resolve())))
 
 
 if __name__ == "__main__":

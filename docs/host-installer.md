@@ -1,9 +1,9 @@
 # Pull-based host installation
 
-Status: approved design; implementation started. This is the installation
-roadmap, not a claim that a guided installer already exists. The existing
-`hypermesh-deploy inspect` detects hardware; the existing `agx` deployment
-command retains its legacy preflight and configuration behavior.
+Status: Linux installation primitives and a default interactive guide are implemented.
+Run the verified executable without arguments to start or resume guided setup.
+The legacy individual commands remain available under `advanced-help`.
+Physical acceptance on AGX-1 and additional hardware remains pending.
 
 ## Scope before AGX-1 acceptance
 
@@ -1737,3 +1737,18 @@ This entry supersedes earlier implementation-pending notes for these five areas.
 It does not close physical AGX reboot/reconnect, actual model/runtime compatibility,
 sustained-load testing, broader driver/kernel upgrades, workload modes, macOS or
 other hardware-backend certification. Those remain separate acceptance/future work.
+
+## Guided installation (2026-10-02)
+
+- [x] Default interactive entry point with host, model-directory and measured memory defaults.
+- [x] Automatically retained plans/digests and progress; resume the unfinished operation with the same command.
+- [x] Prerequisite approval, reboot checkpoint/resume, signed service install, browser device login/registration, tunnel/heartbeat, model certification and paused activation in order.
+- [x] Public network metadata removes manual marketplace UUID entry; network selection stays separate from software channel.
+- [x] Verifier explains Python/GnuPG requirements, records release context and prints the next command.
+- [ ] Physical guided clean-install and reboot/interruption acceptance on AGX-1.
+
+The wizard delegates hardware, ownership, certification and mutation decisions
+to the existing validated operations; its progress cursor never authorizes selling.
+Unsupported hardware and inconsistent existing installations stop for recovery.
+Deploy the Panopticon host-installation metadata endpoint before publishing the
+new guided website instructions. Use a host release containing this guide.
