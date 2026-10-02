@@ -90,3 +90,14 @@ func TestGuidedDefaultsDoNotChangeSoftwareChannel(t *testing.T){
  mode,budget,class:=guidedDefaults(profile)
  if mode!="uma"||budget!=40||class!="agx-large"{t.Fatal(mode,budget,class)}
 }
+
+func TestGuidedPlansPreserveIntegerPrecision(t *testing.T){
+ g,_,_:=fixtureGuided(t,"")
+ g.run=func(string)guidedRunner{return func(_ context.Context,_ []string,out,diagnostic io.Writer)int{
+  io.WriteString(out,`{"plan_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build":9007199254740993}`)
+  return 0
+ }}
+ if _,err:=g.plan(context.Background(),"plan-agent","precise.json");err!=nil{t.Fatal(err)}
+ raw,err:=os.ReadFile(filepath.Join(g.dir,"precise.json"));if err!=nil{t.Fatal(err)}
+ if !strings.Contains(string(raw),"9007199254740993"){t.Fatal("integer rounded",string(raw))}
+}

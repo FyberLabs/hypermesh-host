@@ -163,7 +163,8 @@ func (g guidedFlow) plan(ctx context.Context,name,file string,args ...string)(ma
   for _,reason:=range failed.Blockers {fmt.Fprintln(g.ui.out," -",reason)}
   return nil,fmt.Errorf("%s is blocked; fix the listed prerequisites and rerun the installer",name)
  }
- if json.Unmarshal(raw.Bytes(),&p)!=nil{return nil,fmt.Errorf("cannot read generated installation plan")}
+ decoder:=json.NewDecoder(&raw);decoder.UseNumber()
+ if decoder.Decode(&p)!=nil{return nil,fmt.Errorf("cannot read generated installation plan")}
  if err:=writeGuided(path,p);err!=nil{return nil,err}
  return p,nil
 }
@@ -309,6 +310,13 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil&&!agentNameRE.MatchString(s.Host){err=fmt.Errorf("host name must contain 1-63 letters, digits, dots, underscores or hyphens")}
   if err==nil{s.Directory,err=ui.ask("Existing directory for model storage","/var/lib/hypermesh/models")}
   if err==nil&&(!filepath.IsAbs(s.Directory)||filepath.Clean(s.Directory)!=s.Directory){err=fmt.Errorf("choose an absolute existing model directory")}
+  if err==nil {
+   info,e:=os.Stat(s.Directory)
+   if os.IsNotExist(e) {
+    fmt.Fprintln(out,"The model directory does not exist. Its parent filesystem must be the disk you intend to use.")
+    if err=ui.confirm("Create "+s.Directory+" without changing partitions or mounts?");err==nil {err=agentDirectory(s.Directory,true)}
+   } else if e!=nil||!info.IsDir(){err=fmt.Errorf("model storage must be an accessible directory")}
+  }
   if err==nil&&s.Mode=="uma"{
    var answer string;answer,err=ui.ask("Memory available to models (GiB)",strconv.FormatInt(s.Allocation,10))
    if err==nil{s.Allocation,err=strconv.ParseInt(answer,10,64)}
