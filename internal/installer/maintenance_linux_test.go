@@ -9,7 +9,7 @@ func TestMaintenanceDrainOrderingAndExplicitRetry(t *testing.T){
  d:=maintenanceDeps{Hold:note("hold"),Idle:note("idle"),Stop:note("stop"),Stopped:note("verify"),Reboot:note("reboot"),
  Save:func(v maintenanceJournal)error{order=append(order,v.State);return nil}}
  if err:=drainMaintenance(context.Background(),p,&j,d,false);err!=nil{t.Fatal(err)}
- want:=[]string{"hold","idle","stop","verify","stopped","verify","reboot-requested","verify","reboot"}
+ want:=[]string{"hold","idle","stopping","stop","verify","stopped","verify","reboot-requested","verify","reboot"}
  if !sameSetupJSON(order,want){t.Fatal(order)}
  order=nil
  if drainMaintenance(context.Background(),p,&j,d,false)==nil||len(order)!=0{t.Fatal("automatic reboot retry")}
@@ -26,4 +26,13 @@ func TestMaintenanceFailuresNeverSkipDrainOrDurableRebootIntent(t *testing.T){
   if drainMaintenance(context.Background(),p,&j,d,false)==nil{t.Fatal("failure accepted")}
   if rebooted!=(stage=="reboot"){t.Fatal("reboot before safe checkpoint")}
  })}
+}
+
+func TestMaintenanceRecoversInterruptedStopWithoutOwnerSocket(t *testing.T){
+ p:=maintenancePlan{SHA256:strings.Repeat("a",64),Operation:"stop"}
+ j:=maintenanceJournal{Schema:1,PlanSHA256:p.SHA256,State:"stopping",RecordedAt:time.Now()}
+ stopped:=0
+ d:=maintenanceDeps{Hold:func(context.Context)error{t.Fatal("lost owner socket must not be required");return nil},Idle:func(context.Context)error{t.Fatal("already drained");return nil},
+ Stop:func(context.Context)error{stopped++;return nil},Stopped:func(context.Context)error{return nil},Save:func(maintenanceJournal)error{return nil}}
+ if err:=drainMaintenance(context.Background(),p,&j,d,false);err!=nil||stopped!=1||j.State!="stopped"{t.Fatal(err,j.State)}
 }

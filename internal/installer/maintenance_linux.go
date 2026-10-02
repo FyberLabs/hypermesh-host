@@ -39,7 +39,7 @@ func validateMaintenance(p maintenancePlan,sha string)error{
  return validateCertificationPlan(p.Certification,p.Certification.SHA256)
 }
 func saveMaintenance(path string,j maintenanceJournal)error{
- if j.Schema!=1||!setupDigestRE.MatchString(j.PlanSHA256)||!supportOneOf(j.State,"draining","stopped","reboot-requested","resuming","complete")||j.RecordedAt.IsZero(){return fmt.Errorf("invalid maintenance checkpoint")}
+ if j.Schema!=1||!setupDigestRE.MatchString(j.PlanSHA256)||!supportOneOf(j.State,"draining","stopping","stopped","reboot-requested","resuming","complete")||j.RecordedAt.IsZero(){return fmt.Errorf("invalid maintenance checkpoint")}
  if _,err:=os.Lstat(path);err==nil{if _,err=readSetupRegular(path,true);err!=nil{return err}}else if !os.IsNotExist(err){return err}
  raw,_:=json.Marshal(j);return recoveryWrite(path,raw,0600)
 }
@@ -82,11 +82,14 @@ type maintenanceDeps struct{
  Reboot func(context.Context)error
 }
 func drainMaintenance(ctx context.Context,p maintenancePlan,j *maintenanceJournal,d maintenanceDeps,retry bool)error{
- if j.PlanSHA256!=p.SHA256||j.Schema!=1||!supportOneOf(j.State,"draining","stopped","reboot-requested"){return fmt.Errorf("maintenance checkpoint cannot be applied")}
+ if j.PlanSHA256!=p.SHA256||j.Schema!=1||!supportOneOf(j.State,"draining","stopping","stopped","reboot-requested"){return fmt.Errorf("maintenance checkpoint cannot be applied")}
  if j.State=="reboot-requested"&&!retry{return fmt.Errorf("reboot already requested; reconnect and resume-agent, or explicitly inspect before --retry-request")}
  if j.State=="draining"{
   if err:=d.Hold(ctx);err!=nil{return err}
   if err:=d.Idle(ctx);err!=nil{return err}
+  j.State="stopping";j.RecordedAt=time.Now().UTC();if err:=d.Save(*j);err!=nil{return err}
+ }
+ if j.State=="stopping"{
   if err:=d.Stop(ctx);err!=nil{return err}
   if err:=d.Stopped(ctx);err!=nil{return err}
   j.State="stopped";j.RecordedAt=time.Now().UTC();if err:=d.Save(*j);err!=nil{return err}
@@ -229,6 +232,8 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
    Stop:func(ctx context.Context)error{
     if err:=installed(ctx);err!=nil{return err}
     if err:=maintenanceMarkerMatches(p.SHA256);err!=nil{return err}
+    if _,err:=os.Lstat("/var/lib/hypermesh/lease.json");!os.IsNotExist(err){return fmt.Errorf("lease appeared during drain")}
+    if err:=noMaintenanceContainers(ctx);err!=nil{return err}
     if _,err:=liveSystemdOutput(ctx,"systemctl","--system","disable","--now","hypermesh-agent.service");err!=nil{return err}
     if p.Certification.Agent.Setup.WireGuardMode=="userspace"{_,err:=liveSystemdOutput(ctx,"systemctl","--system","disable","--now","hypermesh-wg.service");return err}
     return nil
