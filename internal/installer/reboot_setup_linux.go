@@ -336,37 +336,60 @@ func rebootInventoryCommand(ctx context.Context,args ...string)*exec.Cmd{
  return cmd
 }
 
+func setupLogindCommand(ctx context.Context,args ...string)*exec.Cmd{
+ cmd:=exec.CommandContext(ctx,"/usr/bin/busctl",append([]string{"--system","--allow-interactive-authorization=no","--timeout=20s"},args...)...)
+ cmd.Env=[]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin","LC_ALL=C","SYSTEMD_COLORS=0","SYSTEMD_PAGER="}
+ cmd.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
+ cmd.Cancel=func()error{return syscall.Kill(-cmd.Process.Pid,syscall.SIGKILL)}
+ cmd.WaitDelay=time.Second
+ return cmd
+}
 func setupRebootCommand(ctx context.Context)(*exec.Cmd,error){
  // systemctl's explicit inhibitor check also rejects the sudo caller's
  // non-root login session. Call logind directly after the reviewed approval.
  // Flag 1 is SD_LOGIND_ROOT_CHECK_INHIBITORS: real shutdown inhibitors still
  // block root, and logind retains its normal delay-inhibitor handling.
- cmd:=exec.CommandContext(ctx,"/usr/bin/busctl","--system","--allow-interactive-authorization=no","--timeout=20s",
-  "call","org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","RebootWithFlags","t","1")
- cmd.Env=[]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin","LC_ALL=C","SYSTEMD_COLORS=0","SYSTEMD_PAGER="}
- cmd.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
- cmd.Cancel=func()error{return syscall.Kill(-cmd.Process.Pid,syscall.SIGKILL)}
- cmd.WaitDelay=time.Second
+ cmd:=setupLogindCommand(ctx,"call","org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","RebootWithFlags","t","1")
  return cmd,nil
 }
 func submitSetupReboot(ctx context.Context)error{
  ctx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  cmd,err:=setupRebootCommand(ctx);if err!=nil{return err}
- return runSetupRebootCommand(ctx,cmd)
+ probe:=setupLogindCommand(ctx,"--json=short","get-property","org.freedesktop.login1","/org/freedesktop/login1","org.freedesktop.login1.Manager","BlockInhibited")
+ return submitSetupRebootChecked(ctx,probe,cmd)
+}
+
+func submitSetupRebootChecked(ctx context.Context,probe,request *exec.Cmd)error{
+ // logind excludes blockers owned by the caller UID on older systemd.
+ // Observe the aggregate property first so root-owned blockers also stop us.
+ raw,err:=runSetupLogindCommand(ctx,probe);if err!=nil{return err}
+ if err=checkSetupShutdownInhibitors(raw);err!=nil{return err}
+ return runSetupRebootCommand(ctx,request)
+}
+func checkSetupShutdownInhibitors(raw []byte)error{
+ var value struct{Type string `json:"type"`;Data *string `json:"data"`}
+ if json.Unmarshal(raw,&value)!=nil||value.Type!="s"||value.Data==nil{return fmt.Errorf("cannot verify logind shutdown inhibitors; reboot not submitted")}
+ for _,what:=range strings.Split(*value.Data,":"){
+  if what=="shutdown"{return fmt.Errorf("shutdown is blocked by a systemd inhibitor; reboot not submitted. Inspect systemd-inhibit --list and resolve the blocking operation before retrying")}
+ }
+ return nil
 }
 
 // Keep bounded local diagnostics; never put arbitrary child output in support
 // journals. The checkpoint remains unconfirmed on any error or lost reply.
 func runSetupRebootCommand(ctx context.Context,cmd *exec.Cmd)error{
+ _,err:=runSetupLogindCommand(ctx,cmd);return err
+}
+func runSetupLogindCommand(ctx context.Context,cmd *exec.Cmd)([]byte,error){
  var output setupOutput
  cmd.Stdout=&output;cmd.Stderr=&output
  err:=cmd.Run()
- if err==nil{return nil}
+ if err==nil{return output.Bytes(),nil}
  detail:=strings.Map(func(r rune)rune{if r=='\n'||r=='\t'||(r>=32&&r!=127){return r};return -1},output.String())
  detail=strings.TrimSpace(detail)
  if len(detail)>4096{detail=detail[:4096]+" [truncated]"}
- if ctx.Err()!=nil{return fmt.Errorf("logind reboot reply unconfirmed (%v): %s",ctx.Err(),detail)}
- return fmt.Errorf("logind reboot request failed (%v): %s",err,detail)
+ if ctx.Err()!=nil{return nil,fmt.Errorf("logind reboot reply unconfirmed (%v): %s",ctx.Err(),detail)}
+ return nil,fmt.Errorf("logind reboot request failed (%v): %s",err,detail)
 }
 
 func headlessRebootNeeded(ctx context.Context,p SetupPlan,source setupSource)(bool,error){

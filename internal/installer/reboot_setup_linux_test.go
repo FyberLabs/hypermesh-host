@@ -381,3 +381,28 @@ func TestReplannedHeadlessSetupStillRequiresActualReboot(t *testing.T){
  needed,err:=headlessRebootNeeded(context.Background(),p.Setup,source)
  if err!=nil||!needed{t.Fatal("new installer skipped pending graphical transition",err)}
 }
+
+func TestRebootChecksRootOwnedShutdownInhibitorsBeforeSubmission(t *testing.T){
+ for _,tc:=range []struct{response string;allowed bool}{
+  {`{"type":"s","data":""}`,true},
+  {`{"type":"s","data":"sleep:handle-power-key"}`,true},
+  {`{"type":"s","data":"shutdown"}`,false},
+  {`{"type":"s","data":"sleep:shutdown"}`,false},
+  {`{"type":"as","data":[]}`,false},
+  {`not-json`,false},
+  {`{"type":"s"}`,false},
+  {`{"type":"s","data":null}`,false},
+ }{
+  marker:=filepath.Join(t.TempDir(),"requested")
+  // Only harmless fixture processes: never connect to the runner's logind.
+  probe:=exec.Command("/bin/echo",tc.response)
+  request:=exec.Command("/usr/bin/touch",marker)
+  err:=submitSetupRebootChecked(context.Background(),probe,request)
+  _,statErr:=os.Stat(marker)
+  if (err==nil)!=tc.allowed||(statErr==nil)!=tc.allowed{t.Fatalf("%s: %v / %v",tc.response,err,statErr)}
+ }
+ marker:=filepath.Join(t.TempDir(),"requested")
+ err:=submitSetupRebootChecked(context.Background(),exec.Command("/bin/false"),exec.Command("/usr/bin/touch",marker))
+ if err==nil{t.Fatal("failed inhibitor observation accepted")}
+ if _,err:=os.Stat(marker);!os.IsNotExist(err){t.Fatal("request ran after failed observation")}
+}

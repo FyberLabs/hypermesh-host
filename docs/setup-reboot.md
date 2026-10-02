@@ -31,7 +31,9 @@ The request calls logind's `RebootWithFlags` through `/usr/bin/busctl`, with
 `SD_LOGIND_ROOT_CHECK_INHIBITORS` (flag 1). This lets the operator approve a
 reboot from their own sudo/SSH session without systemctl treating that session
 as an unrelated logged-in user. Logind still enforces shutdown block inhibitors
-for root and handles delay inhibitors. There is no force, inhibitor bypass,
+for root and handles delay inhibitors. Before submission, the installer also
+checks the aggregate BlockInhibited property, covering root-owned shutdown
+blockers that older logind versions exclude from the caller's UID check. There is no force, inhibitor bypass,
 interactive authorization, or fallback to an unchecked reboot.
 See [systemd's reboot authorization](https://github.com/systemd/systemd/blob/v255/src/login/logind-dbus.c)
 and [flag definition](https://github.com/systemd/systemd/blob/v255/src/basic/login-util.h).
