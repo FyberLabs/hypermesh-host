@@ -24,6 +24,12 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
+ if name=="plan-reboot"||name=="reboot-setup"||name=="resume-setup"||name=="reboot-status" {
+  ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
+  run:=installer.RunPlanReboot
+  switch name{case "reboot-setup":run=installer.RunRebootSetup;case "resume-setup":run=installer.RunResumeSetup;case "reboot-status":run=installer.RunRebootStatus}
+  code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)
+ }
 	if name == "plan-certification" || name == "certify-agent" || name == "activate-agent" || name == "certification-status" || name == "host-status" {
   ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
   code := 2
@@ -171,6 +177,11 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  plan-reboot  review a pre-enrollment prerequisite reboot; --setup-plan FILE
+  reboot-setup  save a checkpoint and request reboot; --plan FILE --approve-plan SHA256 --reboot
+                An unconfirmed request requires explicit --retry-request; never retry in a loop.
+  resume-setup  verify a new boot and current prerequisites; --plan FILE --approve-plan SHA256
+  reboot-status  read the saved checkpoint; --plan-sha SHA256
   host-status  read current installed-service and authenticated plane state; --plan CERTIFICATION_PLAN_FILE
   certification-status  read redacted historical certification/activation evidence; --plan-sha SHA256
   plan-certification  obtain an authenticated frozen model/runtime plan; --agent-plan FILE
@@ -187,6 +198,7 @@ Commands:
                   --plan-sha SHA256 [--setup-plan-sha SHA256] --output /absolute/new.json
                   Add --workload-plan-sha SHA256 for inference/context evidence.
                   Add --certification-plan-sha SHA256 for certification/activation recovery.
+                  Add --reboot-plan-sha SHA256 for prerequisite reboot recovery.
                   Any one plan digest also works; use support-bundle --help.
   check-agent  verify saved device identity, plane protocol and local preflight.
                --plan FILE --approve-plan SHA256 [--heartbeat] [--wireguard]; does not activate services.

@@ -39,6 +39,7 @@ type agentInstallPlan struct {
 	HostName string `json:"host_name"`
 	Release releaseMetadata `json:"release"`
 	Files []agentFile `json:"files"`
+ SetupStateDir string `json:"setup_state_dir,omitempty"`
 }
 type agentPayload struct { agentFile; Data []byte }
 type agentInstallJournal struct {
@@ -58,7 +59,8 @@ var agentTenantRE=regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 var agentNameRE=regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 
 func validateAgentInputs(p agentInstallPlan)error {
-	if p.Schema!=1 {return fmt.Errorf("unsupported agent plan schema")}
+	if p.SetupStateDir!=""&&(!filepath.IsAbs(p.SetupStateDir)||filepath.Clean(p.SetupStateDir)!=p.SetupStateDir||p.SetupStateDir=="/"){return fmt.Errorf("setup state directory must be a clean absolute private path")}
+ if p.Schema!=1 {return fmt.Errorf("unsupported agent plan schema")}
 	if err:=validateSetupApproval(p.Setup,p.Setup.PlanSHA256);err!=nil{return err}
 	if validateEndpoint(p.ControlPlane)!=nil || !agentTenantRE.MatchString(p.TenantID) || !agentNameRE.MatchString(p.HostName) {
 		return fmt.Errorf("require an HTTPS control plane, tenant UUID and a 1-63 character host name")
@@ -133,7 +135,8 @@ func RunPlanAgent(ctx context.Context,args []string,out,diagnostic io.Writer)int
 	key:=flags.String("trusted-key","","independently trusted public key")
 	fingerprints:=flags.String("fingerprints","","trusted signing fingerprints")
 	p:=agentInstallPlan{Schema:1}
-	flags.StringVar(&p.ReleaseURL,"release-url","","immutable HTTPS release directory")
+	flags.StringVar(&p.SetupStateDir,"setup-state-dir",defaultSetupState,"private prerequisite journal directory")
+ flags.StringVar(&p.ReleaseURL,"release-url","","immutable HTTPS release directory")
 	flags.StringVar(&p.Channel,"channel","","test or prod")
 	flags.StringVar(&p.ControlPlane,"control-plane-url","","HTTPS control plane")
 	flags.StringVar(&p.TenantID,"tenant-id","","tenant UUID")
@@ -155,7 +158,8 @@ func RunPlanAgent(ctx context.Context,args []string,out,diagnostic io.Writer)int
 		if err==nil && strings.TrimSpace(string(raw))!="multi-user.target" {err=fmt.Errorf("apply the approved headless target first")}
 	}
 	if err!=nil {fmt.Fprintln(diagnostic,err);return 1}
-	meta,binary,err:=fetchAgentPayload(ctx,p)
+	if err=checkAgentRebootGate(ctx,p.Setup,"",agentSetupState(p),rebootSetupSource());err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ meta,binary,err:=fetchAgentPayload(ctx,p)
 	if err!=nil {fmt.Fprintln(diagnostic,err);return 1}
 	p.Release=meta;p.Files=agentFileManifest(agentPayloads(p,binary));p.SHA256=agentPlanDigest(p)
 	encoder:=json.NewEncoder(out);encoder.SetIndent("","  ")
@@ -278,17 +282,19 @@ func RunInstallAgent(ctx context.Context,args []string,out,diagnostic io.Writer)
 	if err==nil && (p.SHA256!=*approved||agentPlanDigest(p)!=*approved){err=fmt.Errorf("agent approval digest does not match")}
 	if err==nil{err=validateAgentInputs(p)}
 	if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
-	unlock,err:=lockSetupState(defaultSetupState)
+	unlock,err:=lockRebootState("",agentSetupState(p))
 	if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
 	ctx,cancel:=context.WithTimeout(ctx,10*time.Minute);defer cancel()
 	deps:=setupApplyDeps{Source:setupSource{},Preflight:freshSetupPreflight}
 	remaining,target,err:=validateSetupHost(ctx,p.Setup,deps)
 	if err==nil && (len(remaining)>0 || (p.Setup.HeadlessRequested&&target!="multi-user.target")){err=fmt.Errorf("approved prerequisites are incomplete")}
 	if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
-	meta,binary,err:=fetchAgentPayload(ctx,p)
+	if err=checkAgentRebootGate(ctx,p.Setup,"",agentSetupState(p),rebootSetupSource());err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ meta,binary,err:=fetchAgentPayload(ctx,p)
 	if err==nil {remaining,target,err=validateSetupHost(ctx,p.Setup,deps)}
 	if err==nil && (len(remaining)>0 || (p.Setup.HeadlessRequested&&target!="multi-user.target")) {err=fmt.Errorf("prerequisites changed during download")}
-	if err==nil && (!sameSetupJSON(meta,p.Release)||!sameSetupJSON(agentFileManifest(agentPayloads(p,binary)),p.Files)){err=fmt.Errorf("verified payloads differ from the approved plan")}
+	if err==nil{err=checkAgentRebootGate(ctx,p.Setup,"",agentSetupState(p),rebootSetupSource())}
+ if err==nil && (!sameSetupJSON(meta,p.Release)||!sameSetupJSON(agentFileManifest(agentPayloads(p,binary)),p.Files)){err=fmt.Errorf("verified payloads differ from the approved plan")}
 	if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
 	journalPath:=filepath.Join(defaultSetupState,"agent-"+p.SHA256+".json")
 	j:=agentInstallJournal{Schema:1,PlanSHA256:p.SHA256,State:"pending"}
@@ -353,3 +359,5 @@ func checkAgentUnitPathList(root string,files []agentPayload,raw string)error {
 	}
 	return nil
 }
+
+func agentSetupState(p agentInstallPlan)string{if p.SetupStateDir!=""{return p.SetupStateDir};return defaultSetupState}
