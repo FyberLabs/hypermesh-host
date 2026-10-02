@@ -1626,7 +1626,7 @@ describes export completeness, never host readiness.
 
 This closes support-export integration for local workload/context checks.
 Authenticated model acquisition, immutable run evidence and controlled
-activation are implemented below. Guided repair/reboot and physical AGX/N5
+activation are implemented below. Enrolled-host maintenance/repair and physical AGX/N5
 acceptance remain open. The export is historical and never starts services,
 retries a workload or authorizes selling.
 
@@ -1659,7 +1659,7 @@ across installer builds.
 Automated tests cover every recorded state and failure stage, incomplete/corrupt
 evidence, privacy, immutable reads, locking, cancellation and CLI partial exports.
 This completes certification recovery visibility. Live status is implemented below;
-guided reboot/resume, repair/uninstall, installer self-update and physical acceptance
+enrolled-host maintenance reboot, repair/uninstall, installer self-update and physical acceptance
 remain open. See [the recovery procedure](authenticated-certification.md#read-only-certification-recovery).
 
 ### Completed: live installation and plane diagnostics (2026-10-02)
@@ -1678,7 +1678,7 @@ Tests cover green/blocked/partial observations, restart detection, clock and
 heartbeat anomalies, identity/evidence binding, reboot markers, locking and CLI
 privacy. See [live host status](authenticated-certification.md#live-host-status).
 
-Guided reboot/resume, repair/uninstall, signed-update reconciliation against the
+Enrolled-host maintenance reboot, repair/uninstall, signed-update reconciliation against the
 original installation, physical AGX-1 acceptance and sustained workload checks
 remain open. This diagnostic does not replace those operations.
 
@@ -1713,3 +1713,5 @@ Physical reboot/SSH reconnection and AGX-1 acceptance remain unverified.
 Enrolled-host draining and maintenance reboot, unattended boot-time continuation,
 driver/kernel upgrade policy, repair/uninstall and signed-update reconciliation
 remain separate unfinished tasks.
+
+Agent planning and installation enforce the live reboot/headless gate and require verified current-boot evidence for a recorded prerequisite reboot. All reboot commands accept the prerequisite `--state-dir`; `plan-agent --setup-state-dir` binds that location into the installation approval. Installation and reboot share both custom and canonical locks. See the procedure above for custom-directory support export.

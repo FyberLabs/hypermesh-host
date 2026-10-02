@@ -282,7 +282,7 @@ func RunInstallAgent(ctx context.Context,args []string,out,diagnostic io.Writer)
 	if err==nil && (p.SHA256!=*approved||agentPlanDigest(p)!=*approved){err=fmt.Errorf("agent approval digest does not match")}
 	if err==nil{err=validateAgentInputs(p)}
 	if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
-	unlock,err:=lockSetupState(defaultSetupState)
+	unlock,err:=lockRebootState("",agentSetupState(p))
 	if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
 	ctx,cancel:=context.WithTimeout(ctx,10*time.Minute);defer cancel()
 	deps:=setupApplyDeps{Source:setupSource{},Preflight:freshSetupPreflight}
