@@ -324,8 +324,11 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
   if err==nil && (s.Download.Build!=buildinfo.CurrentBuild()||s.Download.Commit!=buildinfo.Current()) {
    if *receipt==""{*receipt=exe+".install.json"}
-   err=upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
-    func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())})
+   err=func()error{
+    unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
+    return upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
+     func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())})
+   }()
   }
   if err==nil{err=validateGuidedDownload(s.Download)}
   if err==nil{fmt.Fprintf(out,"Resuming setup for %s on %s. Completed steps will be checked by the installation gates.\n",s.Host,s.Network)}
