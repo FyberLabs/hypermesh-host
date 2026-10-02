@@ -41,7 +41,7 @@ func fixtureGuided(t *testing.T,answers string)(guidedFlow,*[]string,*string) {
  return g,&calls,&failure
 }
 func TestGuidedCompleteAndRerun(t *testing.T) {
- g,calls,_:=fixtureGuided(t,"y\ny\n\ny\ny\n")
+ g,calls,_:=fixtureGuided(t,"y\ny\ny\ny\n")
  if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
  want:=[]string{"plan-setup","apply-setup","plan-agent","install-agent","register-agent","check-agent","plan-certification","certify-agent","activate-agent","host-status"}
  if !reflect.DeepEqual(*calls,want)||g.state.Stage!=7{t.Fatalf("calls=%v stage=%d",*calls,g.state.Stage)}
@@ -61,7 +61,7 @@ func TestGuidedInterruptedInstallReusesPlan(t *testing.T) {
  *failure="install-agent"
  if err:=g.finish(context.Background());err==nil||g.state.Stage!=2{t.Fatalf("stage=%d err=%v",g.state.Stage,err)}
  raw,err:=os.ReadFile(filepath.Join(g.dir,"agent.json"));if err!=nil{t.Fatal(err)}
- *failure="";*calls=nil;g.ui.in=bufio.NewReader(strings.NewReader("y\n\ny\ny\n"))
+ *failure="";*calls=nil;g.ui.in=bufio.NewReader(strings.NewReader("y\ny\ny\n"))
  if err=g.finish(context.Background());err!=nil{t.Fatal(err)}
  if (*calls)[0]!="install-agent"{t.Fatal("did not resume existing installation",*calls)}
  after,_:=os.ReadFile(filepath.Join(g.dir,"agent.json"));if string(raw)!=string(after){t.Fatal("replaced approved plan")}
@@ -72,7 +72,7 @@ func TestGuidedRebootContinuesAfterNewBoot(t *testing.T) {
  if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
  if g.state.Stage!=1||(*calls)[len(*calls)-1]!="reboot-setup"{t.Fatal(*calls)}
  *calls=nil;g.boot=func()(string,string,error){return "machine","new-boot",nil}
- g.ui.in=bufio.NewReader(strings.NewReader("y\n\ny\ny\n"))
+ g.ui.in=bufio.NewReader(strings.NewReader("y\ny\ny\n"))
  if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
  if (*calls)[0]!="resume-setup"||g.state.Stage!=7{t.Fatal(*calls)}
 }

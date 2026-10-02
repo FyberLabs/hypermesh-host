@@ -275,8 +275,12 @@ func (g guidedFlow) finish(ctx context.Context)error {
    if err=guidedRead(certPath,&p,true);err!=nil{return err}
   }
   fmt.Fprintf(g.ui.out,"Model: %s (%d bytes)\nStored at: %s\nRuntime: %s\n",p.Run.Manifest.CatalogID,p.Run.Manifest.SizeBytes,p.ModelPath,p.Run.Manifest.ImageDigest)
-  token,e:=g.ui.ask("Private model-token file, only if this model requires a license/token (Enter to skip)","");if e!=nil{return e}
-  extra:=[]string{"--run"};if token!=""{extra=append(extra,"--model-token-file",token)}
+  extra:=[]string{"--run"}
+  if journal.State=="failed"&&journal.FailureCode=="acquisition" {
+   fmt.Fprintln(g.ui.out,"The previous model download failed. Check connectivity and disk space. A gated model may also require accepting its license and providing an access token.")
+   token,e:=g.ui.ask("Private token file if required (Enter to retry without one)","");if e!=nil{return e}
+   if token!=""{extra=append(extra,"--model-token-file",token)}
+  }
   if err=g.apply(ctx,"certify-agent","certification.json","Download this model and run its hardware certification test?",extra...);err!=nil{return err}
   if err=g.advance();err!=nil{return err}
  }
