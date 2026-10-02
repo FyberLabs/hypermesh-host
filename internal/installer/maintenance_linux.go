@@ -196,7 +196,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   }
   if err==nil{
    remote,e:=client.CheckDevice(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret)
-   if e!=nil||remote.PathAState!="accepted"||remote.PathBState!="green"||remote.ScheduleHold==nil||*remote.ScheduleHold||remote.SellState!="paused"{err=fmt.Errorf("fresh plane readiness required before releasing maintenance hold")}
+   if e!=nil||remote.PathAState!="accepted"||remote.PathBState!="green"||remote.ScheduleHold==nil||*remote.ScheduleHold||remote.SellState!="paused"||remote.LastHeartbeatAt==nil||time.Since(*remote.LastHeartbeatAt)<0||time.Since(*remote.LastHeartbeatAt)>120*time.Second||remote.CheckedAt.Before(time.Now().Add(-30*time.Second))||remote.CheckedAt.After(time.Now().Add(30*time.Second)){err=fmt.Errorf("fresh plane readiness required before releasing maintenance hold")}
   }
   if err==nil{
    if _,e:=os.Lstat("/var/lib/hypermesh/maintenance.json");e==nil{

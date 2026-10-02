@@ -79,6 +79,28 @@ class BootstrapTests(unittest.TestCase):
                     else: self.assertFalse(output.exists())
                 self.assertFalse(list(Path(directory).glob(".hypermesh-bootstrap-*")))
 
+    def test_bundled_trust_matches_reviewed_primary_fingerprint(self):
+        self.assertEqual(bootstrap.TRUSTED_KEY, (SOURCE.parent / "trust/hypermesh-release.pub").read_bytes())
+        key_path = self.home / "bundled.pub"
+        key_path.write_bytes(bootstrap.TRUSTED_KEY)
+        rows = self.gpg("--with-colons", "--show-keys", str(key_path)).decode().splitlines()
+        primary = next(row.split(":")[9] for row in rows if row.startswith("fpr:"))
+        self.assertEqual(primary, bootstrap.TRUSTED_FINGERPRINT)
+
+    def test_cli_uses_bundled_trust_and_exports_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "release.pub"
+            argv = ["bootstrap", "--release-url", "https://example.invalid/release",
+                    "--channel", "test", "--min-build", "24", "--arch", "arm64",
+                    "--output", str(Path(directory) / "deploy"), "--key-output", str(key)]
+            with mock.patch("sys.argv", argv), mock.patch.object(bootstrap, "bootstrap", return_value=json.loads(self.meta)) as run:
+                bootstrap.main()
+                self.assertEqual(run.call_args.args[4:6], (bootstrap.TRUSTED_KEY, bootstrap.TRUSTED_FINGERPRINT))
+                self.assertEqual(key.read_bytes(), bootstrap.TRUSTED_KEY)
+                with self.assertRaises(SystemExit):
+                    bootstrap.main()
+                self.assertEqual(key.read_bytes(), bootstrap.TRUSTED_KEY)
+
     def test_reject_url_credentials_and_plaintext(self):
         for url in ("http://example.invalid", "https://user:pass@example.invalid", "https://example.invalid/?token=x"):
             with self.assertRaises(bootstrap.Rejected):
