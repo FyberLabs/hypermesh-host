@@ -24,10 +24,11 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
-	if name == "plan-certification" || name == "certify-agent" || name == "activate-agent" {
+	if name == "plan-certification" || name == "certify-agent" || name == "activate-agent" || name == "certification-status" {
   ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
   code := 2
   switch name {
+  case "certification-status": code = installer.RunCertificationStatus(ctx,os.Args[2:],os.Stdout,os.Stderr)
   case "plan-certification": code = installer.RunPlanCertification(ctx,os.Args[2:],os.Stdout,os.Stderr)
   case "certify-agent": code = installer.RunCertifyAgent(ctx,os.Args[2:],os.Stdout,os.Stderr)
   case "activate-agent": code = installer.RunActivateAgent(ctx,os.Args[2:],os.Stdout,os.Stderr)
@@ -169,6 +170,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  certification-status  read redacted historical certification/activation evidence; --plan-sha SHA256
   plan-certification  obtain an authenticated frozen model/runtime plan; --agent-plan FILE
   certify-agent  acquire and certify while inactive; --plan FILE --approve-plan SHA256 --run
   activate-agent  original-owner approval and paused startup; --plan FILE --approve-plan SHA256 --start
@@ -182,6 +184,7 @@ Commands:
   support-bundle  export redacted, historical installer diagnostics (Linux, root).
                   --plan-sha SHA256 [--setup-plan-sha SHA256] --output /absolute/new.json
                   Add --workload-plan-sha SHA256 for inference/context evidence.
+                  Add --certification-plan-sha SHA256 for certification/activation recovery.
                   Any one plan digest also works; use support-bundle --help.
   check-agent  verify saved device identity, plane protocol and local preflight.
                --plan FILE --approve-plan SHA256 [--heartbeat] [--wireguard]; does not activate services.

@@ -1635,3 +1635,25 @@ approval. See [authenticated certification](authenticated-certification.md) for
 configuration, review, commands, retry behavior and remaining acceptance work.
 Guided orchestration, self-update, repair/uninstall, sustained benchmarks and the
 remaining hardware/platform acceptance tasks are still open.
+
+### Completed: certification recovery diagnostics (2026-10-02)
+
+`certification-status --plan-sha SHA256` and
+`support-bundle --certification-plan-sha SHA256 --output /absolute/new.json`
+now expose the authenticated certification/activation journal through a shared,
+read-only, redacted collector. It reports measured context/throughput and saved
+cleanup/tunnel observations, upload acceptance, class outcome and recorded
+startup with stage-specific recovery guidance.
+
+Collection rejects inconsistent success labels, incomplete context/measurement
+evidence, unsafe files and unknown state/code combinations. It uses the existing
+installer lock and never initiates authentication, downloads, retries, service
+changes or network probes. Missing or invalid evidence returns exit 1; exports
+retain explicit partial-collection markers. Historical records remain readable
+across installer builds.
+
+Automated tests cover every recorded state and failure stage, incomplete/corrupt
+evidence, privacy, immutable reads, locking, cancellation and CLI partial exports.
+This completes certification recovery visibility. Unified live status, guided
+reboot/resume, repair/uninstall, installer self-update and physical acceptance
+remain open. See [the recovery procedure](authenticated-certification.md#read-only-certification-recovery).
