@@ -323,6 +323,12 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil{err=validateGuidedDownload(s.Download)}
   if err==nil{fmt.Fprintf(out,"Resuming setup for %s on %s. Completed steps will be checked by the installation gates.\n",s.Host,s.Network)}
  }else if !os.IsNotExist(e){err=e}else{
+  // Do not treat an installation made outside this guide as a fresh machine:
+  // prerequisite changes or a reboot could otherwise disrupt an existing host.
+  if e:=guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource());e!=nil {
+   fmt.Fprintln(diagnostic,"An existing host installation or service configuration needs maintenance/recovery, not a fresh install. Existing identity and files were preserved:",e)
+   return 1
+  }
   if *receipt==""{*receipt=exe+".install.json"}
   err=guidedRead(*receipt,&s.Download,false)
   if err==nil{err=validateGuidedDownload(s.Download)}
