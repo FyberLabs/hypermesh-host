@@ -24,10 +24,11 @@ func main() {
 		os.Exit(2)
 	}
 	name := os.Args[1]
-	if name == "plan-certification" || name == "certify-agent" || name == "activate-agent" || name == "certification-status" {
+	if name == "plan-certification" || name == "certify-agent" || name == "activate-agent" || name == "certification-status" || name == "host-status" {
   ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
   code := 2
   switch name {
+  case "host-status": code = installer.RunHostStatus(ctx,os.Args[2:],os.Stdout,os.Stderr)
   case "certification-status": code = installer.RunCertificationStatus(ctx,os.Args[2:],os.Stdout,os.Stderr)
   case "plan-certification": code = installer.RunPlanCertification(ctx,os.Args[2:],os.Stdout,os.Stderr)
   case "certify-agent": code = installer.RunCertifyAgent(ctx,os.Args[2:],os.Stdout,os.Stderr)
@@ -170,6 +171,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `hypermesh-deploy <class>
 
 Commands:
+  host-status  read current installed-service and authenticated plane state; --plan CERTIFICATION_PLAN_FILE
   certification-status  read redacted historical certification/activation evidence; --plan-sha SHA256
   plan-certification  obtain an authenticated frozen model/runtime plan; --agent-plan FILE
   certify-agent  acquire and certify while inactive; --plan FILE --approve-plan SHA256 --run

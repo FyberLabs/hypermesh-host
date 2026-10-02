@@ -132,4 +132,50 @@ locally; the redacted export cannot restore them.
 All observations are historical. The journal alone cannot revalidate the frozen
 manifest, plan expiry, server verdict, current service state or selling gates.
 An active record does not authorize selling or prove that the agent is still
-running. Guided reboot/resume and unified live readiness remain roadmap work.
+running. Use host-status below for current service and plane observations. Guided reboot/resume remains roadmap work.
+
+## Live host status
+
+After creating the certification plan, use its matching signed installer:
+
+```sh
+sudo hypermesh-deploy host-status --plan certification-plan.json
+```
+
+This read-only command combines current local observations and an authenticated
+plane query. It never starts/stops services, reboots, sends a heartbeat, creates
+a WireGuard interface, changes a hold or modifies selling state. It uses the
+saved device credential; no browser login is needed.
+
+The JSON gates report installed-file and systemd configuration integrity, local
+identity, certification history bound to this plan/run/model, activation marker,
+reboot requirement, enabled/running service state, current hardware intake,
+class, certification, schedule hold, AIuditor availability and heartbeat age.
+Each blocked gate has a fixed next action. The service must retain the same PID,
+invocation and restart count across the plane observation. No raw service errors,
+keys, device/run IDs, model paths or registry addresses enter the output.
+
+Exit 0 means the implemented diagnostic gates passed during this observation.
+Exit 1 means attention is needed or the observation could not be completed;
+exit 2 means invalid command arguments. The command takes the installer read
+lock and has a 90-second overall deadline for its bounded command/network
+operations. As with other filesystem verification, kernel I/O stalls retain
+normal OS limitations. No journal is written.
+
+The heartbeat gate uses a diagnostic maximum age of 120 seconds measured against
+the plane clock. This is not the scheduler's eligibility policy. A future-dated
+heartbeat fails the gate; an absent or stale heartbeat must not be refreshed by
+the diagnostic itself. A fresh heartbeat is not proof of the WireGuard data path.
+
+A green report grants neither activation nor selling permission. It does not
+rerun memory/model workloads, verify free capacity, probe the active tunnel,
+verify package-specific reboot completion, or prove sustained uptime. Inspect
+the dashboard's current lease/hold state before taking corrective action.
+For a stopped service or interrupted activation, retain the original plan and
+use certification-status guidance and the controlled activation flow. Do not
+start the agent by creating its activation marker manually.
+
+The installation integrity check compares against the original approved payloads.
+After an agent update, a changed binary is reported for inspection rather than
+silently trusted; reconcile it with the signed update history. Cross-release
+installation/update reconciliation and automated reboot/resume remain pending.
