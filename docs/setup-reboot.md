@@ -20,7 +20,8 @@ sudo hypermesh-deploy reboot-setup --plan reboot-plan.json \
 
 Review the new reboot plan's `plan_sha256`, embedded setup, reboot reason and
 machine/boot binding. The setup plan's digest is not the reboot approval.
-Planning inspects state without changing it. The command revalidates current
+Planning inspects state without changing it. If neither reboot reason applies,
+it reports that no initial-setup reboot is required and emits no reboot plan. The command revalidates current
 prerequisites and absence of Hypermesh installation/enrollment, saves
 `reboot-PLAN_SHA256.json` privately in the installer state directory, rechecks
 the host, then submits a normal systemd reboot request.
@@ -48,7 +49,9 @@ state, OS/kernel, default target, inactive graphical target when headless was
 requested, and a cleared OS reboot-required marker.
 
 Resume records `verifying` before probing and `verified` only after those
-checks pass and the boot ID remains unchanged. A successful resume returns 0;
+checks pass and the boot ID remains unchanged. The command response separates `attempt_succeeded` from the saved historical
+`checkpoint`, so a failed new attempt cannot present an older verified record
+as current success. A successful resume returns 0;
 failed or unknown verification returns 1. Invalid arguments return 2.
 Continue with `plan-agent` and `install-agent` only after verification succeeds.
 Registration, model acquisition, certification and owner-approved activation

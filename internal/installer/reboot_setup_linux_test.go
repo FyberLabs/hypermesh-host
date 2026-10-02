@@ -192,7 +192,9 @@ func TestRebootPrivateJournalStatusAndCLI(t *testing.T){
  args:=[]string{"--plan",path,"--approve-plan",p.SHA256,"--reboot"}
  if runRebootSetup(context.Background(),args[:4],&out,&diagnostic,false,dir,true,&d)!=2||requests!=0{t.Fatal("missing explicit reboot accepted")}
  if code:=runRebootSetup(context.Background(),args,&out,&diagnostic,false,dir,true,&d);code!=0||requests!=1{t.Fatalf("%d %s",code,diagnostic.String())}
+ out.Reset()
  if runRebootSetup(context.Background(),args,&out,&diagnostic,false,dir,true,&d)!=1||requests!=1{t.Fatal("repeated reboot")}
+ if !bytes.Contains(out.Bytes(),[]byte(`"attempt_succeeded":false`)){t.Fatal("failed attempt not explicit")}
  if runRebootSetup(context.Background(),args[:4],&out,&diagnostic,true,dir,true,&d)!=1{t.Fatal("same boot resumed")}
  next,_:=hostregistration.NewRunID();d.Identity=func()(string,string,error){return p.MachineSHA256,next,nil}
  if code:=runRebootSetup(context.Background(),args[:4],&out,&diagnostic,true,dir,true,&d);code!=0{t.Fatalf("%d %s",code,diagnostic.String())}

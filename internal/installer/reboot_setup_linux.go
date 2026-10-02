@@ -240,6 +240,7 @@ func runPlanReboot(ctx context.Context,args []string,out,diagnostic io.Writer,st
  if err==nil{p.OSRequired,err=liveRebootRequired("")}
  p.Headless=p.Setup.HeadlessRequested&&p.Setup.Platform.DefaultTarget=="graphical.target"
  p.SHA256=setupRebootDigest(p)
+ if err==nil&&!p.OSRequired&&!p.Headless{err=fmt.Errorf("no OS reboot requirement or approved headless transition was found")}
  if err==nil{err=validateSetupRebootPlan(p,p.SHA256)}
  if err==nil{err=checkSetupReboot(ctx,p,"",state,rebootSetupSource(),freshSetupPreflight,false)}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
@@ -283,7 +284,9 @@ func runRebootSetup(ctx context.Context,args []string,out,diagnostic io.Writer,r
  if override!=nil{d.Identity=override.Identity;d.Check=override.Check;d.Request=override.Request;if override.Now!=nil{d.Now=override.Now}}
  if resume{err=resumeSetupReboot(ctx,p,&j,d)}else{err=requestSetupReboot(ctx,p,&j,*retry,d)}
  stage:=supportReboot(state,p.SHA256)
- if json.NewEncoder(out).Encode(stage)!=nil{return 1}
+ // The saved checkpoint is historical, including when a new attempt fails
+ // before it can replace a previous verified record.
+ if json.NewEncoder(out).Encode(map[string]any{"operation":name,"attempt_succeeded":err==nil,"checkpoint":stage})!=nil{return 1}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1};return 0
 }
 func RunRebootStatus(ctx context.Context,args []string,out,diagnostic io.Writer)int{
