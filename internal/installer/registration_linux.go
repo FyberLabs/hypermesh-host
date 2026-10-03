@@ -90,8 +90,16 @@ func newRegistration(p agentInstallPlan,issuer,dashboard,class string,fresh Plan
  cpu,gpu:=strings.TrimSpace(h.Facts.Processor),strings.TrimSpace(h.Facts.GPU)
  if cpu=="" {cpu=h.Facts.Arch+" processor"}
  if gpu=="" {gpu=h.Backend+" accelerator"}
+ modelMemory:=fresh.Resources.Admission.AcceleratorBytes
+ if fresh.Resources.Resources.UMA && fresh.Resources.Resources.UMAAllocationBytes==0 {
+  resources:=fresh.Resources.Resources
+  if !CheckResources(resources).Eligible {return j,fmt.Errorf("registration requires more than 12 GiB currently free in system and UMA runtime memory")}
+  // Registration telemetry is a current observation, never a reserved budget.
+  modelMemory=resources.AvailableSystemBytes
+  if resources.UMARuntime.FreeBytes<modelMemory {modelMemory=resources.UMARuntime.FreeBytes}
+ }
  report:=hostregistration.Hardware{Profile:p.Setup.Profile.ID,Architecture:normalizedSetupArch(h.Facts.Arch),
- CPU:cpu,GPU:gpu,SystemMemoryBytes:fresh.Resources.Resources.SystemBytes,ModelMemoryBytes:fresh.Resources.Admission.AcceleratorBytes}
+ CPU:cpu,GPU:gpu,SystemMemoryBytes:fresh.Resources.Resources.SystemBytes,ModelMemoryBytes:modelMemory}
  j=registrationJournal{Schema:1,PlanSHA256:p.SHA256,Issuer:issuer,Dashboard:dashboard,PrivateKey:private,DeviceSecret:credential,State:"prepared",
  Request:hostregistration.Request{RequestID:requestID,HostName:p.HostName,ClassID:class,Hardware:report,WGPublicKey:public,DeviceSecretHash:digestSetupBytes([]byte(credential)),CredentialPrefix:credential[7:15]}}
  return j,j.Request.Validate()
@@ -297,7 +305,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  raw,err:=readSetupRegular(*path,false)
  if err==nil{err=decodeSetupJSON(raw,&p)}
  if err==nil&&(p.SHA256!=*approved||agentPlanDigest(p)!=*approved){err=fmt.Errorf("agent approval digest does not match")}
- if err==nil{err=validateAgentInputs(p)}
+ if err==nil{err=validateInstalledAgentInputs(p)}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  remote,err:=hostregistration.New(p.ControlPlane,p.TenantID)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}

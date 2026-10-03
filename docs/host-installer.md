@@ -1791,3 +1791,9 @@ new guided website instructions. Use a host release containing this guide.
 - [x] Handle a historical test blob disappearing between listing and superseded tagging: skip only after the storage existence API confirms absence.
 - [x] Keep existing-blob tag errors, lookup failures and malformed existence responses fatal before the channel pointer changes.
 - [x] Regression-test missing historical artifacts and protection of the newest 20 releases, publishing release and current channel release.
+
+### Minimum-only registration report
+
+Registration now derives its required model-memory telemetry from the lower of freshly observed system-available and UMA-runtime-free bytes when installation has no allocation budget. This observation does not change the saved installation budget, certify a model, or reserve capacity. Regression coverage includes constructing, validating, saving and reloading the private registration journal from a minimum-only preflight, and rejecting stale admission after free memory falls to the threshold.
+
+AGX reached installed-awaiting-enrollment but failed before device authorization because registration previously copied the zero allocation into a required positive telemetry field. A newer verified installer can continue a stage-3 registration session after checking the original plan digest, current prerequisite policy, matching host/network, complete installation journal, installed payload hashes and inactive services. It requires confirmation and preserves original approvals, files and identity history. Prerequisite application and agent installation remain bound to their original build; only installed registration/onboarding/certification validation accepts earlier approvals. Physical AGX confirmation remains pending the signed release.

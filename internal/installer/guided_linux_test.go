@@ -186,3 +186,37 @@ func TestGuidedSetupDoesNotPassLegacyMemoryBudget(t *testing.T) {
  if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
  if !checked{t.Fatal("setup not checked")}
 }
+
+func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
+ for _,kind:=range []string{"pass","decline","payload","stage","network","downgrade"} {
+  t.Run(kind,func(t *testing.T){
+   p:=agentInstallFixture(t)
+   network,_:=installationNetwork("test");p.ControlPlane=network.Plane;p.SHA256=agentPlanDigest(p)
+   dir:=t.TempDir();if err:=os.Chmod(dir,0700);err!=nil{t.Fatal(err)}
+   planPath:=filepath.Join(dir,"agent.json");if err:=writeGuided(planPath,p);err!=nil{t.Fatal(err)}
+   before,_:=os.ReadFile(planPath)
+   state:=guidedState{Schema:1,Stage:3,Network:"test",Host:p.HostName,Tenant:p.TenantID,Directory:p.Setup.Preflight.Resources.ModelDirectory,
+    Download:guidedDownload{Build:21,Commit:p.Setup.InstallerCommit,Channel:"test"}}
+   if kind=="stage"{state.Stage=4}
+   if kind=="network"{state.Network="production"}
+   buildinfo.Build="22";buildinfo.Commit=strings.Repeat("b",40)
+   download:=guidedDownload{Schema:1,Build:22,Commit:buildinfo.Commit,Channel:"test",ReleaseURL:"https://example.test/test/22",TrustedKey:filepath.Join(dir,"public.asc")}
+   if kind=="downgrade"{state.Download.Build=23}
+   receipt:=filepath.Join(dir,"receipt.json");if err:=writeGuided(receipt,download);err!=nil{t.Fatal(err)}
+   session:=filepath.Join(dir,"session.json");if err:=writeGuided(session,state);err!=nil{t.Fatal(err)}
+   prior,_:=os.ReadFile(session)
+   answer:="y\n";if kind=="decline"{answer="n\n"}
+   ui:=guidedUI{in:bufio.NewReader(strings.NewReader(answer)),out:io.Discard}
+   checks:=0
+   err:=upgradeGuidedInstalled(context.Background(),dir,session,receipt,&state,ui,func(agentInstallPlan)error{
+    checks++;if kind=="payload"{return fmt.Errorf("payload mismatch")};return nil})
+   after,_:=os.ReadFile(planPath);if string(before)!=string(after){t.Fatal("approval changed")}
+   if kind=="pass" {
+    if err!=nil||checks!=2||state.Stage!=3||state.Download.Build!=22{t.Fatal(err,checks,state.Stage)}
+   }else{
+    now,_:=os.ReadFile(session)
+    if err==nil||string(now)!=string(prior){t.Fatal("unsafe continuation",err)}
+   }
+  })
+ }
+}

@@ -60,6 +60,12 @@ func sameSetupJSON(a,b any) bool {
 }
 
 func validateSetupApproval(p SetupPlan, approved string) error {
+ return validateSetupApprovalPolicy(p,approved,false)
+}
+
+// Installed continuations validate the original digest and current policy but
+// may read an older approval; applying prerequisites still requires this build.
+func validateSetupApprovalPolicy(p SetupPlan, approved string, installed bool) error {
 	if p.SchemaVersion!=2 || !setupDigestRE.MatchString(approved) || approved!=p.PlanSHA256 || setupPlanDigest(p)!=approved {
 		return fmt.Errorf("approval does not match a valid schema-2 plan; regenerate and review the plan")
 	}
@@ -67,7 +73,9 @@ func validateSetupApproval(p SetupPlan, approved string) error {
 		return fmt.Errorf("only a reviewable prerequisite plan can be approved")
 	}
 	if p.InstallerCommit!=buildinfo.Current() || p.InstallerVersion!=buildinfo.CurrentVersion() || p.InstallerBuild!=buildinfo.CurrentBuild() {
-		return fmt.Errorf("installer build changed; regenerate the plan with this installer")
+		if !installed || p.InstallerBuild<=0 || p.InstallerBuild>=buildinfo.CurrentBuild() {
+   return fmt.Errorf("installer build changed; regenerate the plan with this installer")
+  }
 	}
 	if validateEndpoint(p.ReadinessURL)!=nil || p.Preflight.Resources.ModelDirectory=="" ||
 		(p.Preflight.Resources.MemoryMode!="uma" && p.Preflight.Resources.MemoryMode!="discrete") {

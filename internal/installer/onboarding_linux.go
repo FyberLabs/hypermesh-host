@@ -222,7 +222,7 @@ func RunCheckAgent(ctx context.Context,args []string,out,diagnostic io.Writer)in
  raw,err:=readSetupRegular(*path,false)
  if err==nil{err=decodeSetupJSON(raw,&p)}
  if err==nil&&(p.SHA256!=*approved||agentPlanDigest(p)!=*approved){err=fmt.Errorf("agent approval digest does not match")}
- if err==nil{err=validateAgentInputs(p)}
+ if err==nil{err=validateInstalledAgentInputs(p)}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  unlock,err:=lockSetupState(defaultSetupState)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()

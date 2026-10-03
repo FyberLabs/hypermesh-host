@@ -184,3 +184,34 @@ func TestRestartApprovalRequiresTerminalDecisionAndPreservesHistory(t *testing.T
  old,err:=restartRegistration(j,hostregistration.Status{State:"denied"},p,fresh,func(registrationJournal)error{return fmt.Errorf("disk full")},func(registrationJournal)error{called=true;return nil})
  if err==nil||called||old.Request!=j.Request{t.Fatal("archive failure replaced active journal")}
 }
+
+func TestRegistrationFromMinimumOnlyInstallation(t *testing.T) {
+ p,base:=registrationFixture(t)
+ fresh:=p.Setup.Preflight
+ fresh.Hardware=hardware.Recommend(hardware.Facts{Arch:"arm64",Model:"NVIDIA Jetson AGX Orin Developer Kit",Tegra:true,CUDA:true})
+ fresh.Resources.Resources.SystemBytes=64*GiB
+ fresh.Resources.Resources.UMA=true
+ fresh.Resources.Resources.UMAAllocationBytes=0
+ fresh.Resources.Resources.AvailableSystemBytes=48*GiB
+ fresh.Resources.Resources.DiskFreeBytes=100*GiB
+ fresh.Resources.Resources.UMARuntime=&UMARuntime{Backend:"cuda",Device:0,FreeBytes:40*GiB,TotalBytes:64*GiB}
+ fresh.Resources.Admission=CheckResources(fresh.Resources.Resources)
+ before,_:=json.Marshal(fresh)
+ j,err:=newRegistration(p,base.Issuer,base.Dashboard,"agx-large",fresh)
+ if err!=nil {t.Fatal(err)}
+ if err=j.Request.Validate();err!=nil{t.Fatal(err)}
+ if j.Request.Hardware.ModelMemoryBytes!=40*GiB {t.Fatal("not current minimum of available system/runtime memory")}
+ if err=validateRegistration(j,p,base.Issuer,base.Dashboard,"agx-large");err!=nil{t.Fatal(err)}
+ after,_:=json.Marshal(fresh)
+ if string(before)!=string(after)||fresh.Resources.Resources.UMAAllocationBytes!=0{t.Fatal("registration changed installation budget")}
+ // Persist and reload exactly as the pre-login path does; no private output.
+ path:=filepath.Join(t.TempDir(),"registration.json")
+ if err=os.Chmod(filepath.Dir(path),0700);err!=nil{t.Fatal(err)}
+ if err=saveRegistration(path,j);err!=nil{t.Fatal(err)}
+ raw,err:=readSetupRegular(path,true);if err!=nil{t.Fatal(err)}
+ var saved registrationJournal
+ if err=decodeSetupJSON(raw,&saved);err!=nil{t.Fatal(err)}
+ if err=validateRegistration(saved,p,base.Issuer,base.Dashboard,"agx-large");err!=nil{t.Fatal(err)}
+ fresh.Resources.Resources.AvailableSystemBytes=12*GiB
+ if _,err=newRegistration(p,base.Issuer,base.Dashboard,"agx-large",fresh);err==nil{t.Fatal("stale admission allowed insufficient current memory")}
+}

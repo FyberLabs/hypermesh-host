@@ -58,10 +58,14 @@ func agentPlanDigest(p agentInstallPlan)string {
 var agentTenantRE=regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var agentNameRE=regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 
-func validateAgentInputs(p agentInstallPlan)error {
+func validateAgentInputs(p agentInstallPlan)error {return validateAgentInputPolicy(p,false)}
+// Only installed registration/onboarding paths use this. They must separately
+// verify the installation journal and every installed payload before effects.
+func validateInstalledAgentInputs(p agentInstallPlan)error {return validateAgentInputPolicy(p,true)}
+func validateAgentInputPolicy(p agentInstallPlan,installed bool)error {
 	if p.SetupStateDir!=""&&(!filepath.IsAbs(p.SetupStateDir)||filepath.Clean(p.SetupStateDir)!=p.SetupStateDir||p.SetupStateDir=="/"){return fmt.Errorf("setup state directory must be a clean absolute private path")}
  if p.Schema!=1 {return fmt.Errorf("unsupported agent plan schema")}
-	if err:=validateSetupApproval(p.Setup,p.Setup.PlanSHA256);err!=nil{return err}
+	if err:=validateSetupApprovalPolicy(p.Setup,p.Setup.PlanSHA256,installed);err!=nil{return err}
 	if validateEndpoint(p.ControlPlane)!=nil || !agentTenantRE.MatchString(p.TenantID) || !agentNameRE.MatchString(p.HostName) {
 		return fmt.Errorf("require an HTTPS control plane, tenant UUID and a 1-63 character host name")
 	}
