@@ -246,7 +246,7 @@ if [ "$channel" = prod ] && [ "$reuse" != 1 ]; then
   build=$(next_build "$test_build" "$prod_build" "$run_number")
 fi
 
-ldflags="-s -w -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=${GITHUB_SHA} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Version=${version} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Build=${build}"
+ldflags="-s -w -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=${GITHUB_SHA} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Version=${version} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Build=${build} -X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Channel=${channel}"
 build_release_binaries "$root" "$dist" "$version" "$ldflags"
 umask 077
 signing_fpr=""

@@ -26,3 +26,17 @@ The global build number remains the host's update/rollback ordering authority.
 Completed: per-build test patch versions, stable allocation retries, real
 ARM64/AMD64 nonzero-version payload checks, and signed verifier regression
 coverage. Production promotion remains an explicit operator choice.
+
+## Installed channel and update ordering
+
+Release binaries embed their original publication channel alongside version and
+build. This value is independent of the configured update destination. A test
+binary at version 0.0.57/build 57 can therefore install production version
+0.0.1/build 58. The global build floor, failed-build exclusion, signature checks
+and busy-host deferral still apply. Production-to-production updates retain
+their semver ordering checks.
+
+Legacy binaries without an embedded channel retain the conservative production
+semver check. No channel is inferred from a version number or a mutable setting.
+The per-build test version change ships together with this channel metadata and
+the updater change; do not publish the version-only implementation.
