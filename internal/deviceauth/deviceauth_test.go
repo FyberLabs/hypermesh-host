@@ -3,6 +3,8 @@ package deviceauth
 import (
 	"bytes"
 	"context"
+ "crypto/sha256"
+ "encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +27,9 @@ type fixture struct {
 	issuer string
 	polls atomic.Int32
 	codes atomic.Int32
+ challenge string
+ verifier string
+ deviceStatus int
 	discovery func(map[string]any)
 	code func(map[string]any)
 	poll func(http.ResponseWriter, *http.Request, int)
@@ -44,15 +49,25 @@ func newFixture(t *testing.T) *fixture {
 		case "/device":
 			f.codes.Add(1)
 			_ = r.ParseForm()
-			want := url.Values{"client_id": {clientID}, "scope": {"openid"}}
+			f.challenge = r.PostForm.Get("code_challenge")
+   decoded, err := base64.RawURLEncoding.DecodeString(f.challenge)
+   if err != nil || len(decoded) != 32 { t.Error("missing S256 challenge") }
+   want := url.Values{"client_id": {clientID}, "scope": {"openid"}, "code_challenge": {f.challenge}, "code_challenge_method": {"S256"}}
 			if r.Method != "POST" || !reflect.DeepEqual(r.PostForm, want) { t.Error("unexpected device grant request") }
 			body := map[string]any{"device_code": deviceSecret, "user_code": "ABCD-EFGH", "verification_uri": f.server.URL+"/verify", "verification_uri_complete": f.server.URL+"/verify?device_code="+deviceSecret, "expires_in": 600}
 			if f.code != nil { f.code(body) }
+   if f.deviceStatus != 0 { w.WriteHeader(f.deviceStatus) }
 			_ = json.NewEncoder(w).Encode(body)
 		case "/token":
 			n := int(f.polls.Add(1))
 			_ = r.ParseForm()
-			want := url.Values{"client_id": {clientID}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "device_code": {deviceSecret}}
+			verifier := r.PostForm.Get("code_verifier")
+   if len(verifier) != 43 { t.Error("missing 256-bit verifier") }
+   digest := sha256.Sum256([]byte(verifier))
+   if base64.RawURLEncoding.EncodeToString(digest[:]) != f.challenge { t.Error("verifier does not match challenge") }
+   if f.verifier != "" && f.verifier != verifier { t.Error("verifier changed while polling") }
+   f.verifier = verifier
+   want := url.Values{"client_id": {clientID}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "device_code": {deviceSecret}, "code_verifier": {verifier}}
 			if r.Method != "POST" || !reflect.DeepEqual(r.PostForm, want) { t.Error("unexpected polling request") }
 			if r.Header.Get("Authorization") != "" { t.Error("public client sent authorization header") }
 			if f.poll != nil { f.poll(w, r, n); return }
@@ -95,7 +110,7 @@ func TestPendingSlowDownAndSuccess(t *testing.T) {
 	if err != nil || token.Bearer() != accessSecret { t.Fatalf("authorization failed: %v", err) }
 	if !reflect.DeepEqual(delays, []time.Duration{5*time.Second, 5*time.Second, 10*time.Second, 10*time.Second}) { t.Fatalf("poll delays: %v", delays) }
 	if !strings.Contains(output, f.server.URL+"/verify") || !strings.Contains(output, "ABCD-EFGH") { t.Fatal("browser instructions missing") }
-	for _, secret := range []string{deviceSecret, accessSecret, "private-refresh-token", "device_code="} {
+	for _, secret := range []string{deviceSecret, accessSecret, f.verifier, "private-refresh-token", "device_code="} {
 		if strings.Contains(output, secret) { t.Fatal("credential displayed") }
 	}
 	raw, _ := json.Marshal(token)
@@ -276,4 +291,29 @@ func TestInvalidIssuerMakesNoRequest(t *testing.T) {
 		_, err := Authorize(context.Background(), issuer, io.Discard)
 		if err == nil { t.Fatal("invalid issuer accepted") }
 	}
+}
+
+func TestFreshPKCEForEachAuthorization(t *testing.T) {
+ f := newFixture(t)
+ _, _, _, err := f.run(context.Background(), f.server.Client())
+ if err != nil { t.Fatal(err) }
+ previous := f.challenge
+ f.verifier = ""
+ _, _, _, err = f.run(context.Background(), f.server.Client())
+ if err != nil || previous == f.challenge { t.Fatal("proof reused", err) }
+}
+
+func TestDeviceRejectionHasSafeStatusAndDoesNotPoll(t *testing.T) {
+ for _, category := range []string{"invalid_request", "invalid_client", "unauthorized_client", "invalid_scope", deviceSecret} {
+  f := newFixture(t)
+  f.deviceStatus = 400
+  f.code = func(body map[string]any) {
+   for key := range body { delete(body, key) }
+   body["error"] = category
+   body["error_description"] = accessSecret
+  }
+  _, output, _, err := f.run(context.Background(), f.server.Client())
+  if err == nil || !strings.Contains(err.Error(), "HTTP 400") || f.polls.Load() != 0 || output != "" { t.Fatal("invalid rejection", err) }
+  if strings.Contains(err.Error(), deviceSecret) || strings.Contains(err.Error(), accessSecret) { t.Fatal("server error leaked") }
+ }
 }
