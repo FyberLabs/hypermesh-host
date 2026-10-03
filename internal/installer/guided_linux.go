@@ -14,7 +14,6 @@ import (
  "os"
  "path/filepath"
  "regexp"
- "strconv"
  "strings"
  "time"
 
@@ -43,7 +42,7 @@ type guidedState struct {
  Host string `json:"host"`
  Directory string `json:"model_directory"`
  Mode string `json:"memory_mode"`
- Allocation int64 `json:"uma_gib"`
+ Allocation int64 `json:"uma_gib,omitempty"` // Legacy sessions only; never a new installation budget.
  Headless bool `json:"headless"`
  Class string `json:"class"`
  Stage int `json:"stage"`
@@ -115,7 +114,7 @@ func guidedTenant(ctx context.Context,n guidedNetwork)(string,error) {
 }
 func guidedDefaults(p hardware.Profile)(string,int64,string) {
  mode:="discrete";allocation:=int64(0);class:=""
- if p.Facts.Tegra||p.Backend=="hip" {mode="uma";allocation=p.ModelBudgetBytes/GiB}
+ if p.Facts.Tegra||p.Backend=="hip" {mode="uma"}
  model:=strings.ToLower(p.Facts.Model)
  if p.Facts.Tegra&&strings.Contains(model,"agx orin"){class="agx-large"}
  if p.Facts.Tegra&&strings.Contains(model,"orin nx"){class="nx-volume"}
@@ -201,7 +200,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
  certPath:=filepath.Join(g.dir,"certification.json")
  if s.Stage==0 {
   fmt.Fprintln(g.ui.out,"Checking hardware, memory, model storage and required software…")
-  args:=[]string{"--memory-mode",s.Mode,"--uma-gib",strconv.FormatInt(s.Allocation,10),"--model-dir",s.Directory,
+  args:=[]string{"--memory-mode",s.Mode,"--model-dir",s.Directory,
    "--aiuditor-check-url",n.Plane+"/api/v1/hypermesh/public/host-installation","--profile","auto"}
   if s.Headless{args=append(args,"--headless")}
   if _,err=g.plan(ctx,"plan-setup","setup.json",args...);err!=nil{return err}
@@ -367,21 +366,6 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
     if err=ui.confirm("Create "+s.Directory+" without changing partitions or mounts?");err==nil {err=agentDirectory(s.Directory,true)}
    } else if e!=nil||!info.IsDir(){err=fmt.Errorf("model storage must be an accessible directory")}
   }
-  if err==nil&&s.Mode=="uma"{
-   measured,e:=probeResources(ctx,s.Directory,"uma",12*GiB)
-   if e!=nil {err=e} else {
-    budget:=CheckResources(measured).MaximumUMABytes/GiB
-    diskBudget:=measured.DiskFreeBytes/11*5/GiB
-    if diskBudget<budget {budget=diskBudget}
-    if s.Allocation<=0||s.Allocation>budget{s.Allocation=budget}
-    if s.Allocation<12{err=fmt.Errorf("fewer than 12 GiB can be allocated safely with the current RAM, runtime and model-storage capacity")}
-   }
-  }
-  if err==nil&&s.Mode=="uma"{
-   var answer string;answer,err=ui.ask("Memory available to models (GiB)",strconv.FormatInt(s.Allocation,10))
-   if err==nil{s.Allocation,err=strconv.ParseInt(answer,10,64)}
-   if err==nil&&s.Allocation<12{err=fmt.Errorf("at least 12 GiB is required; no changes applied")}
-  }
   if err==nil{
    var answer string;answer,err=ui.ask("Use headless mode (disable graphical login after reboot)? yes/no","yes")
    if err==nil {switch strings.ToLower(answer){case "yes","y":s.Headless=true;case "no","n":default:err=fmt.Errorf("answer yes or no")}}
@@ -447,7 +431,7 @@ func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string
  if err:=guard();err!=nil{return err}
  if err:=ui.confirm("Use this newer installer to recheck prerequisites and review fresh plans? Previous plans and model files will be preserved.");err!=nil{return err}
  if err:=ctx.Err();err!=nil{return err}
- next:=*s;next.Download=download;next.Stage=0;next.PlanDirectory="run-"+download.Commit
+ next:=*s;next.Download=download;next.Allocation=0;next.Stage=0;next.PlanDirectory="run-"+download.Commit
  path:=filepath.Join(dir,next.PlanDirectory)
  if err:=secureSetupDirectory(path,true);err!=nil{return err}
  key,err:=readSetupRegular(download.TrustedKey,false);if err!=nil{return err}

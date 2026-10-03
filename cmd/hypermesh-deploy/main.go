@@ -247,7 +247,7 @@ Commands:
   plan      read-only resource, hardware and HTTPS reachability plan.
             Resource flags plus --aiuditor-check-url https://HOST/READINESS_PATH
   check-resources  read-only Linux RAM, accelerator capacity and model-filesystem check.
-                   --model-dir PATH --memory-mode uma --uma-gib N
+                   --model-dir PATH --memory-mode uma (minimum-only; no capacity reservation)
                    --model-dir PATH --memory-mode discrete
   inspect   report hardware fingerprint, memory budget and preflight recommendations.
             --benchmark --model /path/model.gguf runs an installed llama-bench.

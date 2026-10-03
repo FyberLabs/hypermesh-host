@@ -91,7 +91,7 @@ func TestGuidedDefaultsDoNotChangeSoftwareChannel(t *testing.T){
  if _,err=installationNetwork("canary");err==nil{t.Fatal("unknown network")}
  profile:=hardware.Profile{ModelBudgetBytes:40*GiB,Facts:hardware.Facts{Tegra:true,Model:"NVIDIA Jetson AGX Orin"}}
  mode,budget,class:=guidedDefaults(profile)
- if mode!="uma"||budget!=40||class!="agx-large"{t.Fatal(mode,budget,class)}
+ if mode!="uma"||budget!=0||class!="agx-large"{t.Fatal(mode,budget,class)}
 }
 
 func TestGuidedPlansPreserveIntegerPrecision(t *testing.T){
@@ -168,4 +168,21 @@ func TestGuidedNewBuildRecoversOnlyBeforeInstallation(t *testing.T){
    if err:=guidedRead(statePath,&saved,true);err!=nil||saved.Download.Build!=102||saved.PlanDirectory!=g.state.PlanDirectory{t.Fatal("upgrade not durable",err)}
   })
  }
+}
+
+func TestGuidedSetupDoesNotPassLegacyMemoryBudget(t *testing.T) {
+ g,_,_:=fixtureGuided(t,"y\ny\ny\ny\n")
+ original:=g.run;checked:=false
+ g.run=func(name string)guidedRunner{
+  run:=original(name)
+  return func(ctx context.Context,args []string,out,diagnostic io.Writer)int{
+   if name=="plan-setup" {
+    checked=true
+    for _,arg:=range args {if arg=="--uma-gib"{t.Fatal("legacy budget carried into installation")}}
+   }
+   return run(ctx,args,out,diagnostic)
+  }
+ }
+ if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
+ if !checked{t.Fatal("setup not checked")}
 }

@@ -33,6 +33,7 @@ type Admission struct {
 // Aggregate discrete VRAM passes only this capacity gate; runtime preflight
 // must separately prove that the selected GPUs can execute the target model.
 func CheckResources(r Resources) Admission {
+	if r.UMA && r.UMAAllocationBytes == 0 { return checkMinimumInstallationResources(r) }
 	a := Admission{Reasons: []string{}}
 	if r.SystemBytes < 16*GiB {
 		a.Reasons = append(a.Reasons, "at least 16 GiB system memory is required")
@@ -70,4 +71,25 @@ func CheckResources(r Resources) Admission {
 	}
 	a.Eligible = len(a.Reasons) == 0
 	return a
+}
+
+// No proposed workload allocation is part of default UMA installation.
+// This is a momentary minimum gate; model fit is evaluated at execution time.
+func checkMinimumInstallationResources(r Resources) Admission {
+ a:=Admission{Reasons:[]string{}}
+ if r.SystemBytes<16*GiB {a.Reasons=append(a.Reasons,"at least 16 GiB system memory is required")}
+ if r.AvailableSystemBytes<=12*GiB || r.AvailableSystemBytes>r.SystemBytes {
+  a.Reasons=append(a.Reasons,"more than 12 GiB of system memory must currently be free for installation")
+ }
+ if !validUMARuntime(r.UMARuntime) || r.UMARuntime.FreeBytes<=12*GiB {
+  a.Reasons=append(a.Reasons,"more than 12 GiB must currently be free in the UMA runtime")
+ }
+ // Preserve the minimum model-storage requirement, independently of all
+ // installed or currently free RAM. Larger models get their own fit checks.
+ a.RequiredDiskBytes=(12*GiB*11+4)/5
+ if r.DiskFreeBytes<a.RequiredDiskBytes {
+  a.Reasons=append(a.Reasons,fmt.Sprintf("model-cache filesystem needs %d free bytes for minimum installation capacity",a.RequiredDiskBytes))
+ }
+ a.Eligible=len(a.Reasons)==0
+ return a
 }

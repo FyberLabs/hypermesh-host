@@ -22,7 +22,7 @@ func TestCheckCommand(t *testing.T) {
 		{"probe fail", []string{"--memory-mode", "discrete", "--model-dir", "."}, fmt.Errorf("GPU probe unavailable"), 100*GiB, 1, true},
 		{"discrete pass", []string{"--memory-mode", "discrete", "--model-dir", "."}, nil, 100*GiB, 0, true},
 		{"no mode", []string{"--model-dir", "."}, nil, 0, 2, false},
-		{"no allocation", []string{"--memory-mode", "uma", "--model-dir", "."}, nil, 0, 2, false},
+		{"installation without allocation", []string{"--memory-mode", "uma", "--model-dir", "."}, nil, 27*GiB, 0, true},
 		{"negative allocation", []string{"--memory-mode", "uma", "--uma-gib", "-1", "--model-dir", "."}, nil, 0, 2, false},
 		{"overflow", []string{"--memory-mode", "uma", "--uma-gib", "9223372036854775807", "--model-dir", "."}, nil, 0, 2, false},
 		{"conflicting allocation", []string{"--memory-mode", "discrete", "--uma-gib", "12", "--model-dir", "."}, nil, 0, 2, false},

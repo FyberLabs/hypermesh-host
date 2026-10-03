@@ -48,6 +48,7 @@ type runtimeMemoryJournal struct {
 
 func memoryRequest(p SetupPlan)(runtimeMemoryRequest,error) {
  r:=p.Preflight.Resources.Resources
+ if r.UMAAllocationBytes==0 {return runtimeMemoryRequest{},fmt.Errorf("installation has no reserved memory budget; use a separately reviewed explicit diagnostic allocation or model workload test")}
  if p.Preflight.Resources.MemoryMode!="uma"||!r.UMA||!validUMARuntime(r.UMARuntime)||
   !CheckResources(r).Eligible||r.UMARuntime.Backend!=p.Preflight.Hardware.Backend {
   return runtimeMemoryRequest{},fmt.Errorf("runtime-memory check requires an eligible single CUDA/HIP UMA plan; discrete and multi-GPU workload validation remain pending")
