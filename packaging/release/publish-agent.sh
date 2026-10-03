@@ -28,7 +28,8 @@
 # for releases older than the newest 20. Tagging runs before the
 # channel pointer is written. The release being published and the
 # release channels/test.json still names are never tagged. A tag
-# failure leaves the pointer where it is. prod/ and channels/ are not
+# failure leaves the pointer where it is unless a follow-up lookup confirms
+# that lifecycle cleanup already removed that historical blob. prod/ and channels/ are not
 # tagged. Previous versions under test/ are a separate 90-day rule.
 #
 # Account and container names come from AZURE_STORAGE_ACCOUNT and
@@ -456,7 +457,7 @@ for name in "${artifact_names[@]}"; do
 done
 write_channel_manifest
 # Tag older test releases before the pointer moves. The release the
-# pointer still names stays untagged. A tag failure does not publish.
+# pointer still names stays untagged. An unresolved tag failure does not publish.
 if [ "$channel" = test ]; then
   # publish-order: superseded-tag
   pointer_rid=""
