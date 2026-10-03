@@ -305,7 +305,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  raw,err:=readSetupRegular(*path,false)
  if err==nil{err=decodeSetupJSON(raw,&p)}
  if err==nil&&(p.SHA256!=*approved||agentPlanDigest(p)!=*approved){err=fmt.Errorf("agent approval digest does not match")}
- if err==nil{err=validateAgentInputs(p)}
+ if err==nil{err=validateInstalledAgentInputs(p)}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  remote,err:=hostregistration.New(p.ControlPlane,p.TenantID)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}

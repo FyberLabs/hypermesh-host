@@ -174,3 +174,15 @@ func TestAgentUnitSearchPathsAndInheritedOverrides(t *testing.T) {
 	if err:=os.MkdirAll(path,0o755);err!=nil{t.Fatal(err)}
 	if err:=checkAgentUnitPaths(context.Background(),source,root,files);err==nil{t.Fatal("ignored running manager path")}
 }
+
+func TestInstalledContinuationKeepsMutationBuildBinding(t *testing.T){
+ p:=agentInstallFixture(t)
+ buildinfo.Build="22";buildinfo.Commit=strings.Repeat("b",40)
+ if err:=validateAgentInputs(p);err==nil{t.Fatal("new installer accepted old installation mutation approval")}
+ if err:=validateInstalledAgentInputs(p);err!=nil{t.Fatal(err)}
+ if err:=validateSetupApproval(p.Setup,p.Setup.PlanSHA256);err==nil{t.Fatal("old prerequisite mutation accepted")}
+ changed:=p;changed.Setup.Profile=&SetupProfile{}
+ if err:=validateInstalledAgentInputs(changed);err==nil{t.Fatal("changed policy accepted")}
+ buildinfo.Build="20"
+ if err:=validateInstalledAgentInputs(p);err==nil{t.Fatal("downgrade accepted")}
+}

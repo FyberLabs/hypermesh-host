@@ -60,6 +60,12 @@ func sameSetupJSON(a,b any) bool {
 }
 
 func validateSetupApproval(p SetupPlan, approved string) error {
+ return validateSetupApprovalPolicy(p,approved,false)
+}
+
+// Installed continuations validate the original digest and current policy but
+// may read an older approval; applying prerequisites still requires this build.
+func validateSetupApprovalPolicy(p SetupPlan, approved string, installed bool) error {
 	if p.SchemaVersion!=2 || !setupDigestRE.MatchString(approved) || approved!=p.PlanSHA256 || setupPlanDigest(p)!=approved {
 		return fmt.Errorf("approval does not match a valid schema-2 plan; regenerate and review the plan")
 	}

@@ -325,6 +325,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    if *receipt==""{*receipt=exe+".install.json"}
    err=func()error{
     unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
+    if s.Stage==3 {
+     return upgradeGuidedInstalled(ctx,dir,statePath,*receipt,&s,ui,func(p agentInstallPlan)error{return verifyRegistrationService(ctx,p)})
+    }
     return upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
      func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())})
    }()
@@ -441,6 +444,33 @@ func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string
  if !matches{if err=writeAgentFile(keyPath,payload);err!=nil{return err}}
  next.Download.TrustedKey=keyPath
  if err=guard();err!=nil{return err}
+ if err=writeGuided(statePath,next);err!=nil{return err}
+ *s=next
+ return nil
+}
+
+func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,verify func(agentInstallPlan)error)error{
+ if s.Stage!=3 {return fmt.Errorf("installed continuation requires the registration stage")}
+ var download guidedDownload
+ if err:=guidedRead(receipt,&download,false);err!=nil{return err}
+ if err:=validateGuidedDownload(download);err!=nil{return err}
+ if download.Build<=s.Download.Build||download.Channel!=s.Download.Channel{return fmt.Errorf("a newer verified installer on the same channel is required")}
+ planDir,err:=guidedPlanDirectory(dir,*s);if err!=nil{return err}
+ var p agentInstallPlan
+ if err=guidedRead(filepath.Join(planDir,"agent.json"),&p,true);err!=nil{return err}
+ if !setupDigestRE.MatchString(p.SHA256)||agentPlanDigest(p)!=p.SHA256||
+ p.Setup.InstallerBuild!=s.Download.Build||p.Setup.InstallerCommit!=s.Download.Commit||
+ p.HostName!=s.Host||p.TenantID!=s.Tenant||p.Setup.Preflight.Resources.ModelDirectory!=s.Directory {
+  return fmt.Errorf("installed plan does not match the saved session; preserve state")
+ }
+ network,err:=installationNetwork(s.Network);if err!=nil{return err}
+ if p.ControlPlane!=network.Plane{return fmt.Errorf("installed network differs from session")}
+ if err=validateInstalledAgentInputs(p);err!=nil{return err}
+ if err=verify(p);err!=nil{return err}
+ if err=ui.confirm("Use this newer installer to continue registration of the verified inactive installation? Existing files and approvals will be preserved.");err!=nil{return err}
+ if err=ctx.Err();err!=nil{return err}
+ if err=verify(p);err!=nil{return err}
+ next:=*s;next.Download=download
  if err=writeGuided(statePath,next);err!=nil{return err}
  *s=next
  return nil

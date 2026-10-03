@@ -38,7 +38,7 @@ type certificationJournal struct {
 func certificationDigest(p certificationPlan)string{p.SHA256="";raw,_:=json.Marshal(p);return digestSetupBytes(raw)}
 func validateCertificationPlan(p certificationPlan,approved string)error{
  if p.Schema!=1||p.SHA256!=approved||!setupDigestRE.MatchString(approved)||certificationDigest(p)!=approved||
-  agentPlanDigest(p.Agent)!=p.Agent.SHA256||validateAgentInputs(p.Agent)!=nil||
+  agentPlanDigest(p.Agent)!=p.Agent.SHA256||validateInstalledAgentInputs(p.Agent)!=nil||
   p.Run.Manifest.Validate()!=nil||!setupDigestRE.MatchString(p.Run.ManifestSHA256)||
   !hostregistration.UUID.MatchString(p.Run.RunID)||p.Run.TenantID!=p.Agent.TenantID||
   !hostregistration.UUID.MatchString(p.Run.DeviceID)||!hostregistration.UUID.MatchString(p.Run.RequestID)||
@@ -99,7 +99,7 @@ func RunPlanCertification(ctx context.Context,args []string,out,diagnostic io.Wr
  if os.Geteuid()!=0{fmt.Fprintln(diagnostic,"requires root to read registered device identity");return 1}
  var p certificationPlan;p.Schema=1
  raw,err:=readSetupRegular(*path,false);if err==nil{err=decodeSetupJSON(raw,&p.Agent)}
- if err==nil{err=validateAgentInputs(p.Agent)}
+ if err==nil{err=validateInstalledAgentInputs(p.Agent)}
  if err==nil&&agentPlanDigest(p.Agent)!=p.Agent.SHA256{err=fmt.Errorf("agent plan digest differs")}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  unlock,err:=lockSetupState(defaultSetupState);if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
