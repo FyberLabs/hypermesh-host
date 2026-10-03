@@ -19,6 +19,7 @@ const maxAsset = 64 << 20
 
 // Config is one update check. There is no GitHub token on the host.
 type Config struct {
+ CurrentChannel string // immutable installed binary origin, not the selected channel
 	Channel        string
 	CurrentVersion string
 	CurrentCommit  string
@@ -151,7 +152,7 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	if man.Channel != cand.Channel || man.Version != cand.Version || !strings.EqualFold(strings.TrimSpace(man.Commit), strings.TrimSpace(cand.Commit)) || man.Build != cand.Build {
 		return Plan{Action: ActionReject, Reason: "signed release.json does not match the plane"}, nil
 	}
-	plan := Decide(cfg.Channel, cfg.CurrentVersion, cfg.CurrentCommit, cfg.CurrentBuild, cfg.BadBuild, man, cfg.Busy)
+	plan := DecideFromChannel(cfg.CurrentChannel, cfg.Channel, cfg.CurrentVersion, cfg.CurrentCommit, cfg.CurrentBuild, cfg.BadBuild, man, cfg.Busy)
 	if plan.Action != ActionInstall {
 		return plan, nil
 	}

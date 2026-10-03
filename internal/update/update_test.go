@@ -2505,3 +2505,52 @@ func (m *memFS) read(path string) ([]byte, error) {
 	}
 	return append([]byte(nil), b...), nil
 }
+
+func TestInstalledChannelDoesNotConfuseTestPatchWithProductionSemver(t *testing.T) {
+ for _,tc:=range []struct{name,origin string;build,bad int;busy bool;want Action}{
+  {"test to lower production semver",ChannelTest,58,0,false,ActionInstall},
+  {"test same commit promotion",ChannelTest,59,0,false,ActionInstall},
+  {"busy test host",ChannelTest,58,0,true,ActionDefer},
+  {"equal replay",ChannelTest,57,0,false,ActionReject},
+  {"older replay",ChannelTest,56,0,false,ActionReject},
+  {"rolled back candidate",ChannelTest,58,58,false,ActionSkip},
+  {"production downgrade",ChannelProd,58,0,false,ActionSkip},
+  {"legacy conservative","",58,0,false,ActionSkip},
+  {"invalid origin","other",58,0,false,ActionReject},
+ } {
+  t.Run(tc.name,func(t *testing.T){
+   commit:="new";if tc.name=="test same commit promotion"{commit="old"}
+   m:=Manifest{Channel:ChannelProd,Version:"0.0.1",Commit:commit,Build:tc.build}
+   p:=DecideFromChannel(tc.origin,ChannelProd,"0.0.57","old",57,tc.bad,m,tc.busy)
+   if p.Action!=tc.want{t.Fatalf("%+v want %s",p,tc.want)}
+  })
+ }
+ m:=Manifest{Channel:ChannelProd,Version:"not-semver",Commit:"new",Build:58}
+ if DecideFromChannel(ChannelTest,ChannelProd,"0.0.57","old",57,0,m,false).Action!=ActionReject{t.Fatal("test origin bypassed candidate validation")}
+}
+
+func TestTickUsesInstalledOriginForProductionSwitch(t *testing.T){
+ for _,origin:=range []string{ChannelTest,ChannelProd,""}{
+  t.Run("origin-"+origin,func(t *testing.T){
+   dir:=t.TempDir()
+   m:=Manifest{Channel:ChannelProd,Version:"0.0.1",Commit:strings.Repeat("b",40),Build:58}
+   raw,_:=json.Marshal(m);binary:=[]byte("verified agent")
+   name:="hypermesh-agent_0.0.1_linux_arm64"
+   sums:=[]byte(fmt.Sprintf("%x  %s\n%x  %s\n",sha256.Sum256(binary),name,sha256.Sum256(raw),ManifestName))
+   installed,restarted:=false,false
+   p,err:=Tick(context.Background(),Config{
+    Channel:ChannelProd,CurrentChannel:origin,CurrentVersion:"0.0.57",CurrentCommit:strings.Repeat("a",40),CurrentBuild:57,
+    Arch:"arm64",BinaryPath:filepath.Join(dir,"agent"),PubKeyPath:"fixture-key",MarkerPath:filepath.Join(dir,MarkerName),
+   },Hooks{
+    Source:planeSource(m,sums,[]byte("signature"),raw,name,binary),
+    ReadFile:func(string)([]byte,error){return []byte("trusted fixture"),nil},
+    Verify:func(_,_,_ []byte)error{return nil},
+    Install:func(dest string,_ []byte,_ string)(string,error){installed=true;return dest+".backup",nil},
+    Restart:func(context.Context)error{restarted=true;return nil},
+   })
+   if err!=nil{t.Fatal(err)}
+   want:=ActionSkip;if origin==ChannelTest{want=ActionInstall}
+   if p.Action!=want||installed!=(origin==ChannelTest)||restarted!=(origin==ChannelTest){t.Fatalf("%+v installed=%v restarted=%v",p,installed,restarted)}
+  })
+ }
+}

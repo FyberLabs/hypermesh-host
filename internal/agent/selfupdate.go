@@ -117,6 +117,7 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 	}
 	plan, err := update.Tick(ctx, update.Config{
 		Channel:        a.cfg.UpdateChannel,
+        CurrentChannel: buildinfo.CurrentChannel(),
 		CurrentVersion: buildinfo.CurrentVersion(),
 		CurrentCommit:  buildinfo.Current(),
 		CurrentBuild:   buildinfo.CurrentBuild(),

@@ -50,5 +50,34 @@ next_build "$value" "" 10
                 self.assertEqual(result.stdout, expected.replace("\\n", "\n"))
 
 
+
+class TestVersionTests(unittest.TestCase):
+    def version(self, build):
+        return subprocess.run(
+            ["bash", "-euc", 'source "$1"; release_version_test "$2"',
+             "test", str(LAYOUT), build], capture_output=True, text=True)
+
+    def test_patch_tracks_allocation_and_retry_is_stable(self):
+        for build in ("1", "57", "58", "1000"):
+            result = self.version(build)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, f"0.0.{build}\n")
+            self.assertEqual(self.version(build).stdout, result.stdout)
+
+    def test_invalid_allocations_never_become_versions(self):
+        for build in ("", "0", "-1", "01", "1.2", "true", "1\n2", "1;echo nope"):
+            with self.subTest(build=build):
+                result = self.version(build)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+
+    def test_publisher_uses_allocated_build_before_signing(self):
+        script = LAYOUT.with_name("publish-agent.sh").read_text()
+        branch = script.split('  build=$(next_build "$test_build" "$prod_build" "$run_number")', 1)[1].split("\nfi", 1)[0]
+        self.assertIn('version=$(release_version_test "$build")', branch)
+        self.assertNotIn('version=0.0.0', branch)
+        self.assertLess(script.index('version=$(release_version_test "$build")'),
+                        script.index('build_release_binaries "$root"'))
+
 if __name__ == "__main__":
     unittest.main()

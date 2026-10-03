@@ -63,3 +63,10 @@ func Current() string {
 	}
 	return "unknown"
 }
+
+// Channel is the immutable publication channel injected with -X. It must not
+// come from the selected update channel, which an operator can change.
+var Channel string
+
+// CurrentChannel returns the embedded origin, or empty for legacy binaries.
+func CurrentChannel() string { return strings.TrimSpace(Channel) }

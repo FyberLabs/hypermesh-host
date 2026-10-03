@@ -43,7 +43,15 @@ type Manifest struct {
 // back; it stays skipped until a strictly newer build appears. Busy
 // defers an install; it does not skip a real change.
 func Decide(channel, currentVersion, currentCommit string, currentBuild, badBuild int, m Manifest, busy bool) Plan {
+ return DecideFromChannel("",channel,currentVersion,currentCommit,currentBuild,badBuild,m,busy)
+}
+
+// DecideFromChannel uses the installed binary's immutable origin, not the
+// configured destination. Unknown legacy origins retain the conservative
+// production semver check; only an explicitly test-built binary bypasses it.
+func DecideFromChannel(currentChannel, channel, currentVersion, currentCommit string, currentBuild, badBuild int, m Manifest, busy bool) Plan {
 	p := Plan{Version: strings.TrimSpace(m.Version), Commit: strings.TrimSpace(m.Commit)}
+	if currentChannel!="" && currentChannel!=ChannelTest && currentChannel!=ChannelProd { return Plan{Action:ActionReject,Reason:"installed release channel is invalid",Version:p.Version,Commit:p.Commit} }
 	if m.Channel != channel {
 		p.Action = ActionReject
 		p.Reason = "release channel does not match this box"
@@ -82,6 +90,7 @@ func Decide(channel, currentVersion, currentCommit string, currentBuild, badBuil
 			p.Reason = "prod release version is not semver"
 			return p
 		}
+		if currentChannel == ChannelTest { break }
 		cur := strings.TrimPrefix(strings.TrimSpace(currentVersion), "v")
 		if cur != "" && !semverOK(cur) {
 			p.Action = ActionReject
