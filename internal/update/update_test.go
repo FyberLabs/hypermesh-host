@@ -2536,7 +2536,7 @@ func TestTickUsesInstalledOriginForProductionSwitch(t *testing.T){
    m:=Manifest{Channel:ChannelProd,Version:"0.0.1",Commit:strings.Repeat("b",40),Build:58}
    raw,_:=json.Marshal(m);binary:=[]byte("verified agent")
    name:="hypermesh-agent_0.0.1_linux_arm64"
-   sums:=checksumFile(map[string][]byte{name:binary,ManifestName:raw})
+   sums:=[]byte(fmt.Sprintf("%x  %s\n%x  %s\n",sha256.Sum256(binary),name,sha256.Sum256(raw),ManifestName))
    installed,restarted:=false,false
    p,err:=Tick(context.Background(),Config{
     Channel:ChannelProd,CurrentChannel:origin,CurrentVersion:"0.0.57",CurrentCommit:strings.Repeat("a",40),CurrentBuild:57,
