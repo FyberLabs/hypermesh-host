@@ -73,7 +73,9 @@ func validateSetupApprovalPolicy(p SetupPlan, approved string, installed bool) e
 		return fmt.Errorf("only a reviewable prerequisite plan can be approved")
 	}
 	if p.InstallerCommit!=buildinfo.Current() || p.InstallerVersion!=buildinfo.CurrentVersion() || p.InstallerBuild!=buildinfo.CurrentBuild() {
-		return fmt.Errorf("installer build changed; regenerate the plan with this installer")
+		if !installed || p.InstallerBuild<=0 || p.InstallerBuild>=buildinfo.CurrentBuild() {
+   return fmt.Errorf("installer build changed; regenerate the plan with this installer")
+  }
 	}
 	if validateEndpoint(p.ReadinessURL)!=nil || p.Preflight.Resources.ModelDirectory=="" ||
 		(p.Preflight.Resources.MemoryMode!="uma" && p.Preflight.Resources.MemoryMode!="discrete") {
