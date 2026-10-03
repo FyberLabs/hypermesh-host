@@ -193,9 +193,10 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
    p:=agentInstallFixture(t)
    network,_:=installationNetwork("test");p.ControlPlane=network.Plane;p.SHA256=agentPlanDigest(p)
    dir:=t.TempDir();if err:=os.Chmod(dir,0700);err!=nil{t.Fatal(err)}
-   planPath:=filepath.Join(dir,"agent.json");if err:=writeGuided(planPath,p);err!=nil{t.Fatal(err)}
+   planDir:=filepath.Join(dir,"run-"+p.Setup.InstallerCommit);if err:=os.Mkdir(planDir,0700);err!=nil{t.Fatal(err)}
+   planPath:=filepath.Join(planDir,"agent.json");if err:=writeGuided(planPath,p);err!=nil{t.Fatal(err)}
    before,_:=os.ReadFile(planPath)
-   state:=guidedState{Schema:1,Stage:3,Network:"test",Host:p.HostName,Tenant:p.TenantID,Directory:p.Setup.Preflight.Resources.ModelDirectory,
+   state:=guidedState{Schema:1,Stage:3,PlanDirectory:filepath.Base(planDir),Network:"test",Host:p.HostName,Tenant:p.TenantID,Directory:p.Setup.Preflight.Resources.ModelDirectory,
     Download:guidedDownload{Build:21,Commit:p.Setup.InstallerCommit,Channel:"test"}}
    if kind=="stage"{state.Stage=4}
    if kind=="network"{state.Network="production"}
@@ -213,10 +214,24 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
    after,_:=os.ReadFile(planPath);if string(before)!=string(after){t.Fatal("approval changed")}
    if kind=="pass" {
     if err!=nil||checks!=2||state.Stage!=3||state.Download.Build!=22{t.Fatal(err,checks,state.Stage)}
+    var reopened guidedState
+    if err:=guidedRead(session,&reopened,true);err!=nil{t.Fatal(err)}
+    got,err:=guidedPlanDirectory(dir,reopened);if err!=nil||got!=planDir{t.Fatal("cannot resume retained plans",got,err)}
+    buildinfo.Build="23";buildinfo.Commit=strings.Repeat("c",40)
+    download.Build=23;download.Commit=buildinfo.Commit
+    if err:=writeGuided(receipt,download);err!=nil{t.Fatal(err)}
+    ui.in=bufio.NewReader(strings.NewReader("y\n"))
+    if err:=upgradeGuidedInstalled(context.Background(),dir,session,receipt,&reopened,ui,func(agentInstallPlan)error{return nil});err!=nil{t.Fatal("second installer upgrade",err)}
    }else{
     now,_:=os.ReadFile(session)
     if err==nil||string(now)!=string(prior){t.Fatal("unsafe continuation",err)}
    }
   })
+ }
+}
+
+func TestGuidedPlanDirectoryRejectsTraversal(t *testing.T){
+ for _,name:=range []string{"../run-"+strings.Repeat("a",40),"run-short","/tmp/run-"+strings.Repeat("a",40)}{
+  if _,err:=guidedPlanDirectory(t.TempDir(),guidedState{PlanDirectory:name});err==nil{t.Fatal("accepted unsafe directory",name)}
  }
 }

@@ -52,6 +52,10 @@ class BootstrapTests(unittest.TestCase):
         subprocess.run(["gpgconf", "--homedir", str(cls.home), "--kill", "all"], capture_output=True)
         cls.workspace.cleanup()
 
+    def stage_verified(self, *args):
+        Path(args[6]).write_bytes(self.payload)
+        return json.loads(self.meta)
+
     def test_guided_receipt_and_next_command(self):
         import contextlib
         import io
@@ -66,7 +70,7 @@ class BootstrapTests(unittest.TestCase):
                     "--fingerprint", self.fingerprint]
             text = io.StringIO()
             with mock.patch.object(sys, "argv", args), mock.patch.object(
-                    bootstrap, "bootstrap", return_value=json.loads(self.meta)), contextlib.redirect_stdout(text):
+                    bootstrap, "bootstrap", side_effect=self.stage_verified), contextlib.redirect_stdout(text):
                 bootstrap.main()
             receipt = Path(str(output) + ".install.json")
             body = json.loads(receipt.read_text())
@@ -78,7 +82,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertIn("sudo ", text.getvalue())
             self.assertIn("has not run yet", text.getvalue())
             with mock.patch.object(sys, "argv", args), mock.patch.object(
-                    bootstrap, "bootstrap", return_value=json.loads(self.meta)):
+                    bootstrap, "bootstrap", side_effect=self.stage_verified):
                 with self.assertRaises(SystemExit):
                     bootstrap.main()
             self.assertEqual(json.loads(receipt.read_text()), body)
@@ -124,13 +128,59 @@ class BootstrapTests(unittest.TestCase):
             argv = ["bootstrap", "--release-url", "https://example.invalid/release",
                     "--channel", "test", "--min-build", "24", "--arch", "arm64",
                     "--output", str(Path(directory) / "deploy"), "--key-output", str(key)]
-            with mock.patch("sys.argv", argv), mock.patch.object(bootstrap, "bootstrap", return_value=json.loads(self.meta)) as run:
+            with mock.patch("sys.argv", argv), mock.patch.object(bootstrap, "bootstrap", side_effect=self.stage_verified) as run:
                 bootstrap.main()
                 self.assertEqual(run.call_args.args[4:6], (bootstrap.TRUSTED_KEY, bootstrap.TRUSTED_FINGERPRINT))
                 self.assertEqual(key.read_bytes(), bootstrap.TRUSTED_KEY)
                 with self.assertRaises(SystemExit):
                     bootstrap.main()
                 self.assertEqual(key.read_bytes(), bootstrap.TRUSTED_KEY)
+
+    def test_overwrite_requires_request_and_rolls_back_publication_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / name for name in ("deploy", "key", "receipt")]
+            for path in paths:
+                path.write_bytes(b"old")
+            outputs = [(path, b"new", 0o600) for path in paths]
+            with self.assertRaises(bootstrap.Rejected):
+                bootstrap.publish_outputs(outputs, False)
+            self.assertTrue(all(path.read_bytes() == b"old" for path in paths))
+            original = bootstrap.os.replace
+            def fail_receipt(source, destination):
+                if Path(destination) == paths[2] and ".hypermesh-stage-" in str(source):
+                    raise OSError("fixture publication failure")
+                return original(source, destination)
+            with mock.patch.object(bootstrap.os, "replace", side_effect=fail_receipt):
+                with self.assertRaises(OSError):
+                    bootstrap.publish_outputs(outputs, True)
+            self.assertTrue(all(path.read_bytes() == b"old" for path in paths))
+            bootstrap.publish_outputs(outputs, True)
+            self.assertTrue(all(path.read_bytes() == b"new" for path in paths))
+            paths[0].unlink()
+            paths[0].symlink_to(paths[1])
+            with self.assertRaises(bootstrap.Rejected):
+                bootstrap.publish_outputs(outputs, True)
+            self.assertEqual(paths[1].read_bytes(), b"new")
+
+    def test_cli_overwrite_verifies_before_changing_existing_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "deploy"
+            paths = [output, Path(str(output) + ".pub"), Path(str(output) + ".install.json")]
+            for path in paths:
+                path.write_bytes(b"old")
+            args = ["bootstrap", "--release-url", "https://example.invalid/test/24-" + "a"*12,
+                    "--channel", "test", "--min-build", "24", "--arch", "arm64",
+                    "--output", str(output), "--overwrite"]
+            with mock.patch("sys.argv", args), mock.patch.object(bootstrap, "bootstrap", side_effect=bootstrap.Rejected("bad signature")):
+                with self.assertRaises(SystemExit):
+                    bootstrap.main()
+            self.assertTrue(all(path.read_bytes() == b"old" for path in paths))
+            with mock.patch("sys.argv", args), mock.patch.object(bootstrap, "bootstrap", side_effect=self.stage_verified):
+                bootstrap.main()
+            self.assertEqual(output.read_bytes(), self.payload)
+            self.assertEqual(json.loads(paths[2].read_text())["build"], 24)
+            with self.assertRaises(bootstrap.Rejected):
+                bootstrap.validate_outputs([output, output], True)
 
     def test_reject_url_credentials_and_plaintext(self):
         for url in ("http://example.invalid", "https://user:pass@example.invalid", "https://example.invalid/?token=x"):

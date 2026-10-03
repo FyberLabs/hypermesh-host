@@ -412,7 +412,7 @@ func guidedRebootRetry(path string,p setupRebootPlan)([]string,string,error){
 
 func guidedPlanDirectory(dir string,s guidedState)(string,error){
  if s.PlanDirectory==""{return dir,nil}
- if s.PlanDirectory!="run-"+s.Download.Commit||!regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(s.Download.Commit){
+ if !regexp.MustCompile(`^run-[a-f0-9]{40}$`).MatchString(s.PlanDirectory){
   return "",fmt.Errorf("invalid saved plan directory")
  }
  path:=filepath.Join(dir,s.PlanDirectory)
@@ -459,7 +459,8 @@ func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *
  var p agentInstallPlan
  if err=guidedRead(filepath.Join(planDir,"agent.json"),&p,true);err!=nil{return err}
  if !setupDigestRE.MatchString(p.SHA256)||agentPlanDigest(p)!=p.SHA256||
- p.Setup.InstallerBuild!=s.Download.Build||p.Setup.InstallerCommit!=s.Download.Commit||
+ p.Setup.InstallerBuild>s.Download.Build||
+ (s.PlanDirectory!=""&&s.PlanDirectory!="run-"+p.Setup.InstallerCommit)||
  p.HostName!=s.Host||p.TenantID!=s.Tenant||p.Setup.Preflight.Resources.ModelDirectory!=s.Directory {
   return fmt.Errorf("installed plan does not match the saved session; preserve state")
  }
