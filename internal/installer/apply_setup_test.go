@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+ "github.com/FyberLabs/hypermesh-host/internal/hardware"
 )
 
 type applyFixture struct {
@@ -217,3 +218,39 @@ func TestApplyDoesNotTreatChangingFreeMemoryAsIdentityDrift(t *testing.T) {
 	if err:=f.apply();err!=nil{t.Fatal(err)}
 }
 
+
+func TestSetupMemoryToleranceDoesNotRelaxAdmission(t *testing.T) {
+ for _,kind:=range []string{"agx-page","boundary","too-large","runtime-too-large","runtime-device","low-memory","low-disk","allocation"} {
+  t.Run(kind,func(t *testing.T){
+   f:=newApplyFixture(t,false,false)
+   old:=f.plan.Preflight
+   old.Hardware.Facts.MemoryBytes=65868967936
+   old.Hardware=hardware.Recommend(old.Hardware.Facts)
+   old.Resources.Resources.SystemBytes=65868967936
+   runtime:=*old.Resources.Resources.UMARuntime;runtime.TotalBytes=65868967936
+   old.Resources.Resources.UMARuntime=&runtime
+   f.plan.Preflight=old;f.plan.PlanSHA256=setupPlanDigest(f.plan)
+   current:=old
+   current.Hardware.Facts.MemoryBytes-=4096
+   current.Resources.Resources.SystemBytes-=4096
+   now:=runtime;now.TotalBytes-=4096
+   current.Resources.Resources.UMARuntime=&now
+   switch kind {
+   case "boundary":current.Hardware.Facts.MemoryBytes=old.Hardware.Facts.MemoryBytes-hardware.ReportedMemoryTolerance;now.TotalBytes=runtime.TotalBytes-hardware.ReportedMemoryTolerance
+   case "too-large":current.Hardware.Facts.MemoryBytes=old.Hardware.Facts.MemoryBytes-hardware.ReportedMemoryTolerance-1
+   case "runtime-too-large":now.TotalBytes=runtime.TotalBytes-hardware.ReportedMemoryTolerance-1
+   case "runtime-device":now.Device++
+   case "low-memory":current.Resources.Resources.AvailableSystemBytes=1
+   case "low-disk":current.Resources.Resources.DiskFreeBytes=1
+   case "allocation":current.Resources.Resources.UMAAllocationBytes+=GiB
+   }
+   current.Hardware=hardware.Recommend(current.Hardware.Facts)
+   current.Resources.Admission=CheckResources(current.Resources.Resources)
+   f.deps.Preflight=func(context.Context,SetupPlan)(Plan,error){return current,nil}
+   _,_,err:=validateSetupHost(context.Background(),f.plan,f.deps)
+   want:=kind=="agx-page"||kind=="boundary"
+   if (err==nil)!=want {t.Fatalf("accepted=%v: %v",want,err)}
+   if len(f.calls)!=0 {t.Fatal("validation mutated host")}
+  })
+ }
+}

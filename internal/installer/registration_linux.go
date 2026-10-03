@@ -306,7 +306,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  err=verifyRegistrationService(ctx,p)
  if err==nil {
   now:=hardware.Detect(ctx)
-  if now.Fingerprint!=p.Setup.Preflight.Hardware.Fingerprint||now.Backend!=p.Setup.Preflight.Hardware.Backend {err=fmt.Errorf("hardware changed from approved installation; preserve identity and review preflight")}
+  if !hardware.MatchesReportedHardware(p.Setup.Preflight.Hardware,now) {err=fmt.Errorf("hardware changed from approved installation; preserve identity and review preflight")}
  }
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  journalPath:=registrationPath(defaultSetupState,p.SHA256)

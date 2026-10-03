@@ -202,7 +202,13 @@ func resumeSetupReboot(ctx context.Context,p setupRebootPlan,j *setupRebootJourn
  if checkErr==nil&&identityErr==nil&&after==boot&&ctx.Err()==nil{candidate.State="verified";candidate.FailureCode=""}
  if err=d.Save(candidate);err!=nil{return fmt.Errorf("cannot persist post-reboot verification; retry resume-setup")}
  *j=candidate
- if j.State!="verified"{return fmt.Errorf("post-reboot checks failed; inspect prerequisites and review a fresh setup plan if the kernel, OS or packages changed")}
+ if j.State!="verified"{
+  if checkErr!=nil{return fmt.Errorf("post-reboot check failed: %w",checkErr)}
+  if identityErr!=nil{return fmt.Errorf("post-reboot identity check failed: %w",identityErr)}
+  if after!=boot{return fmt.Errorf("boot changed during post-reboot verification; run the installer again on the current boot")}
+  if err:=ctx.Err();err!=nil{return fmt.Errorf("post-reboot verification interrupted: %w",err)}
+  return fmt.Errorf("post-reboot verification was not confirmed")
+ }
  return nil
 }
 func rebootNext(state string)string{
