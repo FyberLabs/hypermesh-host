@@ -48,3 +48,24 @@ func TestAppleAvailableUsesMeasuredPages(t *testing.T) {
     if got:=appleAvailable(input);got!=300*16384 {t.Fatalf("available=%d",got)}
     if appleAvailable("unknown")!=0 {t.Fatal("invented Apple memory")}
 }
+
+func TestReportedHardwareMemoryTolerance(t *testing.T) {
+ facts := Facts{Arch:"arm64", Model:"NVIDIA Jetson AGX Orin Developer Kit", GPU:"Orin (nvgpu)", Tegra:true, CUDA:true, MemoryBytes:65868967936}
+ approved := Recommend(facts)
+ for _,delta := range []int64{-4096,4096,-ReportedMemoryTolerance,ReportedMemoryTolerance,-ReportedMemoryTolerance-1,ReportedMemoryTolerance+1} {
+  currentFacts:=facts;currentFacts.MemoryBytes+=delta
+  current:=Recommend(currentFacts)
+  want:=delta>=-ReportedMemoryTolerance && delta<=ReportedMemoryTolerance
+  if MatchesReportedHardware(approved,current)!=want || MatchesReportedHardware(current,approved)!=want {t.Fatalf("delta %d",delta)}
+ }
+ for _,field:=range []string{"arch","model","processor","gpu","backend","fingerprint","unknown-memory"} {
+  currentFacts:=facts;currentFacts.MemoryBytes-=4096
+  switch field {case "arch":currentFacts.Arch="amd64";case "model":currentFacts.Model="other";case "processor":currentFacts.Processor="other";case "gpu":currentFacts.GPU="other";case "backend":currentFacts.CUDA=false;case "unknown-memory":currentFacts.MemoryBytes=0}
+  current:=Recommend(currentFacts)
+  if field=="fingerprint" {current.Fingerprint="invalid"}
+  if MatchesReportedHardware(approved,current) {t.Fatalf("accepted changed %s",field)}
+ }
+ for _,pair:=range [][2]int64{{0,1},{-1,1},{0,0},{1,9223372036854775807}} {
+  if SameReportedMemory(pair[0],pair[1]) {t.Fatal("invalid totals",pair)}
+ }
+}

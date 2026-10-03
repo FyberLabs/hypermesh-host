@@ -249,3 +249,27 @@ func Benchmark(ctx context.Context,p Profile,model string) error {
     cmd.Stdout=os.Stdout;cmd.Stderr=os.Stderr
     return cmd.Run()
 }
+
+// ReportedMemoryTolerance is only for comparing hardware observations across
+// boots. Never add it to available memory or use it for admission/allocation.
+const ReportedMemoryTolerance int64 = 1 << 30
+
+func SameReportedMemory(a, b int64) bool {
+    if a <= 0 || b <= 0 { return false }
+    if a < b { a, b = b, a }
+    return a-b <= ReportedMemoryTolerance
+}
+
+// MatchesReportedHardware retains the original fingerprint format and compares
+// each observation against the approved baseline, not the previous observation.
+// Normalize only reported total RAM after checking its bounded difference.
+func MatchesReportedHardware(approved, current Profile) bool {
+    if approved.Backend != current.Backend { return false }
+    if approved.Fingerprint != "" && approved.Fingerprint == current.Fingerprint { return true }
+    if !SameReportedMemory(approved.Facts.MemoryBytes, current.Facts.MemoryBytes) { return false }
+    if Recommend(approved.Facts).Fingerprint != approved.Fingerprint ||
+       Recommend(current.Facts).Fingerprint != current.Fingerprint { return false }
+    normalized := current.Facts
+    normalized.MemoryBytes = approved.Facts.MemoryBytes
+    return Recommend(normalized).Fingerprint == approved.Fingerprint
+}

@@ -128,3 +128,28 @@ was already changed to multi-user by the earlier attempt.
 
 Implementation and regression coverage are complete; the signed release still
 needs physical AGX verification. Preserve the failing AGX checkpoint as evidence.
+
+## Reported memory across boots
+
+Completed: prerequisite and registration hardware comparisons accept up to 1 GiB
+(inclusive) of difference in reported total system memory. The UMA runtime total
+uses the same bound; runtime backend and device must still match. Comparisons
+always use the approved baseline, so successive observations cannot accumulate
+tolerance. Fingerprints and saved approval hashes retain their original format.
+
+This tolerance is only for identifying the same hardware. Current resource
+admission still uses exact measured available RAM, runtime free memory, model
+storage, reserves and the approved allocation. No capacity is added or rounded
+up. CPU architecture, model, processor and GPU changes remain rejected.
+
+AGX evidence: across the approved reboot, both system and CUDA total memory
+changed from 65,868,967,936 to 65,868,963,840 bytes (4 KiB). The live preflight
+passed with the original 44 GiB allocation after the NVMe mount was restored.
+Exact total-memory hashing and CUDA-total equality incorrectly blocked resume.
+The underlying reason for the reporting difference has not been established.
+
+Resume now prints the actual failed check, and failed fresh preflights include
+their blockers. Journals retain the structured postflight failure code.
+Regression coverage includes the observed AGX delta, the inclusive 1 GiB bound,
+larger changes, changed hardware/runtime identity and insufficient current RAM
+or disk. Physical confirmation with the new signed build remains pending.

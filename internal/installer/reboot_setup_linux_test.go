@@ -406,3 +406,14 @@ func TestRebootChecksRootOwnedShutdownInhibitorsBeforeSubmission(t *testing.T){
  if err==nil{t.Fatal("failed inhibitor observation accepted")}
  if _,err:=os.Stat(marker);!os.IsNotExist(err){t.Fatal("request ran after failed observation")}
 }
+
+func TestResumeReportsFailedGateWithoutPuttingDetailsInJournal(t *testing.T){
+ p,_:=rebootFixture(t);d:=rebootDepsFixture(p);boot,_:=hostregistration.NewRunID()
+ d.Identity=func()(string,string,error){return p.MachineSHA256,boot,nil}
+ d.Check=func(context.Context,bool)error{return fmt.Errorf("kernel changed from approved to running")}
+ j:=setupRebootJournal{Schema:1,PlanSHA256:p.SHA256,SetupPlanSHA256:p.Setup.PlanSHA256,MachineSHA256:p.MachineSHA256,BootID:p.BootID,State:"requested",RecordedAt:time.Now()}
+ err:=resumeSetupReboot(context.Background(),p,&j,d)
+ if err==nil||!strings.Contains(err.Error(),"kernel changed from approved to running"){t.Fatalf("lost check reason: %v",err)}
+ raw,_:=json.Marshal(j)
+ if j.State!="verification-failed"||j.FailureCode!="postflight"||strings.Contains(string(raw),"kernel changed"){t.Fatal("journal should retain bounded failure code",string(raw))}
+}

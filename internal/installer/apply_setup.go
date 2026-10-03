@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
+ "github.com/FyberLabs/hypermesh-host/internal/hardware"
 )
 
 func digestSetupBytes(raw []byte) string {
@@ -45,9 +46,10 @@ func freshSetupPreflight(ctx context.Context, p SetupPlan) (Plan, error) {
 	args := []string{"--memory-mode", r.MemoryMode, "--model-dir", r.ModelDirectory,
 		"--uma-gib", strconv.FormatInt(r.Resources.UMAAllocationBytes/GiB,10),
 		"--aiuditor-check-url", p.ReadinessURL}
-	if RunPlan(ctx,args,&out,&diagnostic) != 0 { return Plan{}, fmt.Errorf("fresh preflight failed; rerun plan-setup to inspect blockers") }
+	code := RunPlan(ctx,args,&out,&diagnostic)
 	var fresh Plan
-	if json.Unmarshal(out.Bytes(),&fresh) != nil { return Plan{}, fmt.Errorf("cannot read fresh preflight") }
+	if json.Unmarshal(out.Bytes(),&fresh) != nil { return Plan{}, fmt.Errorf("cannot read fresh preflight; run the read-only plan command to inspect probe diagnostics") }
+ if code != 0 { return Plan{}, fmt.Errorf("fresh preflight failed: %s",strings.Join(fresh.Blockers,"; ")) }
 	return fresh,nil
 }
 
@@ -139,28 +141,33 @@ func remainingSetupPackages(p SetupPlan, installed map[string]string) ([]Package
 func validateSetupHost(ctx context.Context,p SetupPlan,deps setupApplyDeps) ([]PackageChange,string,error) {
 	fresh,err:=deps.Preflight(ctx,p)
 	if err!=nil {return nil,"",err}
-	if !fresh.PreliminaryChecksPassed || len(fresh.Blockers)!=0 || !fresh.Resources.Admission.Eligible ||
-		fresh.Hardware.Fingerprint!=p.Preflight.Hardware.Fingerprint || fresh.Hardware.Backend!=p.Preflight.Hardware.Backend ||
-		fresh.Resources.MemoryMode!=p.Preflight.Resources.MemoryMode ||
-		fresh.Resources.ModelDirectory!=p.Preflight.Resources.ModelDirectory ||
-		fresh.Resources.Resources.UMAAllocationBytes!=p.Preflight.Resources.Resources.UMAAllocationBytes {
-		return nil,"",fmt.Errorf("resource or hardware preflight changed or failed; regenerate the plan")
-	}
+
+ if !fresh.PreliminaryChecksPassed||len(fresh.Blockers)!=0 {
+  return nil,"",fmt.Errorf("fresh hardware/resource preflight failed: %s",strings.Join(fresh.Blockers,"; "))
+ }
+ if !fresh.Resources.Admission.Eligible{return nil,"",fmt.Errorf("current model-memory or model-storage admission failed; recheck available capacity")}
+ if !hardware.MatchesReportedHardware(p.Preflight.Hardware,fresh.Hardware){return nil,"",fmt.Errorf("hardware fingerprint changed; review a fresh prerequisite plan")}
+ if fresh.Hardware.Backend!=p.Preflight.Hardware.Backend{return nil,"",fmt.Errorf("hardware backend changed from %s to %s; review a fresh prerequisite plan",p.Preflight.Hardware.Backend,fresh.Hardware.Backend)}
+ if fresh.Resources.MemoryMode!=p.Preflight.Resources.MemoryMode{return nil,"",fmt.Errorf("model memory mode changed; review a fresh prerequisite plan")}
+ if fresh.Resources.ModelDirectory!=p.Preflight.Resources.ModelDirectory{return nil,"",fmt.Errorf("model storage directory changed; review a fresh prerequisite plan")}
+ if fresh.Resources.Resources.UMAAllocationBytes!=p.Preflight.Resources.Resources.UMAAllocationBytes{return nil,"",fmt.Errorf("UMA allocation changed; review a fresh prerequisite plan")}
 	if _,err:=selectSetupProfile(fresh,p.Platform,p.Profile.ID);err!=nil {
 		return nil,"",fmt.Errorf("fresh hardware no longer matches the approved profile")
 	}
 	if p.Preflight.Resources.Resources.UMA {
 		old,now:=p.Preflight.Resources.Resources.UMARuntime,fresh.Resources.Resources.UMARuntime
-		if !validUMARuntime(old) || !validUMARuntime(now) || old.Backend!=now.Backend || old.Device!=now.Device || old.TotalBytes!=now.TotalBytes {
+		if !validUMARuntime(old) || !validUMARuntime(now) || old.Backend!=now.Backend || old.Device!=now.Device || !hardware.SameReportedMemory(old.TotalBytes,now.TotalBytes) {
 			return nil,"",fmt.Errorf("UMA runtime device changed; regenerate the plan")
 		}
 	}
 	raw,err:=deps.Source.read("/etc/os-release")
 	if err!=nil {return nil,"",fmt.Errorf("cannot recheck OS")}
 	id,version,err:=parseSetupOS(raw)
-	if err!=nil || id!=p.Platform.OS || version!=p.Platform.Version {return nil,"",fmt.Errorf("OS changed; regenerate the plan")}
+	if err!=nil{return nil,"",fmt.Errorf("cannot parse current OS")}
+ if id!=p.Platform.OS || version!=p.Platform.Version {return nil,"",fmt.Errorf("OS changed from %s %s to %s %s; review a fresh prerequisite plan",p.Platform.OS,p.Platform.Version,id,version)}
 	raw,err=deps.Source.read("/proc/sys/kernel/osrelease")
-	if err!=nil || strings.TrimSpace(string(raw))!=p.Platform.Kernel {return nil,"",fmt.Errorf("kernel changed; regenerate the plan")}
+	if err!=nil{return nil,"",fmt.Errorf("cannot recheck running kernel")}
+ if current:=strings.TrimSpace(string(raw));current!=p.Platform.Kernel {return nil,"",fmt.Errorf("kernel changed from %s to %s; review a fresh prerequisite plan",p.Platform.Kernel,current)}
 	raw,err=deps.Source.output(ctx,"systemctl","get-default")
 	if err!=nil {return nil,"",fmt.Errorf("cannot recheck boot target")}
 	target:=strings.TrimSpace(string(raw))
