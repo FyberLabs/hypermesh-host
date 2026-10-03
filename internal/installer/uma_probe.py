@@ -121,7 +121,8 @@ def allocate_memory(value, loader=c.CDLL, memory=system_memory):
     """
     value = allocation_request(value)
     found = probe(loader)
-    if any(found[k] != value[k] for k in ("backend", "device", "total_bytes")):
+    if (any(found[k] != value[k] for k in ("backend", "device"))
+            or abs(found["total_bytes"] - value["total_bytes"]) > (1 << 30)):
         raise RuntimeError("runtime device changed")
     cuda_mode = value["backend"] == "cuda"
     lib = loader("libcuda.so.1" if cuda_mode else "libamdhip64.so")
@@ -145,8 +146,8 @@ def allocate_memory(value, loader=c.CDLL, memory=system_memory):
              [c.POINTER(c.c_size_t), c.POINTER(c.c_size_t)], c.byref(free), c.byref(total))
         system, available = memory()
         reserve = max(2 << 30, (system + 9) // 10)
-        if (system != value["system_bytes"] or not 0 < available <= system
-                or total.value != value["total_bytes"] or free.value > total.value
+        if (abs(system - value["system_bytes"]) > (1 << 30) or not 0 < available <= system
+                or abs(total.value - value["total_bytes"]) > (1 << 30) or free.value > total.value
                 or size > min(available - reserve, free.value - (1 << 30))):
             raise RuntimeError("insufficient current memory headroom")
         if cuda_mode:

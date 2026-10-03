@@ -5,6 +5,30 @@ Run the verified executable without arguments to start or resume guided setup.
 The legacy individual commands remain available under `advanced-help`.
 Physical acceptance on AGX-1 and additional hardware remains pending.
 
+## Minimum-only installation admission
+
+Approved and implemented: guided UMA installation requires **more than 12 GiB**
+currently available in both system RAM and the CUDA/HIP runtime. It no longer
+asks for or configures a model-memory allocation. The 16 GiB installed-system
+minimum and minimum model-filesystem space (2.2 × 12 GiB) remain prerequisites.
+Hardware identity, drivers and network checks remain in place.
+
+Free-memory observations in reviewed evidence describe the time of the check;
+they are not a persistent capacity reservation or a promise that a model fits.
+The default plan has no UMA allocation. Later prerequisite rechecks apply the
+same minimum instead of comparing free memory to a saved 44 GiB (or other)
+budget. Benchmarking and actual workload loading still evaluate current
+capacity and allocation failures for their selected model and context.
+
+The advanced explicit `--uma-gib` diagnostic remains available, separately from
+guided installation. Its allocation probe accepts the same bounded 1 GiB total
+memory reporting drift while enforcing exact live free-memory headroom and
+cleanup. Default installation does not run that allocation test.
+
+Existing pre-install sessions upgrade through the signed newer-installer
+recovery path, preserving old evidence and clearing the legacy allocation from
+the new session. No model files or installed identities are removed.
+
 ## Scope before AGX-1 acceptance
 
 Approved on 2026-09-30: finish the Linux onboarding and maintenance work before

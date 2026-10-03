@@ -39,7 +39,7 @@ func runPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	flags.SetOutput(diagnostic)
 	mode := flags.String("memory-mode", "", "uma or discrete")
 	directory := flags.String("model-dir", "", "existing model-cache directory")
-	allocation := flags.Int64("uma-gib", 0, "proposed UMA allocation in GiB")
+	allocation := flags.Int64("uma-gib", 0, "optional diagnostic allocation in GiB; omit for minimum-only installation")
 	address := flags.String("aiuditor-check-url", "", "explicit HTTPS readiness URL; no credentials or query parameters")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp { return 0 }

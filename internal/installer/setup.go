@@ -130,7 +130,7 @@ func runSetupPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	flags.SetOutput(diagnostic)
 	mode := flags.String("memory-mode", "", "uma or discrete")
 	directory := flags.String("model-dir", "", "existing model-cache directory")
-	allocation := flags.Int64("uma-gib", 0, "proposed UMA allocation in GiB")
+	allocation := flags.Int64("uma-gib", 0, "optional diagnostic allocation in GiB; omit for minimum-only installation")
 	address := flags.String("aiuditor-check-url", "", "HTTPS readiness URL")
 	profile := flags.String("profile", "auto", "auto or a profile ID from --list-profiles")
 	wireguardMode := flags.String("wireguard-mode", "kernel", "kernel (default) or userspace; only userspace requires wireguard-go")

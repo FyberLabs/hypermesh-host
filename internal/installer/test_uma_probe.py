@@ -149,16 +149,34 @@ class AllocationTests(unittest.TestCase):
                 driver = AllocationDriver("cuda")
                 request = request_for()
                 memory = lambda:(64 << 30, 48 << 30)
-                if kind == "system": memory = lambda:(63 << 30, 48 << 30)
+                if kind == "system": memory = lambda:((63 << 30)-1, 48 << 30)
                 if kind == "os-pressure": memory = lambda:(64 << 30, 40 << 30)
                 if kind == "runtime-pressure": driver.free = 40 << 30
                 if kind == "backend": request["backend"] = "hip"
                 if kind == "device": request["device"] = 1
-                if kind == "total": request["total_bytes"] = 63 << 30
+                if kind == "total": request["total_bytes"] = (63 << 30)-1
                 if kind == "ambiguous": driver.count = 2
                 with self.assertRaises(RuntimeError):
                     probe.allocate_memory(request, loader_for(cuda=driver), memory)
                 self.assertNotIn("cuMemAlloc_v2", driver.calls)
+
+    def test_total_drift_keeps_live_headroom_checks(self):
+        for delta in (-4096, 4096, -(1 << 30), 1 << 30):
+            for backend in ("cuda", "hip"):
+                driver = AllocationDriver(backend)
+                request = request_for(backend)
+                request["total_bytes"] += delta
+                request["system_bytes"] += delta
+                result = probe.allocate_memory(
+                    request, loader_for(**{backend: driver}),
+                    lambda: (64 << 30, 48 << 30))
+                self.assertTrue(result["cleanup_complete"])
+                driver = AllocationDriver(backend)
+                with self.assertRaises(RuntimeError):
+                    probe.allocate_memory(
+                        request, loader_for(**{backend: driver}),
+                        lambda: (64 << 30, 40 << 30))
+                self.assertFalse(driver.fills)
 
     def test_operation_and_cleanup_failures_never_pass(self):
         for backend, stages in (
