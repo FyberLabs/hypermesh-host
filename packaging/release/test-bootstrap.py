@@ -31,9 +31,9 @@ class BootstrapTests(unittest.TestCase):
         colons = cls.gpg("--with-colons", "--list-keys").decode()
         cls.fingerprint = next(line.split(":")[9] for line in colons.splitlines() if line.startswith("fpr:"))
         cls.key = cls.gpg("--armor", "--export", cls.fingerprint)
-        cls.meta = json.dumps({"channel": "test", "version": "0.0.0", "build": 24,
+        cls.meta = json.dumps({"channel": "test", "version": "0.0.24", "build": 24,
                               "commit": "a"*40, "release_id": "24-"+"a"*12}).encode()
-        cls.name = "hypermesh-deploy_0.0.0_linux_arm64"
+        cls.name = "hypermesh-deploy_0.0.24_linux_arm64"
         cls.payload = b"test executable payload"
         cls.sums = (f"{hashlib.sha256(cls.meta).hexdigest()}  release.json\n"
                     f"{hashlib.sha256(cls.payload).hexdigest()}  {cls.name}\n").encode()

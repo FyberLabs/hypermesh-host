@@ -211,7 +211,7 @@ if [ "$channel" = prod ]; then
 else
   build=$(next_build "$test_build" "$prod_build" "$run_number")
   tag="test"
-  version=0.0.0
+  version=$(release_version_test "$build")
   prerelease=true
   release_id=$(release_id_test "$build" "$GITHUB_SHA")
 fi

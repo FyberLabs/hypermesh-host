@@ -18,12 +18,12 @@ class ReleaseBinaries(unittest.TestCase):
             (dist / "release.json").write_text(json.dumps({"build": 1}))
             subprocess.run(
                 ["bash", "-euc",
-                 'source "$1"; build_release_binaries "$2" "$3" 0.0.0 ""; write_release_checksums "$3" 0.0.0',
+                 'source "$1"; build_release_binaries "$2" "$3" 0.0.57 ""; write_release_checksums "$3" 0.0.57',
                  "test", str(LAYOUT), str(ROOT), str(dist)], check=True)
             expected = {"release.json", "bootstrap.py"}
             for program in ("agent", "deploy"):
                 for arch, machine in (("arm64", 183), ("amd64", 62)):
-                    name = f"hypermesh-{program}_0.0.0_linux_{arch}"
+                    name = f"hypermesh-{program}_0.0.57_linux_{arch}"
                     expected.add(name)
                     header = (dist / name).read_bytes()[:20]
                     self.assertEqual(header[:4], bytes([127]) + b"ELF")
@@ -33,7 +33,7 @@ class ReleaseBinaries(unittest.TestCase):
             self.assertEqual({line.split()[1] for line in manifest.splitlines()}, expected)
             subprocess.run(["sha256sum", "-c", "checksums.txt"], cwd=dist, check=True)
             # The deploy CLI is protected by the same checksums as the agent.
-            with (dist / "hypermesh-deploy_0.0.0_linux_arm64").open("ab") as stream:
+            with (dist / "hypermesh-deploy_0.0.57_linux_arm64").open("ab") as stream:
                 stream.write(b"tampered")
             result = subprocess.run(["sha256sum", "-c", "checksums.txt"], cwd=dist,
                                     capture_output=True)

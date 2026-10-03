@@ -271,6 +271,19 @@ release_id_test() {
   printf '%s-%s\n' "$run" "${hex:0:12}"
 }
 
+# release_version_test BUILD
+# A test artifact's patch is its allocated global build number. Derive it
+# after next_build under the publication lease: retries of that allocation
+# keep the exact version and immutable artifact names.
+release_version_test() {
+  local build=$1
+  if ! [[ "$build" =~ ^[1-9][0-9]*$ ]]; then
+    echo "hypermesh release: version requires a positive canonical build number" >&2
+    return 1
+  fi
+  printf '0.0.%s\n' "$build"
+}
+
 # semver_less A B
 # True when A is a strictly older X.Y.Z than B.
 semver_less() {
