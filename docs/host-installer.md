@@ -1761,3 +1761,9 @@ new guided website instructions. Use a host release containing this guide.
 - [x] Allow newer verified builds to replan only pre-install prerequisites, preserving old approvals and selected model storage.
 - [x] Keep pending headless transitions visible after the default target was already changed.
 - [ ] Repeat the signed-build AGX installation through reboot, reconnect and automatic continuation.
+
+### Historical release cleanup during publication
+
+- [x] Handle a historical test blob disappearing between listing and superseded tagging: skip only after the storage existence API confirms absence.
+- [x] Keep existing-blob tag errors, lookup failures and malformed existence responses fatal before the channel pointer changes.
+- [x] Regression-test missing historical artifacts and protection of the newest 20 releases, publishing release and current channel release.

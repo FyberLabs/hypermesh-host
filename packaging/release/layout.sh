@@ -892,7 +892,7 @@ for line in open(sys.argv[1]):
 # the channel pointer is written, so a tag failure leaves that pointer
 # where it is. A failed list or tag fails the publish.
 tag_superseded_test() {
-  local current=$1 also=${2:-} names tagged name
+  local current=$1 also=${2:-} names tagged name lookup_rc
   if ! names=$(az_blob list --prefix "test/" --query "[].name" --num-results "*" --output tsv --only-show-errors); then
     echo "hypermesh release: listing test/ failed" >&2
     return 1
@@ -945,7 +945,15 @@ for name in names:
       return 1
     fi
     if ! az_blob tag set --name "$name" --tags "superseded=true"; then
-      echo "hypermesh release: tagging ${name} failed" >&2
+      # Lifecycle cleanup can remove an already-superseded blob after list.
+      # Confirm absence rather than interpreting every CLI error as not found.
+      lookup_rc=0
+      blob_exists "$name" || lookup_rc=$?
+      if [ "$lookup_rc" -eq 1 ]; then
+        echo "hypermesh release: ${name} already removed; skipping historical cleanup tag" >&2
+        continue
+      fi
+      echo "hypermesh release: tagging ${name} failed; blob still exists or absence could not be confirmed" >&2
       return 1
     fi
   done <<< "$tagged"

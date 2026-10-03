@@ -133,5 +133,75 @@ reuse_test_signatures 39-example "$DIST"
                 self.assertNotEqual(result.returncode, 0, result.stderr)
 
 
+
+class SupersededTagTests(unittest.TestCase):
+    def run_tagging(self, mode):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            names = Path(directory) / "names"
+            names.write_text("".join(
+                f"test/{n}-aaaaaaaaaaaa/hypermesh-deploy_0.0.0_linux_arm64\n"
+                for n in range(1, 24)))
+            code = r"""
+set -euo pipefail
+source "$LAYOUT"
+az_blob() {
+  case "$1" in
+    list) cat "$NAMES" ;;
+    tag)
+      printf 'TAG %s\n' "$4"
+      if [ "$MODE" != success ] && [[ "$4" == test/1-* ]]; then
+        echo 'ERROR: fixture tagging failure' >&2
+        return 1
+      fi
+      ;;
+    exists)
+      printf 'LOOKUP %s\n' "$3" >&2
+      case "$MODE" in
+        absent) echo false ;;
+        present) echo true ;;
+        lookup_error) return 1 ;;
+        malformed) echo unknown ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+tag_superseded_test 23-aaaaaaaaaaaa 2-aaaaaaaaaaaa
+echo POINTER_ALLOWED
+"""
+            return subprocess.run(
+                ["bash", "-c", code],
+                env=dict(os.environ, MODE=mode, NAMES=str(names),
+                         LAYOUT=str(Path(__file__).with_name("layout.sh").resolve())),
+                capture_output=True, text=True)
+
+    def test_cleanup_race_skips_only_confirmed_missing_blob(self):
+        result = self.run_tagging("absent")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already removed", result.stderr)
+        self.assertIn("TAG test/3-", result.stdout)
+        self.assertIn("POINTER_ALLOWED", result.stdout)
+
+    def test_existing_or_unconfirmed_blob_failure_blocks_pointer(self):
+        for mode in ("present", "lookup_error", "malformed"):
+            with self.subTest(mode=mode):
+                result = self.run_tagging(mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("POINTER_ALLOWED", result.stdout)
+                self.assertNotIn("already removed", result.stderr)
+
+    def test_retention_and_current_pointer_stay_protected(self):
+        result = self.run_tagging("success")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "TAG test/1-aaaaaaaaaaaa/hypermesh-deploy_0.0.0_linux_arm64",
+            "TAG test/3-aaaaaaaaaaaa/hypermesh-deploy_0.0.0_linux_arm64",
+            "POINTER_ALLOWED",
+        ])
+        self.assertNotIn("LOOKUP", result.stderr)
+
 if __name__ == "__main__":
     unittest.main()
