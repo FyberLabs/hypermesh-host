@@ -1803,3 +1803,9 @@ AGX reached installed-awaiting-enrollment but failed before device authorization
 - [x] Add explicit verifier `--overwrite` for the downloaded CLI, public key and receipt. Verify first, stage all outputs, reject symlinks/overlapping destinations, and restore previous files if publication raises an error. Installed services, enrollment and model storage are not modified by the verifier.
 - [x] Preserve the original private plan directory when a newer installer continues registration. Validate its safe directory name independently of the current download commit, and allow subsequent verified installer upgrades while retaining the original installed plan and payload checks.
 - [x] Regression coverage includes reopening a nested saved plan directory after upgrade, a second upgrade, failed verification, publication rollback and symlink refusal. Physical AGX continuation remains to be confirmed with the signed build.
+
+### Device authorization PKCE
+
+- [x] Send a fresh cryptographically random, memory-only S256 challenge with device authorization and its matching verifier on every token poll, matching the native client's declared PKCE requirement. Preserve the same proof across pending, slow-down and timeout retries; generate a new proof for each new flow.
+- [x] Report rejected device requests with HTTP status and allowlisted error categories, never raw server descriptions or credentials. Tests enforce the challenge/verifier relationship and redaction.
+- [ ] Confirm AGX browser sign-in using the signed release. The observed HTTP 400 invalid_request is consistent with the previous missing PKCE parameters; live confirmation is still required.

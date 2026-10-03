@@ -5,6 +5,9 @@ package deviceauth
 import (
 	"bytes"
 	"context"
+ "crypto/rand"
+ "crypto/sha256"
+ "encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -132,6 +135,7 @@ type discovery struct {
 	TokenEndpoint string `json:"token_endpoint"`
 }
 type deviceCode struct {
+ Error string `json:"error"`
 	DeviceCode string `json:"device_code"`
 	UserCode string `json:"user_code"`
 	VerificationURI string `json:"verification_uri"`
@@ -165,13 +169,28 @@ func authorize(ctx context.Context, issuer string, display io.Writer, client *ht
 	if status != 200 || metadata.Issuer != issuer || !sameOrigin(issuer, metadata.DeviceEndpoint) || !sameOrigin(issuer, metadata.TokenEndpoint) {
 		return empty, errors.New("discovery does not match the approved issuer and origin")
 	}
-	form := url.Values{"client_id": {clientID}, "scope": {"openid"}}.Encode()
+	// Bind device authorization and polling with a fresh, memory-only S256 verifier.
+ var random [32]byte
+ if _, err := rand.Read(random[:]); err != nil { return empty, errors.New("cannot generate device authorization proof") }
+ verifier := base64.RawURLEncoding.EncodeToString(random[:])
+ digest := sha256.Sum256([]byte(verifier))
+ challenge := base64.RawURLEncoding.EncodeToString(digest[:])
+ form := url.Values{"client_id": {clientID}, "scope": {"openid"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}.Encode()
 	var code deviceCode
 	// Conservatively include transfer time in the server's code lifetime.
 	issued := time.Now()
 	status, err = request(ctx, client, "POST", metadata.DeviceEndpoint, []byte(form), &code)
 	if err != nil { return empty, err }
-	if status != 200 || code.DeviceCode == "" || len(code.DeviceCode) > 4096 ||
+	if status != 200 {
+  category := "request rejected"
+  switch code.Error {
+  case "invalid_request": category = "invalid_request; check native-client PKCE and device-grant policy"
+  case "invalid_client", "unauthorized_client": category = "native client unavailable or device grant disabled"
+  case "invalid_scope": category = "requested scope is not allowed"
+  }
+  return empty, fmt.Errorf("device authorization request rejected (HTTP %d; %s)", status, category)
+ }
+ if code.DeviceCode == "" || len(code.DeviceCode) > 4096 ||
 		code.ExpiresIn <= 0 || code.ExpiresIn > 600 || code.Interval < 0 || code.Interval > 600 ||
 		!sameOrigin(issuer, code.VerificationURI) || len(code.UserCode) == 0 || len(code.UserCode) > 64 {
 		return empty, errors.New("invalid device authorization response")
@@ -189,7 +208,7 @@ func authorize(ctx context.Context, issuer string, display io.Writer, client *ht
 	}
 	interval := time.Duration(code.Interval)*time.Second
 	if interval == 0 { interval = 5*time.Second }
-	form = url.Values{"client_id": {clientID}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "device_code": {code.DeviceCode}}.Encode()
+	form = url.Values{"client_id": {clientID}, "grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "device_code": {code.DeviceCode}, "code_verifier": {verifier}}.Encode()
 	for {
 		if ctx.Err() != nil { return empty, errors.New("device authorization cancelled or expired") }
 		if err := pause(ctx, interval); err != nil { return empty, errors.New("device authorization cancelled or expired") }
