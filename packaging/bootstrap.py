@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import threading
 import subprocess
 import tempfile
@@ -199,6 +200,60 @@ def bootstrap(release_url, channel, minimum, arch, key, fingerprint, output, fet
     return meta
 
 
+def validate_outputs(paths, overwrite):
+    normalized = [str(path.parent.resolve() / path.name) for path in paths]
+    if len(set(normalized)) != len(paths):
+        raise Rejected("installer, public key and receipt must have distinct paths")
+    for path in paths:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise Rejected("output must be a regular file, never a symlink or directory")
+        if not overwrite:
+            raise Rejected("download files already exist; rerun with --overwrite to replace them after verification")
+
+
+def publish_outputs(outputs, overwrite):
+    paths = [item[0] for item in outputs]
+    validate_outputs(paths, overwrite)
+    staged, backups, published = [], {}, []
+    try:
+        for path, data, mode in outputs:
+            with tempfile.NamedTemporaryFile(prefix=".hypermesh-stage-", dir=path.parent, delete=False) as stream:
+                stage = Path(stream.name)
+                staged.append(stage)
+                stream.write(data)
+                stream.flush()
+                os.fchmod(stream.fileno(), mode)
+                os.fsync(stream.fileno())
+            if path.exists():
+                # Preserve the old inode without truncating it (even if running).
+                with tempfile.NamedTemporaryFile(prefix=".hypermesh-backup-", dir=path.parent, delete=False) as stream:
+                    backup = Path(stream.name)
+                backup.unlink()
+                os.link(path, backup, follow_symlinks=False)
+                backups[path] = backup
+        validate_outputs(paths, overwrite)
+        for (path, _, _), stage in zip(outputs, staged):
+            if overwrite:
+                os.replace(stage, path)
+            else:
+                os.link(stage, path)
+            published.append(path)
+    except BaseException:
+        for path in reversed(published):
+            if path in backups:
+                os.replace(backups.pop(path), path)
+            else:
+                path.unlink()
+        raise
+    finally:
+        for path in staged + list(backups.values()):
+            path.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-url", required=True)
@@ -208,12 +263,14 @@ def main():
     parser.add_argument("--trusted-key", type=Path, help="explicit trust override; default is the bundled reviewed key")
     parser.add_argument("--fingerprint", default=TRUSTED_FINGERPRINT)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--key-output", type=Path, help="save bundled/selected public trust to a NEW file for subsequent plans")
+    parser.add_argument("--key-output", type=Path, help="save bundled/selected public trust for subsequent plans")
+    parser.add_argument("--overwrite", action="store_true", help="replace existing installer, public key and receipt after successful verification")
     args = parser.parse_args()
     if __import__("shutil").which("gpg") is None:
         parser.exit(1, "Verifier needs GnuPG (gpg). On Ubuntu: sudo apt-get install gnupg\n")
     if args.key_output is None:
         args.key_output = Path(str(args.output) + ".pub")
+    receipt = Path(str(args.output) + ".install.json")
     try:
         key = TRUSTED_KEY
         if args.trusted_key:
@@ -221,34 +278,24 @@ def main():
                 key = stream.read((1 << 20) + 1)
         if not key or len(key) > 1 << 20:
             raise Rejected("trusted key is empty or too large")
-        meta = bootstrap(args.release_url, args.channel, args.min_build, args.arch,
-                         key, args.fingerprint, args.output)
-        if args.key_output:
-            with tempfile.NamedTemporaryFile(prefix=".hypermesh-trust-", dir=args.key_output.parent) as stage:
-                stage.write(key)
-                stage.flush()
-                os.fchmod(stage.fileno(), 0o644)
-                os.fsync(stage.fileno())
-                os.link(stage.name, args.key_output)
+        destinations = [args.output, args.key_output, receipt]
+        validate_outputs(destinations, args.overwrite)
+        # Nothing in the existing download is changed until every artifact has
+        # passed signature, hash and release constraint verification.
+        with tempfile.TemporaryDirectory(prefix=".hypermesh-download-", dir=args.output.parent) as directory:
+            staged_output = Path(directory) / "installer"
+            meta = bootstrap(args.release_url, args.channel, args.min_build, args.arch,
+                             key, args.fingerprint, staged_output)
+            body = json.dumps({"schema": 1, "release_url": args.release_url,
+                               "channel": meta["channel"], "build": meta["build"],
+                               "commit": meta["commit"], "trusted_key": str(args.key_output.absolute()),
+                               "fingerprint": args.fingerprint}).encode()
+            publish_outputs([(args.output, staged_output.read_bytes(), 0o700),
+                             (args.key_output, key, 0o644), (receipt, body, 0o600)], args.overwrite)
     except Rejected as error:
         parser.exit(1, f"bootstrap: {error}\n")
     except OSError:
-        parser.exit(1, "bootstrap: cannot read trusted key or create output; existing files are never overwritten\n")
-    receipt = Path(str(args.output) + ".install.json")
-    key_path = args.key_output or args.trusted_key
-    if key_path is None:
-        parser.exit(1, "Verifier: use --key-output ./hypermesh-release.pub so guided setup can retain its trusted key.\n")
-    try:
-        with receipt.open("x", encoding="utf-8") as stream:
-            os.chmod(receipt, 0o600)
-            json.dump({"schema": 1, "release_url": args.release_url,
-                       "channel": meta["channel"], "build": meta["build"],
-                       "commit": meta["commit"], "trusted_key": str(key_path.resolve()),
-                       "fingerprint": args.fingerprint}, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except OSError:
-        parser.exit(1, "Verifier: cannot save the installation receipt; use a new download directory.\n")
+        parser.exit(1, "bootstrap: cannot read trust or write download files; check directory permissions. Existing files require --overwrite.\n")
     print(f"Verified Linux/{args.arch} CLI: channel={meta['channel']} build={meta['build']}")
     print("Verification complete. The installer has not run yet.")
     print("Keep the installer, public key and installation receipt together.")
