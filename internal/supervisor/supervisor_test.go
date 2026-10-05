@@ -195,6 +195,11 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	runtimeStopping := make(chan struct{})
+	releaseRuntime := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRuntime) }) }
+	defer release()
 	s := &Supervisor{
 		Placement: PlacementHost,
 		StateDir:  dir,
@@ -214,6 +219,8 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 		},
 		Runtime: func(ctx context.Context) error {
 			<-ctx.Done()
+			close(runtimeStopping)
+			<-releaseRuntime
 			return ctx.Err()
 		},
 	}
@@ -231,6 +238,17 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
+	select {
+	case <-runtimeStopping:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime did not receive cancellation")
+	}
+	select {
+	case <-errCh:
+		t.Fatal("supervisor returned before its runtime stopped")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
 	select {
 	case <-errCh:
 	case <-time.After(2 * time.Second):
