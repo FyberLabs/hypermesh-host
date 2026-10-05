@@ -257,3 +257,14 @@ func TestRegistrationAllowsUnrelatedPackageChangesOnly(t *testing.T) {
   if _,err:=registrationPackages(f.plan,current);err==nil{t.Fatal("accepted",change)}
  })}
 }
+
+func TestRegistrationRequiresNativeDocker(t *testing.T) {
+ for _,pkg:=range []string{"docker.io","docker-ce","docker-ce:arm64","docker-ce:amd64","podman-docker",""}{t.Run(pkg,func(t *testing.T){
+  f:=newApplyFixture(t,false,false)
+  delete(f.installed,"docker.io")
+  if pkg!=""{f.installed[pkg]="1.0"}
+  _,err:=registrationPackages(f.plan,f.installed)
+  wantOK:=pkg=="docker.io"||pkg=="docker-ce"||pkg=="docker-ce:arm64"
+  if (err==nil)!=wantOK{t.Fatalf("%s: %v",pkg,err)}
+ })}
+}

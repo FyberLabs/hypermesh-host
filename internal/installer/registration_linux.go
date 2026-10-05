@@ -223,6 +223,8 @@ func (r preflightRegistrationRemote) Complete(ctx context.Context,request hostre
 // Registration performs no APT transaction: unrelated installed packages are not
 // approval inputs. Preserve the approved prerequisites and protected platform.
 func registrationPackages(p SetupPlan,installed map[string]string)([]PackageChange,error) {
+ arch:=normalizedSetupArch(p.Preflight.Hardware.Facts.Arch)
+ if !hasNativePackage(installed,"docker.io",arch)&&!hasNativePackage(installed,"docker-ce",arch){return nil,fmt.Errorf("Docker engine is missing or is not a recognized native package; repair prerequisites")}
  for _,required:=range p.Profile.RequiredPackages {
   found:=false
   for name:=range installed {
