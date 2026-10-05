@@ -147,6 +147,10 @@ func remainingSetupPackages(p SetupPlan, installed map[string]string) ([]Package
 }
 
 func validateSetupHost(ctx context.Context,p SetupPlan,deps setupApplyDeps) ([]PackageChange,string,error) {
+ return validateSetupHostPackages(ctx,p,deps,remainingSetupPackages)
+}
+
+func validateSetupHostPackages(ctx context.Context,p SetupPlan,deps setupApplyDeps,reconcile func(SetupPlan,map[string]string)([]PackageChange,error)) ([]PackageChange,string,error) {
 	fresh,err:=deps.Preflight(ctx,p)
 	if err!=nil {return nil,"",err}
 
@@ -184,7 +188,7 @@ func validateSetupHost(ctx context.Context,p SetupPlan,deps setupApplyDeps) ([]P
 	}
 	installed,err:=readSetupInventory(ctx,deps.Source)
 	if err!=nil {return nil,"",err}
-	remaining,err:=remainingSetupPackages(p,installed)
+	remaining,err:=reconcile(p,installed)
 	if err!=nil {return nil,"",err}
 	if len(remaining)>0 {
 		args:=[]string{"--simulate","--no-install-recommends","--no-remove","install"}

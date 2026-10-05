@@ -245,3 +245,26 @@ func TestExpiredApprovalRenewsAndCompletesInSameRun(t *testing.T) {
  if !archived||!published||j.State!="registered-inactive"||j.Owner!=old.Owner||j.Request.RequestID==old.Request.RequestID{t.Fatal("incomplete recovery")}
  if remote.completes!=1||!strings.Contains(display.String(),old.Request.RequestID)||!strings.Contains(display.String(),j.Request.RequestID){t.Fatal("new approval not requested")}
 }
+
+func TestRegistrationAllowsUnrelatedPackageChangesOnly(t *testing.T) {
+ f:=newApplyFixture(t,false,false)
+ f.installed["unrelated-editor"]="2.0"
+ if _,err:=registrationPackages(f.plan,f.installed);err!=nil{t.Fatal(err)}
+ if _,err:=remainingSetupPackages(f.plan,f.installed);err==nil{t.Fatal("APT mutation gate lost strict inventory binding")}
+ for _,change:=range []string{"required","protected","new-protected"}{t.Run(change,func(t *testing.T){
+  current:=map[string]string{};for name,version:=range f.installed{current[name]=version}
+  switch change {case "required":delete(current,"gnupg");case "protected":current["nvidia-l4t-core"]="changed";case "new-protected":current["nvidia-new-driver"]="1"}
+  if _,err:=registrationPackages(f.plan,current);err==nil{t.Fatal("accepted",change)}
+ })}
+}
+
+func TestRegistrationRequiresNativeDocker(t *testing.T) {
+ for _,pkg:=range []string{"docker.io","docker-ce","docker-ce:arm64","docker-ce:amd64","podman-docker",""}{t.Run(pkg,func(t *testing.T){
+  f:=newApplyFixture(t,false,false)
+  delete(f.installed,"docker.io")
+  if pkg!=""{f.installed[pkg]="1.0"}
+  _,err:=registrationPackages(f.plan,f.installed)
+  wantOK:=pkg=="docker.io"||pkg=="docker-ce"||pkg=="docker-ce:arm64"
+  if (err==nil)!=wantOK{t.Fatalf("%s: %v",pkg,err)}
+ })}
+}

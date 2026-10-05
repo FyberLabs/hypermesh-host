@@ -8,6 +8,7 @@ import (
  "encoding/base64"
  "encoding/hex"
  "encoding/json"
+ "errors"
  "fmt"
  "io"
  "net/http"
@@ -55,8 +56,15 @@ type Status struct {
 type Client struct {
  base, tenant, bearer string
  http *http.Client
+ reauthenticate func(context.Context)error
  timeout time.Duration
 }
+var ErrSessionExpired = errors.New("setup authentication expired or invalid")
+
+// SetSessionRecovery renews installer login once per rejected operation. It never
+// applies to device credentials or permission denial. The owner must be rebound.
+func (c *Client) SetSessionRecovery(recover func(context.Context)error) { c.reauthenticate = recover }
+
 func (Client) String() string { return "[redacted registration client]" }
 func (Client) GoString() string { return "[redacted registration client]" }
 func (Client) MarshalJSON() ([]byte,error) { return []byte("\"[redacted registration client]\""),nil }
@@ -108,7 +116,9 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
   if resp.StatusCode==401&&strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/") {
    action="saved device credential rejected; verify registration in the dashboard and preserve local identity"
   }
-  return fmt.Errorf("registration API %s %s returned HTTP %d: %s; request and keys retained",method,path,resp.StatusCode,action)
+  failure:=fmt.Errorf("registration API %s %s returned HTTP %d: %s; request and keys retained",method,path,resp.StatusCode,action)
+  if resp.StatusCode==401&&!strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/"){return fmt.Errorf("%w: %v",ErrSessionExpired,failure)}
+  return failure
  }
  raw,err=io.ReadAll(io.LimitReader(resp.Body,(1<<20)+1))
  if err!=nil || len(raw)>1<<20 || ctx.Err()!=nil {return fmt.Errorf("registration response unavailable, too large or timed out")}
@@ -163,7 +173,11 @@ func (c *Client) operation(ctx context.Context,method,suffix string,r Request,bo
  var s Status
  if err:=r.Validate();err!=nil{return s,err}
  if c.bearer=="" {return s,fmt.Errorf("tenant login required")}
- if err:=c.request(ctx,method,"/api/v1/hypermesh/host-registrations"+suffix,c.bearer,body,&s);err!=nil{return s,err}
+ err:=c.request(ctx,method,"/api/v1/hypermesh/host-registrations"+suffix,c.bearer,body,&s)
+ if errors.Is(err,ErrSessionExpired)&&c.reauthenticate!=nil {
+  if err=c.reauthenticate(ctx);err==nil {err=c.request(ctx,method,"/api/v1/hypermesh/host-registrations"+suffix,c.bearer,body,&s)}
+ }
+ if err!=nil{return s,err}
  return s,c.check(s,r)
 }
 func (c *Client) Create(ctx context.Context,r Request)(Status,error){return c.operation(ctx,"POST","",r,r)}

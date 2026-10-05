@@ -142,3 +142,23 @@ func TestLoginFailureIdentifiesEndpointWithoutCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistrationReauthenticatesOnlyOnceOn401(t *testing.T) {
+ for _,code:=range []int{200,401,403}{t.Run(fmt.Sprint(code),func(t *testing.T){
+  request:=fixture(t);calls,logins:=0,0
+  server:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+   calls++
+   var body Request;json.NewDecoder(r.Body).Decode(&body)
+   if body!=request{t.Error("request changed during sign-in")}
+   if calls==1||code!=200{status:=code;if code==200{status=401};w.WriteHeader(status);return}
+   if r.Header.Get("Authorization")!="Bearer renewed"{t.Error("old session reused")}
+   json.NewEncoder(w).Encode(status(request,"pending"))
+  }));defer server.Close()
+  c,_:=New(server.URL,testTenant);c.http=server.Client();c.bearer="old"
+  c.SetSessionRecovery(func(context.Context)error{logins++;c.bearer="renewed";return nil})
+  _,err:=c.Create(context.Background(),request)
+  if code==200&&err!=nil{t.Fatal(err)}
+  if code!=200&&err==nil{t.Fatal("failure suppressed")}
+  if code==403 {if logins!=0||calls!=1{t.Fatal("permission denial restarted login")}} else if logins!=1||calls!=2{t.Fatal("unbounded login retry",logins,calls)}
+ })}
+}
