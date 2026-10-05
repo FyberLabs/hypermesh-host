@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/agent"
@@ -317,10 +318,19 @@ func (s *Supervisor) runHost(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	go s.watchEnroll(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	// The caller may release state storage as soon as Run returns. Cancel and
+	// join every host worker on both cancellation and an early worker error.
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	workers.Add(3)
+	go func() { defer workers.Done(); s.watchEnroll(ctx) }()
 	errCh := make(chan error, 2)
-	go func() { errCh <- Supervise(ctx, s.Runtime, s.backoff()) }()
-	go func() { errCh <- a.Run(ctx) }()
+	go func() { defer workers.Done(); errCh <- Supervise(ctx, s.Runtime, s.backoff()) }()
+	go func() { defer workers.Done(); errCh <- a.Run(ctx) }()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

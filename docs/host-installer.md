@@ -1030,7 +1030,7 @@ immutable request are atomically saved under the shared installer lock at
 Retries require the same owner, plan, tenant, issuer, dashboard and class.
 Raw API errors and transport bodies are omitted from diagnostics.
 
-The API grants host membership, exchanges the login for a tenant session, and
+The API grants host membership, exchanges the login for a purpose-bound host setup session, and
 creates the pending request. Approval polling uses five-second intervals;
 individual requests have 15-second whole-response deadlines and 1 MiB limits,
 with a 25-minute command bound covering login and approval. Transient API errors
@@ -1817,9 +1817,17 @@ AGX reached installed-awaiting-enrollment but failed before device authorization
 - [x] Display **Hypermesh host setup** through the server client declaration; request basic identity and email without profile, user-role or offline scopes.
 - [x] Preserve browser host approval, original-owner checks and the later certification/activation gates.
 
-Deploy the Panopticon realm reconciliation and client allowlist update before
+Deploy the Panopticon realm reconciliation and setup-only authentication endpoints before
 this installer release. Existing registered host credentials and WireGuard keys
 remain unchanged. An interrupted login starts a fresh device grant with the new
 client; no manual identity reset is needed. Confirm consent and enrollment on
 the live AGX after both deployments; local protocol tests do not establish that
 the live Keycloak realm has refreshed.
+
+
+Host setup now uses `/auth/host-setup/me`, `/auth/host-setup/enrollment/grant`
+and `/auth/host-setup/session`. The returned session is valid only for host
+registration and certification owner approvals, with no account roles or tenant
+permissions. Generic account APIs reject both this session and the raw setup
+device token. Browser host approval remains independent. Older servers without
+these endpoints must be deployed before this installer build.
