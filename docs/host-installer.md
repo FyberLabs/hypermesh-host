@@ -333,7 +333,7 @@ creating the dashboard entry. If the identity-provider approval page cannot
 show the enrollment details, the application must provide that confirmation
 within the browser flow.
 
-Use the existing public `hypermesh-native` device-authorization client.
+Use the public `hypermesh-host-setup` device-authorization client.
 Do not introduce a client secret, collect the owner's password in the terminal,
 or require copying a user access token. Authorization expires and binds to the
 pending enrollment. Keep device codes and temporary user tokens out of logs,
@@ -923,7 +923,7 @@ existing hourly checker is not a claim that dashboard push already works.
 
 Implemented in `internal/deviceauth`: `Authorize` discovers the configured HTTPS
 issuer, requests an `openid` device grant for the existing public
-`hypermesh-native` client, displays the verification URL and user code, and
+`hypermesh-host-setup` client, displays the verification URL and user code, and
 returns an in-memory access token after approval. There is deliberately no
 standalone command that prints an access token or asks an operator to paste it.
 
@@ -1809,3 +1809,17 @@ AGX reached installed-awaiting-enrollment but failed before device authorization
 - [x] Send a fresh cryptographically random, memory-only S256 challenge with device authorization and its matching verifier on every token poll, matching the native client's declared PKCE requirement. Preserve the same proof across pending, slow-down and timeout retries; generate a new proof for each new flow.
 - [x] Report rejected device requests with HTTP status and allowlisted error categories, never raw server descriptions or credentials. Tests enforce the challenge/verifier relationship and redaction.
 - [ ] Confirm AGX browser sign-in using the signed release. The observed HTTP 400 invalid_request is consistent with the previous missing PKCE parameters; live confirmation is still required.
+
+
+### Dedicated host setup consent
+
+- [x] Use `hypermesh-host-setup` for device authorization and token polling, retaining S256 PKCE.
+- [x] Display **Hypermesh host setup** through the server client declaration; request basic identity and email without profile, user-role or offline scopes.
+- [x] Preserve browser host approval, original-owner checks and the later certification/activation gates.
+
+Deploy the Panopticon realm reconciliation and client allowlist update before
+this installer release. Existing registered host credentials and WireGuard keys
+remain unchanged. An interrupted login starts a fresh device grant with the new
+client; no manual identity reset is needed. Confirm consent and enrollment on
+the live AGX after both deployments; local protocol tests do not establish that
+the live Keycloak realm has refreshed.
