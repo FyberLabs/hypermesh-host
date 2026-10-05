@@ -220,10 +220,37 @@ func (r preflightRegistrationRemote) Complete(ctx context.Context,request hostre
  if err:=r.check(ctx);err!=nil{return hostregistration.Status{},err}
  return r.registrationRemote.Complete(ctx,request)
 }
+// Registration performs no APT transaction: unrelated installed packages are not
+// approval inputs. Preserve the approved prerequisites and protected platform.
+func registrationPackages(p SetupPlan,installed map[string]string)([]PackageChange,error) {
+ for _,required:=range p.Profile.RequiredPackages {
+  found:=false
+  for name:=range installed {
+   _,arch,qualified:=strings.Cut(name,":")
+   if packageBase(name)==required&&(!qualified||arch==normalizedSetupArch(p.Preflight.Hardware.Facts.Arch)){found=true}
+  }
+  if !found{return nil,fmt.Errorf("required package %s is missing; repair prerequisites",required)}
+ }
+ protected:=map[string]string{}
+ for _,pkg:=range p.Platform.ProtectedPackages {protected[pkg.Name]=pkg.To}
+ for name,version:=range protected {if installed[name]!=version{return nil,fmt.Errorf("protected package %s changed from %s to %s; review the platform change",name,version,installed[name])}}
+ for name:=range installed {if protectedSetupPackage(name)&&protected[name]==""{return nil,fmt.Errorf("protected package %s was added; review the platform change",name)}}
+ // Retain exact versions and architecture checks for approved additions while
+ // comparing against the current unrelated inventory rather than an old hash.
+ current:=map[string]string{}
+ for name,version:=range installed {current[name]=version}
+ for _,pkg:=range p.Packages {
+  for name:=range current {if packageBase(name)==packageBase(pkg.Name){delete(current,name)}}
+ }
+ raw,_:=json.Marshal(current)
+ p.Platform.PackageStateSHA256=digestSetupBytes(raw)
+ return remainingSetupPackages(p,installed)
+}
+
 func registrationPreflight(ctx context.Context,p agentInstallPlan,class string)(Plan,error) {
  var fresh Plan
  deps:=setupApplyDeps{Source:setupSource{},Preflight:func(ctx context.Context,plan SetupPlan)(Plan,error){var err error;fresh,err=freshSetupPreflight(ctx,plan);return fresh,err}}
- remaining,target,err:=validateSetupHost(ctx,p.Setup,deps)
+ remaining,target,err:=validateSetupHostPackages(ctx,p.Setup,deps,registrationPackages)
  if err==nil&&(len(remaining)>0||(p.Setup.HeadlessRequested&&target!="multi-user.target")){err=fmt.Errorf("approved prerequisites are incomplete")}
  if err==nil{err=registrationClass(class,fresh)}
  return fresh,err
@@ -249,7 +276,7 @@ var errRegistrationExpired = errors.New("registration approval expired")
 func recoverRegistrationExpiry(run func() error, renew func() error, display io.Writer) error {
  err := run()
  if !errors.Is(err, errRegistrationExpired) { return err }
- fmt.Fprintln(display,"The browser approval timed out. Preparing a new approval link; the previous request will be archived.")
+ fmt.Fprintln(display,"The saved installation request has expired; this is separate from your new login. Preparing a fresh approval request.")
  if err = renew(); err != nil { return err }
  return run()
 }
@@ -348,12 +375,18 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  if err==nil{err=checkRegistrationIdentity("",j,j.State=="registered-inactive")}
  if err!=nil{fmt.Fprintln(diagnostic,"registration state validation failed; preserve existing files:",err);return 1}
  save:=func(value registrationJournal)error{return saveRegistration(journalPath,value)}
- token,err:=deviceauth.Authorize(ctx,*issuer,diagnostic)
- if err==nil {err=remote.Login(ctx,token.Bearer(),func(owner string)error{
+ login:=func(ctx context.Context)error{
+ token,e:=deviceauth.Authorize(ctx,*issuer,diagnostic);if e!=nil{return e}
+ return remote.Login(ctx,token.Bearer(),func(owner string)error{
   if j.Owner!=""&&j.Owner!=owner{return fmt.Errorf("login belongs to a different owner; use the original account")}
   if j.Owner==""{j.Owner=owner;return save(j)}
   return nil
  })}
+ err=login(ctx)
+ remote.SetSessionRecovery(func(ctx context.Context)error{
+  fmt.Fprintln(diagnostic,"Setup authentication needs sign-in again. Keeping the installation request and keys.")
+  return login(ctx)
+ })
  if err==nil&&*restart {
   var status hostregistration.Status
   status,err=remote.Get(ctx,j.Request)
