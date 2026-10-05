@@ -52,7 +52,7 @@ type registrationStatus struct {
 func publicRegistration(j registrationJournal)registrationStatus {
  next:="Rerun register-agent with the same plan and login to recover; do not delete the private journal."
  switch j.State {
- case "expired":next="Run guided setup again to renew browser approval automatically; previous request history is preserved."
+ case "expired":next="Rerun the same register-agent command to authenticate again and renew browser approval automatically; previous request history is preserved. If using guided setup, rerun the same installer."
  case "denied":next="Approval ended. Rerun with --restart-approval to archive this request and require new browser approval with fresh keys."
  case "retired":next="Host was retired. Do not restore its identity; use a fresh reinstall workflow."
  case "registered-inactive":next="Host registered and paused. Compatibility, certification and service activation remain pending."
