@@ -1846,3 +1846,5 @@ start a fresh device login. A successful Keycloak consent does not by itself
 verify the gateway and service request path.
 
 Browser approval expiry now renews automatically once within `register-agent`, including guided setup. The installer rechecks the server decision, owner, inactive installation, and current preflight; archives the previous private request; then creates fresh keys and shows a new approval link. Explicit browser approval is still required. Denied requests require an explicit restart; retired hosts retain their existing lifecycle rules. Repeated expiry or infrastructure failures preserve state for the next guided run.
+
+After the automatic renewal is exhausted, standalone installations rerun the same `register-agent` command to authenticate and renew again. Guided installations rerun the installer. Standalone recovery does not require a guided `session.json`.
