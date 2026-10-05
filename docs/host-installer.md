@@ -1831,3 +1831,14 @@ registration and certification owner approvals, with no account roles or tenant
 permissions. Generic account APIs reject both this session and the raw setup
 device token. Browser host approval remains independent. Older servers without
 these endpoints must be deployed before this installer build.
+
+
+### Public auth routing and failure diagnostics
+
+- [x] Call the gateway's canonical `/auth/host-setup/*` paths; auth-service does not use the product `/api/v1` prefix.
+- [x] Report the HTTP method and endpoint when a registration API request fails, without printing tokens or response bodies.
+
+Deploy the gateway's setup-token routing fix before retrying with this installer
+build. Existing identity files and approvals remain valid; rerun guided setup to
+start a fresh device login. A successful Keycloak consent does not by itself
+verify the gateway and service request path.
