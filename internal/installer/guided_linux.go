@@ -249,7 +249,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintln(g.ui.out,"Connect this host to your account. Open the sign-in link on any device, then approve this host in your dashboard.")
   args:=[]string{"--plan",agentPath,"--approve-plan",ap.SHA256,"--issuer",n.Issuer,"--dashboard-url",n.Dashboard,"--class-id",s.Class}
   var registration registrationJournal
-  if guidedRead(registrationPath(defaultSetupState,ap.SHA256),&registration,true)==nil && (registration.State=="denied"||registration.State=="expired") {
+  if guidedRead(registrationPath(defaultSetupState,ap.SHA256),&registration,true)==nil && registration.State=="denied" {
    if err=g.ui.confirm("The previous browser approval ended. Start a new approval with fresh keys?");err!=nil{return err}
    args=append(args,"--restart-approval")
   }

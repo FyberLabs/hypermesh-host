@@ -9,6 +9,7 @@ import (
  "encoding/base64"
  "encoding/hex"
  "encoding/json"
+ "errors"
  "flag"
  "fmt"
  "io"
@@ -51,7 +52,8 @@ type registrationStatus struct {
 func publicRegistration(j registrationJournal)registrationStatus {
  next:="Rerun register-agent with the same plan and login to recover; do not delete the private journal."
  switch j.State {
- case "denied","expired":next="Approval ended. Rerun with --restart-approval to archive this request and require new browser approval with fresh keys."
+ case "expired":next="Run guided setup again to renew browser approval automatically; previous request history is preserved."
+ case "denied":next="Approval ended. Rerun with --restart-approval to archive this request and require new browser approval with fresh keys."
  case "retired":next="Host was retired. Do not restore its identity; use a fresh reinstall workflow."
  case "registered-inactive":next="Host registered and paused. Compatibility, certification and service activation remain pending."
  }
@@ -240,6 +242,18 @@ func waitRegistration(ctx context.Context,d time.Duration)error {
  timer:=time.NewTimer(d);defer timer.Stop()
  select {case <-ctx.Done():return fmt.Errorf("approval interrupted; rerun to recover");case <-timer.C:return nil}
 }
+var errRegistrationExpired = errors.New("registration approval expired")
+
+// Renew only a server-confirmed expiry, once per invocation. Denial and retirement
+// remain explicit decisions; transport and journal failures never start over.
+func recoverRegistrationExpiry(run func() error, renew func() error, display io.Writer) error {
+ err := run()
+ if !errors.Is(err, errRegistrationExpired) { return err }
+ fmt.Fprintln(display,"The browser approval timed out. Preparing a new approval link; the previous request will be archived.")
+ if err = renew(); err != nil { return err }
+ return run()
+}
+
 func finishRegistration(ctx context.Context,j *registrationJournal,remote registrationRemote,save func(registrationJournal)error,publish func(registrationJournal)error,display io.Writer,wait func(context.Context,time.Duration)error)error {
  // Retrying Create is idempotent, including after a lost completion response.
  s,err:=remote.Create(ctx,j.Request);if err!=nil{return err}
@@ -253,7 +267,8 @@ func finishRegistration(ctx context.Context,j *registrationJournal,remote regist
   case "completed":
    if err=publish(*j);err!=nil{return err}
    j.State="registered-inactive";return save(*j)
-  case "denied","expired","retired":return fmt.Errorf("registration %s; identity retained and service inactive",s.State)
+  case "expired":return errRegistrationExpired
+  case "denied","retired":return fmt.Errorf("registration %s; identity retained and service inactive",s.State)
   case "approved":s,err=remote.Complete(ctx,j.Request)
   case "pending":
    if !printed {fmt.Fprintln(display,"Approve this host installation in your dashboard:",j.Dashboard+s.ApprovalPath);printed=true}
@@ -356,10 +371,18 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
    if err:=verifyRegistrationService(ctx,p);err!=nil{return err}
    _,err:=registrationPreflight(ctx,p,*class);return err
   }}
-  err=finishRegistration(ctx,&j,checked,save,func(value registrationJournal)error{
+  err=recoverRegistrationExpiry(func()error{return finishRegistration(ctx,&j,checked,save,func(value registrationJournal)error{
    if err:=verifyRegistrationService(ctx,p);err!=nil{return err}
    return publishRegistration("",value)
-  },diagnostic,waitRegistration)
+  },diagnostic,waitRegistration)},func()error{
+   status,e:=remote.Get(ctx,j.Request);if e!=nil{return e}
+   if status.State!="expired"{return fmt.Errorf("registration changed while renewing approval; preserve local state")}
+   if e=verifyRegistrationService(ctx,p);e!=nil{return e}
+   fresh,e:=registrationPreflight(ctx,p,*class);if e!=nil{return e}
+   if e=checkRegistrationIdentity("",j,false);e!=nil{return e}
+   j,e=restartRegistration(j,status,p,fresh,func(old registrationJournal)error{return archiveRegistration(defaultSetupState,old)},save)
+   return e
+  },diagnostic)
  }
  if encodeErr:=json.NewEncoder(out).Encode(publicRegistration(j));encodeErr!=nil{return 1}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
