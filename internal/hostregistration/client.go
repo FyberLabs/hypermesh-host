@@ -108,7 +108,7 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
   if resp.StatusCode==401&&strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/") {
    action="saved device credential rejected; verify registration in the dashboard and preserve local identity"
   }
-  return fmt.Errorf("registration API returned HTTP %d: %s; request and keys retained",resp.StatusCode,action)
+  return fmt.Errorf("registration API %s %s returned HTTP %d: %s; request and keys retained",method,path,resp.StatusCode,action)
  }
  raw,err=io.ReadAll(io.LimitReader(resp.Body,(1<<20)+1))
  if err!=nil || len(raw)>1<<20 || ctx.Err()!=nil {return fmt.Errorf("registration response unavailable, too large or timed out")}
@@ -119,15 +119,15 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
 // compare the authenticated subject; browser/device tokens never enter journals.
 func (c *Client) Login(ctx context.Context,token string,bind func(string)error) error {
  var me struct {Sub string `json:"sub"`}
- if err:=c.request(ctx,"GET","/api/v1/auth/host-setup/me",token,nil,&me);err!=nil{return err}
+ if err:=c.request(ctx,"GET","/auth/host-setup/me",token,nil,&me);err!=nil{return err}
  if me.Sub=="" || len(me.Sub)>256 {return fmt.Errorf("verified login has no valid subject")}
  if err:=bind(me.Sub);err!=nil{return err}
  var grant struct {Granted []string `json:"granted"`; Refused []string `json:"refused"`; DeviceEnrolled bool `json:"device_enrolled"`}
- if err:=c.request(ctx,"POST","/api/v1/auth/host-setup/enrollment/grant",token,map[string]any{"tenant_id":c.tenant,"held_roles":[]string{"host"}},&grant);err!=nil{return err}
+ if err:=c.request(ctx,"POST","/auth/host-setup/enrollment/grant",token,map[string]any{"tenant_id":c.tenant,"held_roles":[]string{"host"}},&grant);err!=nil{return err}
  host:=false;for _,r:=range grant.Granted {host=host||r=="host"}
  if !host || len(grant.Refused)>0 || grant.DeviceEnrolled {return fmt.Errorf("host organization membership was not granted")}
  var session struct {AccessToken string `json:"access_token"`;TokenType string `json:"token_type"`;ExpiresIn int `json:"expires_in"`}
- if err:=c.request(ctx,"POST","/api/v1/auth/host-setup/session",token,map[string]string{"tenant_id":c.tenant},&session);err!=nil{return err}
+ if err:=c.request(ctx,"POST","/auth/host-setup/session",token,map[string]string{"tenant_id":c.tenant},&session);err!=nil{return err}
  if session.AccessToken=="" || !strings.EqualFold(session.TokenType,"Bearer") || session.ExpiresIn<=0 {return fmt.Errorf("tenant session unavailable")}
  c.bearer=session.AccessToken
  return nil

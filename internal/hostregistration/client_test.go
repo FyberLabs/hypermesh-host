@@ -29,13 +29,13 @@ func TestLoginAndBoundRegistration(t *testing.T) {
  server:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,q *http.Request){
   if q.Header.Get("X-Tenant-ID")!=testTenant{t.Error("missing tenant")}
   switch q.URL.Path {
-  case "/api/v1/auth/host-setup/me":if q.Header.Get("Authorization")!="Bearer raw-private"{t.Error("missing device token")};fmt.Fprint(w,`{"sub":"verified-owner"}`)
-  case "/api/v1/auth/host-setup/enrollment/grant":
+  case "/auth/host-setup/me":if q.Header.Get("Authorization")!="Bearer raw-private"{t.Error("missing device token")};fmt.Fprint(w,`{"sub":"verified-owner"}`)
+  case "/auth/host-setup/enrollment/grant":
    grants++;if !bound{t.Error("grant before durable owner binding")}
    var body map[string]any;json.NewDecoder(q.Body).Decode(&body)
    if body["tenant_id"]!=testTenant{t.Error("wrong grant tenant")}
    fmt.Fprint(w,`{"granted":["host"],"refused":[],"device_enrolled":false}`)
-  case "/api/v1/auth/host-setup/session":fmt.Fprint(w,`{"access_token":"session-private","token_type":"Bearer","expires_in":900}`)
+  case "/auth/host-setup/session":fmt.Fprint(w,`{"access_token":"session-private","token_type":"Bearer","expires_in":900}`)
   default:
    if q.Header.Get("Authorization")!="Bearer session-private"{t.Error("raw token used for registration")}
    s:=status(r,"pending")
@@ -100,7 +100,7 @@ func TestOriginAndRequestValidation(t *testing.T){
 func TestInstalledPlanPrefixAndUppercaseTenant(t *testing.T){
  seen:=false
  server:=httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
-  if r.URL.Path!="/gateway/prefix/api/v1/auth/host-setup/me"||r.Header.Get("X-Tenant-ID")!=testTenant{t.Error("lost prefix or noncanonical tenant")}
+  if r.URL.Path!="/gateway/prefix/auth/host-setup/me"||r.Header.Get("X-Tenant-ID")!=testTenant{t.Error("lost prefix or noncanonical tenant")}
   seen=true;fmt.Fprint(w,`{"sub":"owner"}`)
  }));defer server.Close()
  c,err:=New(server.URL+"/gateway/prefix/",strings.ToUpper(testTenant))
@@ -112,4 +112,33 @@ func TestInstalledPlanPrefixAndUppercaseTenant(t *testing.T){
 func TestBaseURLMatchesApprovedPrintablePath(t *testing.T){
  c,err:=New("https://plane.example/gateway/with space/",strings.ToUpper(testTenant))
  if err!=nil||c.base!="https://plane.example/gateway/with space"{t.Fatal("rejected printable path accepted by agent plan",err)}
+}
+
+func TestLoginFailureIdentifiesEndpointWithoutCredentials(t *testing.T) {
+	for _, path := range []string{"/auth/host-setup/me", "/auth/host-setup/enrollment/grant", "/auth/host-setup/session"} {
+		t.Run(path, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == path {
+					w.WriteHeader(401)
+					fmt.Fprint(w, "untrusted-private-response")
+					return
+				}
+				if r.URL.Path == "/auth/host-setup/me" {
+					fmt.Fprint(w, `{"sub":"owner"}`)
+					return
+				}
+				fmt.Fprint(w, `{"granted":["host"],"refused":[],"device_enrolled":false}`)
+			}))
+			defer server.Close()
+			c, _ := New(server.URL, testTenant)
+			c.http = server.Client()
+			err := c.Login(context.Background(), "raw-private-token", func(string) error { return nil })
+			if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "HTTP 401") {
+				t.Fatalf("missing stage: %v", err)
+			}
+			if strings.Contains(err.Error(), "private") {
+				t.Fatal("credential or response leaked")
+			}
+		})
+	}
 }
