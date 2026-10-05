@@ -1050,8 +1050,10 @@ it is not silently regenerated. Completed registration recovery does not repeat
 resource admission, but still checks installed files, service and hardware
 identity. Archived hosts cannot be revived.
 
-Denial or expiry leaves the private journal intact and the service inactive.
-To start again, rerun the same command with `--restart-approval`. It verifies
+Expiry renews browser approval automatically once per invocation, preserving the
+old request in private history and requiring a fresh browser approval. Denial
+leaves the journal intact and the service inactive. To restart a denied request,
+rerun with `--restart-approval`. It verifies
 the original owner, confirms a denied/expired decision from the server, reruns
 preflight, archives the private request and generates fresh keys and a new
 request requiring another browser approval. Pending, completed or retired
@@ -1842,3 +1844,5 @@ Deploy the gateway's setup-token routing fix before retrying with this installer
 build. Existing identity files and approvals remain valid; rerun guided setup to
 start a fresh device login. A successful Keycloak consent does not by itself
 verify the gateway and service request path.
+
+Browser approval expiry now renews automatically once within `register-agent`, including guided setup. The installer rechecks the server decision, owner, inactive installation, and current preflight; archives the previous private request; then creates fresh keys and shows a new approval link. Explicit browser approval is still required. Denied requests require an explicit restart; retired hosts retain their existing lifecycle rules. Repeated expiry or infrastructure failures preserve state for the next guided run.

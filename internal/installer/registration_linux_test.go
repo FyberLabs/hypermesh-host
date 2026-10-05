@@ -7,6 +7,7 @@ import (
  "context"
  "encoding/json"
  "fmt"
+ "io"
  "os"
  "path/filepath"
  "strings"
@@ -214,4 +215,33 @@ func TestRegistrationFromMinimumOnlyInstallation(t *testing.T) {
  if err=validateRegistration(saved,p,base.Issuer,base.Dashboard,"agx-large");err!=nil{t.Fatal(err)}
  fresh.Resources.Resources.AvailableSystemBytes=12*GiB
  if _,err=newRegistration(p,base.Issuer,base.Dashboard,"agx-large",fresh);err==nil{t.Fatal("stale admission allowed insufficient current memory")}
+}
+
+func TestRegistrationExpiryRecoveryIsBounded(t *testing.T) {
+ for _,kind:=range []string{"expired","denied","retired","transport","archive-failed","expired-twice"} {t.Run(kind,func(t *testing.T){
+  runs,renewals:=0,0
+  run:=func()error{runs++;if runs>1&&kind!="expired-twice"{return nil};if kind=="expired"||kind=="expired-twice"||kind=="archive-failed"{return errRegistrationExpired};return fmt.Errorf("registration %s",kind)}
+  renew:=func()error{renewals++;if kind=="archive-failed"{return fmt.Errorf("archive failed")};return nil}
+  err:=recoverRegistrationExpiry(run,renew,io.Discard)
+  if kind=="expired" {if err!=nil||runs!=2||renewals!=1{t.Fatalf("%v runs=%d renewals=%d",err,runs,renewals)}} else if err==nil {t.Fatal("failure was suppressed")}
+  if renewals>1||runs>2{t.Fatal("unbounded recovery")}
+  if (kind=="denied"||kind=="retired"||kind=="transport")&&renewals!=0{t.Fatal("renewed without expiry")}
+  if kind=="archive-failed"&&runs!=1{t.Fatal("continued after failed archive")}
+ })}
+}
+
+func TestExpiredApprovalRenewsAndCompletesInSameRun(t *testing.T) {
+ p,j:=registrationFixture(t);j.Owner="owner";old:=j
+ fresh:=p.Setup.Preflight
+ fresh.Hardware=hardware.Recommend(hardware.Facts{Arch:"arm64",Model:"NVIDIA Jetson AGX Orin",Tegra:true,CUDA:true})
+ fresh.Resources.Resources.SystemBytes=64*GiB;fresh.Resources.Admission.AcceleratorBytes=32*GiB
+ remote:=&fakeRegistrationRemote{states:[]string{"pending","expired","pending","approved","completed"},deviceID:"12345678-1234-4234-8234-123456789aaa"}
+ var display bytes.Buffer
+ archived,published:=false,false
+ save:=func(registrationJournal)error{return nil}
+ run:=func()error{return finishRegistration(context.Background(),&j,remote,save,func(value registrationJournal)error{published=true;return nil},&display,noRegistrationWait)}
+ renew:=func()error{var err error;j,err=restartRegistration(j,hostregistration.Status{State:"expired"},p,fresh,func(previous registrationJournal)error{archived=true;if previous.Request!=old.Request{t.Fatal("lost history")};return nil},save);return err}
+ if err:=recoverRegistrationExpiry(run,renew,&display);err!=nil{t.Fatal(err)}
+ if !archived||!published||j.State!="registered-inactive"||j.Owner!=old.Owner||j.Request.RequestID==old.Request.RequestID{t.Fatal("incomplete recovery")}
+ if remote.completes!=1||!strings.Contains(display.String(),old.Request.RequestID)||!strings.Contains(display.String(),j.Request.RequestID){t.Fatal("new approval not requested")}
 }
