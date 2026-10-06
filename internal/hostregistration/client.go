@@ -113,6 +113,9 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
   case 429:action="rate limited; wait before retrying the same command"
   case 503:action="plane temporarily unavailable; retry the same command"
   }
+  if resp.StatusCode==409&&path=="/api/v1/hypermesh/agent/onboarding/certification/plan" {
+   action=certificationPlanConflict(resp.Body)
+  }
   if resp.StatusCode==401&&strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/") {
    action="saved device credential rejected; verify registration in the dashboard and preserve local identity"
   }
@@ -183,3 +186,30 @@ func (c *Client) operation(ctx context.Context,method,suffix string,r Request,bo
 func (c *Client) Create(ctx context.Context,r Request)(Status,error){return c.operation(ctx,"POST","",r,r)}
 func (c *Client) Get(ctx context.Context,r Request)(Status,error){return c.operation(ctx,"GET","/"+r.RequestID,r,nil)}
 func (c *Client) Complete(ctx context.Context,r Request)(Status,error){return c.operation(ctx,"POST","/"+r.RequestID+"/complete",r,nil)}
+
+// Never print arbitrary response bodies: only exact known protocol messages
+// select local guidance. The request timeout also bounds this error-body read.
+func certificationPlanConflict(body io.Reader) string {
+ fallback := "certification planning prerequisites are not satisfied; the platform operator must inspect the host state and certification program; no new registration is needed"
+ raw,err:=io.ReadAll(io.LimitReader(body,4097))
+ if err!=nil||len(raw)>4096{return fallback}
+ var response struct{Detail string `json:"detail"`}
+ if json.Unmarshal(raw,&response)!=nil{return fallback}
+ switch response.Detail {
+ case "A complete supported AIuditor class envelope is required":
+  return "the platform has no complete supported certification baseline for this hardware class and suite model; the program operator must record or restore a reviewed class envelope from real measurements, then retry; do not re-enroll this host"
+ case "Configure matching reviewed model source, size, hash, runtime and context pins":
+  return "the platform certification model is not fully configured; the program operator must align its immutable download source, size, hash, runtime image and context with the class envelope, then retry"
+ case "Configure an authenticated AIuditor certification program", "AIuditor certification program is not ready":
+  return "the platform AIuditor certification program is unavailable or unconfigured; the program operator must restore its authenticated program and suite configuration, then retry"
+ case "Resolve intake, certification, hold or selling state before onboarding":
+  return "the host is not in an eligible inactive certification state; review hardware intake, suspension, scheduling hold, loaded workloads and selling state in the dashboard"
+ case "Reconcile existing lease or agent jobs before inactive certification":
+  return "the host has an outstanding lease or agent job; reconcile that workload before running inactive certification"
+ case "Certification approval expired; prepare a fresh run":
+  return "the saved certification run expired; prepare a fresh certification plan while retaining the registered host identity"
+ case "Review unrelated suspension before onboarding retry":
+  return "the host has a suspension outside this onboarding run; a platform operator must review it before certification can continue"
+ }
+ return fallback
+}

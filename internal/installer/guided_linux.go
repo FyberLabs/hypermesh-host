@@ -338,7 +338,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    if *receipt==""{*receipt=exe+".install.json"}
    err=func()error{
     unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
-    if s.Stage==3 || s.Stage==4 {
+    if s.Stage>=3 && s.Stage<=6 {
      return upgradeGuidedInstalled(ctx,dir,statePath,*receipt,&s,ui,func(p agentInstallPlan)error{return verifyRegistrationService(ctx,p)})
     }
     return upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
@@ -468,7 +468,7 @@ func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string
 }
 
 func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,verify func(agentInstallPlan)error)error{
- if s.Stage!=3 && s.Stage!=4 {return fmt.Errorf("installed continuation requires registration or connectivity checks")}
+ if s.Stage<3 || s.Stage>6 {return fmt.Errorf("installed continuation requires inactive onboarding")}
  var download guidedDownload
  if err:=guidedRead(receipt,&download,false);err!=nil{return err}
  if err:=validateGuidedDownload(download);err!=nil{return err}

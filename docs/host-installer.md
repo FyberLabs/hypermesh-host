@@ -1907,3 +1907,25 @@ The mode repair writes only `agent.env`, `hypermesh-agent.service`, and
 `hypermesh-wg.service`. If a newer installer's unrelated embedded payloads differ
 (for example its rollback helper), this narrow repair requires a separately
 reviewed update instead of silently replacing that executable or trust material.
+
+### Certification planning after a successful tunnel check
+
+A successful registration, HTTPS heartbeat and WireGuard probe do not establish
+a certification baseline. The platform also needs an AIuditor class envelope
+from reviewed lab measurements for the selected hardware class and suite model,
+plus matching immutable model source, size, file hash, runtime image and context
+pins. Suite bootstrap provisions membership only; it cannot restore measurement
+evidence lost in a database rebuild.
+
+The installer maps known certification-plan refusals to specific local guidance
+for missing envelopes, model pins, program availability, host state and existing
+workloads. Unknown response bodies remain private and bounded; they are not
+printed as diagnostic text. A newer verified installer can continue inactive
+onboarding through certification planning and activation preparation while
+preserving existing plans and identities. Activated hosts still require the
+maintenance workflow.
+
+AGX physical validation: userspace repair, authenticated heartbeat, fresh
+WireGuard handshake, gateway overlay echo and temporary-interface cleanup have
+passed. Certification currently awaits genuine class-envelope measurements on
+the rebuilt test plane; hardware intake approval and activation remain pending.
