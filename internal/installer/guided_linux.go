@@ -19,6 +19,7 @@ import (
 
  "github.com/FyberLabs/hypermesh-host/internal/buildinfo"
  "github.com/FyberLabs/hypermesh-host/internal/hardware"
+ "github.com/FyberLabs/hypermesh-host/internal/tunnel"
  "github.com/FyberLabs/hypermesh-host/internal/hostregistration"
 )
 
@@ -131,6 +132,8 @@ type guidedFlow struct {
  save func()error
  rebootNeeded func(SetupPlan)(bool,error)
  boot func()(string,string,error)
+ wireguardMode func()string
+ repairWireguard func(context.Context,string,agentInstallPlan)(agentInstallPlan,error)
 }
 func guidedCommand(name string)guidedRunner {
  switch name {
@@ -204,6 +207,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintln(g.ui.out,"Checking hardware, memory, model storage and required software…")
   args:=[]string{"--memory-mode",s.Mode,"--model-dir",s.Directory,
    "--aiuditor-check-url",n.Plane+"/api/v1/hypermesh/public/host-installation","--profile","auto"}
+  if g.wireguardMode!=nil { mode:=g.wireguardMode();fmt.Fprintln(g.ui.out,"WireGuard mode:",mode);args=append(args,"--wireguard-mode",mode) }
   if s.Headless{args=append(args,"--headless")}
   if _,err=g.plan(ctx,"plan-setup","setup.json",args...);err!=nil{return err}
   var p SetupPlan;if err=guidedRead(setupPath,&p,true);err!=nil{return err}
@@ -259,6 +263,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   if err=g.advance();err!=nil{return err}
  }
  if s.Stage==4 {
+  if g.repairWireguard!=nil {ap,err=g.repairWireguard(ctx,g.dir,ap);if err!=nil{return err}}
   fmt.Fprintln(g.ui.out,"Checking registration, WireGuard connectivity and heartbeat…")
   if err=g.execute(ctx,"check-agent","--plan",agentPath,"--approve-plan",ap.SHA256,"--wireguard","--heartbeat");err!=nil{return err}
   if err=g.advance();err!=nil{return err}
@@ -323,11 +328,18 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if _,e:=os.Lstat(statePath);e==nil{
   err=guidedRead(statePath,&s,true)
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
+  if err==nil && s.Stage==4 {
+   err=func()error{
+    unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
+    planDir,e:=guidedPlanDirectory(dir,s);if e!=nil{return e}
+    return resumeWireguardTransition(ctx,planDir,"",wireguardTransitionDeps{})
+   }()
+  }
   if err==nil && (s.Download.Build!=buildinfo.CurrentBuild()||s.Download.Commit!=buildinfo.Current()) {
    if *receipt==""{*receipt=exe+".install.json"}
    err=func()error{
     unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
-    if s.Stage==3 {
+    if s.Stage==3 || s.Stage==4 {
      return upgradeGuidedInstalled(ctx,dir,statePath,*receipt,&s,ui,func(p agentInstallPlan)error{return verifyRegistrationService(ctx,p)})
     }
     return upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
@@ -391,6 +403,11 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
+  wireguardMode:func()string{if tunnel.KernelAvailable(){return "kernel"};return "userspace"},
+  repairWireguard:func(ctx context.Context,dir string,p agentInstallPlan)(agentInstallPlan,error){
+   unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return p,e};defer unlockState()
+   return repairGuidedWireguard(ctx,dir,p,ui)
+  },
   rebootNeeded:func(p SetupPlan)(bool,error){
    needed,e:=liveRebootRequired("");if e!=nil{return false,e}
    headless,e:=headlessRebootNeeded(ctx,p,rebootSetupSource());return needed||headless,e
@@ -452,7 +469,7 @@ func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string
 }
 
 func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,verify func(agentInstallPlan)error)error{
- if s.Stage!=3 {return fmt.Errorf("installed continuation requires the registration stage")}
+ if s.Stage!=3 && s.Stage!=4 {return fmt.Errorf("installed continuation requires registration or connectivity checks")}
  var download guidedDownload
  if err:=guidedRead(receipt,&download,false);err!=nil{return err}
  if err:=validateGuidedDownload(download);err!=nil{return err}
@@ -470,7 +487,7 @@ func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *
  if p.ControlPlane!=network.Plane{return fmt.Errorf("installed network differs from session")}
  if err=validateInstalledAgentInputs(p);err!=nil{return err}
  if err=verify(p);err!=nil{return err}
- if err=ui.confirm("Use this newer installer to continue registration of the verified inactive installation? Existing files and approvals will be preserved.");err!=nil{return err}
+ if err=ui.confirm("Use this newer installer to continue onboarding of the verified inactive installation? Existing files and approvals will be preserved.");err!=nil{return err}
  if err=ctx.Err();err!=nil{return err}
  if err=verify(p);err!=nil{return err}
  next:=*s;next.Download=download

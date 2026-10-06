@@ -1862,3 +1862,38 @@ Standalone users can request the same prompt with `register-agent --review-platf
 Saved registration journals now retain the server expiry. A request already confirmed expired by the server is archived and replaced locally before a device code is shown. A locally pending request is reconciled after authentication even when its saved deadline has passed, because browser approval can happen after the last poll. Owner binding is preserved and must match the new login. Approved requests with an uncertain completion result are reconciled with the server instead of silently replaced. Legacy pending journals without an expiry are checked with the server after authentication and before Create or approval polling.
 
 Guided onboarding and certification also offer installed-package reviews after registration completes. Standalone `register-agent --review-platform-updates` accepts reviews for completed/inactive registrations while preserving their established device identity.
+
+### Guided WireGuard selection and inactive-host repair
+
+Guided setup detects kernel WireGuard availability before generating the
+prerequisite plan. A loaded/loadable kernel module selects kernel mode; otherwise
+the guide selects userspace mode and includes its package requirements in the
+normal reviewed installation plan. This is capability detection, not a hardcoded
+Jetson exception.
+
+An already registered host at the connectivity stage can accept a newer verified
+installer without repeating enrollment. If its approved kernel mode is
+unavailable, the guide checks the installed userspace prerequisites and TUN
+device, then asks permission to update `agent.env`, the agent unit, and the
+activation-gated `hypermesh-wg.service`. It reloads systemd but leaves services
+inactive. Missing userspace prerequisites are reported before any configuration
+changes; this repair does not install packages outside an approved setup plan.
+
+The approved transition is recorded in the private guided plan directory as
+`wireguard-transition.json`, including the original and replacement plans. It is
+bound to the machine and permits only the deterministic kernel-to-userspace
+change. Device ID, owner, request ID, device credential, WireGuard keypair, signed
+agent binary, and model files remain unchanged. Original installation and
+registration journals remain available. The replacement manifest includes the
+userspace unit, so later certification and activation verify and use the same
+mode that passed connectivity.
+
+If the command is interrupted, running the same installer resumes the approved
+transition before other installation checks. Recovery accepts only exact old or
+approved replacement bytes, verifies inactive services and existing identity,
+and refuses conflicting files, an activation marker, or a lease. There is no
+need to delete installer state, edit `agent.env` manually, or enroll again.
+
+Implementation and interruption/identity-preservation tests are complete. The
+physical retest on AGX with kernel `6.8.12-1021-tegra` (no WireGuard module,
+`wireguard-go` and `/dev/net/tun` present) remains pending the signed release.
