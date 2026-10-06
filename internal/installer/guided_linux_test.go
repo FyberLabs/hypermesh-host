@@ -240,7 +240,7 @@ func TestGuidedPlanDirectoryRejectsTraversal(t *testing.T){
 func TestGuidedSelectsWireguardModeBeforePrerequisites(t *testing.T){
  for _,mode:=range []string{"kernel","userspace"}{t.Run(mode,func(t *testing.T){
   g,_,_:=fixtureGuided(t,"n\n")
-  g.wireguardMode=func()string{return mode}
+  g.wireguardMode=func()(string,string,error){return mode,mode,nil}
   base:=g.run;saw:=false
   g.run=func(name string)guidedRunner{return func(ctx context.Context,args []string,out,diagnostic io.Writer)int{
    if name=="plan-setup" {for i,a:=range args{if a=="--wireguard-mode"&&i+1<len(args)&&args[i+1]==mode{saw=true}}}

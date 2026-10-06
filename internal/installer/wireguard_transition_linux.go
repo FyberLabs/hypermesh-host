@@ -332,3 +332,27 @@ func resumeWireguardTransition(ctx context.Context, dir, root string, deps wireg
 	r.Complete = true
 	return writeGuided(path, r)
 }
+
+// Check kernel capability first. TUN is a userspace transport device, not a
+// WireGuard kernel-module indicator. Missing packages go through plan-setup.
+func detectGuidedWireguard() (string, string, error) {
+	if tunnel.KernelAvailable() {
+		return selectGuidedWireguard(true, false, false)
+	}
+	info, err := os.Stat("/dev/net/tun")
+	tun := err == nil && info.Mode()&os.ModeCharDevice != 0
+	_, err = exec.LookPath("wireguard-go")
+	return selectGuidedWireguard(false, tun, err == nil)
+}
+func selectGuidedWireguard(kernel, tun, userspace bool) (string, string, error) {
+	if kernel {
+		return "kernel", "kernel support found; using kernel mode", nil
+	}
+	if !tun {
+		return "", "", fmt.Errorf("kernel WireGuard is unavailable and /dev/net/tun is missing or is not a character device; restore TUN support before userspace setup")
+	}
+	if userspace {
+		return "userspace", "kernel module unavailable; wireguard-go and /dev/net/tun found", nil
+	}
+	return "userspace", "kernel module unavailable; /dev/net/tun found; required userspace packages will be included in the installation plan for your approval", nil
+}

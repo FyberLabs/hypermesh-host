@@ -166,3 +166,26 @@ func TestWireguardTransitionRejectsUnapprovedState(t *testing.T) {
 		})
 	}
 }
+
+func TestGuidedWireguardCapabilityPriority(t *testing.T) {
+	for _, tt := range []struct {
+		name                   string
+		kernel, tun, userspace bool
+		mode                   string
+		fail                   bool
+	}{
+		{"kernel_without_userspace", true, false, false, "kernel", false},
+		{"kernel_preferred", true, true, true, "kernel", false},
+		{"userspace_ready", false, true, true, "userspace", false},
+		{"userspace_package_needs_review", false, true, false, "userspace", false},
+		{"binary_without_tun", false, false, true, "", true},
+		{"neither_backend", false, false, false, "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mode, detail, err := selectGuidedWireguard(tt.kernel, tt.tun, tt.userspace)
+			if mode != tt.mode || (err != nil) != tt.fail || (!tt.fail && detail == "") {
+				t.Fatal(mode, detail, err)
+			}
+		})
+	}
+}

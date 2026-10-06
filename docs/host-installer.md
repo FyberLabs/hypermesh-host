@@ -1867,8 +1867,10 @@ Guided onboarding and certification also offer installed-package reviews after r
 
 Guided setup detects kernel WireGuard availability before generating the
 prerequisite plan. A loaded/loadable kernel module selects kernel mode; otherwise
-the guide selects userspace mode and includes its package requirements in the
-normal reviewed installation plan. This is capability detection, not a hardcoded
+the guide checks that `/dev/net/tun` is a character device and looks for the
+`wireguard-go` executable. With TUN available it selects userspace mode and
+includes any missing package requirements in the normal reviewed installation
+plan. Missing TUN support is reported before planning installation changes. This is capability detection, not a hardcoded
 Jetson exception.
 
 An already registered host at the connectivity stage can accept a newer verified

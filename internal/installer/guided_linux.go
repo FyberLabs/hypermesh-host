@@ -19,7 +19,6 @@ import (
 
  "github.com/FyberLabs/hypermesh-host/internal/buildinfo"
  "github.com/FyberLabs/hypermesh-host/internal/hardware"
- "github.com/FyberLabs/hypermesh-host/internal/tunnel"
  "github.com/FyberLabs/hypermesh-host/internal/hostregistration"
 )
 
@@ -132,7 +131,7 @@ type guidedFlow struct {
  save func()error
  rebootNeeded func(SetupPlan)(bool,error)
  boot func()(string,string,error)
- wireguardMode func()string
+ wireguardMode func()(string,string,error)
  repairWireguard func(context.Context,string,agentInstallPlan)(agentInstallPlan,error)
 }
 func guidedCommand(name string)guidedRunner {
@@ -207,7 +206,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintln(g.ui.out,"Checking hardware, memory, model storage and required software…")
   args:=[]string{"--memory-mode",s.Mode,"--model-dir",s.Directory,
    "--aiuditor-check-url",n.Plane+"/api/v1/hypermesh/public/host-installation","--profile","auto"}
-  if g.wireguardMode!=nil { mode:=g.wireguardMode();fmt.Fprintln(g.ui.out,"WireGuard mode:",mode);args=append(args,"--wireguard-mode",mode) }
+  if g.wireguardMode!=nil { mode,detail,e:=g.wireguardMode();if e!=nil{return e};fmt.Fprintln(g.ui.out,"WireGuard:",detail);args=append(args,"--wireguard-mode",mode) }
   if s.Headless{args=append(args,"--headless")}
   if _,err=g.plan(ctx,"plan-setup","setup.json",args...);err!=nil{return err}
   var p SetupPlan;if err=guidedRead(setupPath,&p,true);err!=nil{return err}
@@ -403,7 +402,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
-  wireguardMode:func()string{if tunnel.KernelAvailable(){return "kernel"};return "userspace"},
+  wireguardMode:detectGuidedWireguard,
   repairWireguard:func(ctx context.Context,dir string,p agentInstallPlan)(agentInstallPlan,error){
    unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return p,e};defer unlockState()
    return repairGuidedWireguard(ctx,dir,p,ui)
