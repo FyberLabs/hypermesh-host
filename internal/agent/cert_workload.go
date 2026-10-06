@@ -127,7 +127,7 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		var err error
 		fit, err = runner.CheckContextFit(ctx, a.certContextTokens)
 		if err != nil {
-			return fail("full-context check failed or evidence unavailable")
+			return fail("full-context check failed: " + err.Error())
 		}
 	}
 	result = a.requireImageHash(job.Kind, runner.Run(ctx, job))

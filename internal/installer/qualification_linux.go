@@ -5,6 +5,7 @@ package installer
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,11 +20,12 @@ import (
 )
 
 type qualificationJournal struct {
-	Schema   int                                  `json:"schema"`
-	AgentSHA string                               `json:"agent_sha256"`
-	Run      hostregistration.QualificationRun    `json:"run"`
-	State    string                               `json:"state"`
-	Report   hostregistration.QualificationReport `json:"report"`
+	FailureDetail string                               `json:"failure_detail,omitempty"`
+	Schema        int                                  `json:"schema"`
+	AgentSHA      string                               `json:"agent_sha256"`
+	Run           hostregistration.QualificationRun    `json:"run"`
+	State         string                               `json:"state"`
+	Report        hostregistration.QualificationReport `json:"report"`
 }
 type qualificationDeps struct {
 	Check   func(context.Context) error
@@ -39,7 +41,7 @@ type qualificationDeps struct {
 func performQualification(ctx context.Context, j *qualificationJournal, d qualificationDeps) error {
 	if j.State == "reported" {
 		if j.Report.FailureCode != "" {
-			return fmt.Errorf("qualification failed (%s); request a new operator run", j.Report.FailureCode)
+			return fmt.Errorf("qualification failed (%s): %s; select Authorize a new measurement attempt in the admin benchmark review; registration is retained", j.Report.FailureCode, j.FailureDetail)
 		}
 		return nil
 	}
@@ -73,6 +75,10 @@ func performQualification(ctx context.Context, j *qualificationJournal, d qualif
 				sample, e := d.Sample(ctx, j.Run.Manifest.MeasurementIDs[i])
 				if e != nil || sample.MeasurementID != j.Run.Manifest.MeasurementIDs[i] {
 					fail("workload")
+					var failure *agent.WorkloadFailure
+					if errors.As(e, &failure) {
+						j.FailureDetail = failure.Error()
+					}
 					break
 				}
 				sample.TunnelVerified = true
@@ -98,7 +104,7 @@ func performQualification(ctx context.Context, j *qualificationJournal, d qualif
 		return err
 	}
 	if j.Report.FailureCode != "" {
-		return fmt.Errorf("qualification recorded a %s failure; operator review and a new run are required", j.Report.FailureCode)
+		return fmt.Errorf("qualification recorded a %s failure: %s; select Authorize a new measurement attempt in the admin benchmark review to create a new run; registration is retained", j.Report.FailureCode, j.FailureDetail)
 	}
 	return nil
 }
@@ -113,7 +119,10 @@ func qualificationSample(ctx context.Context, p certificationPlan, measurementID
 	receipt, err := agent.RunWorkloadPreflight(ctx, request, "/var/lib/hypermesh", func(ctx context.Context, _ string, args ...string) ([]byte, error) {
 		return workloadDocker(ctx, config, args...)
 	})
-	if err != nil || receipt.ContextFit == nil || !receipt.ContextFit.ValidFor(m.ContextTokens) || !receipt.CleanupComplete {
+	if err != nil {
+		return hostregistration.QualificationSample{}, err
+	}
+	if receipt.ContextFit == nil || !receipt.ContextFit.ValidFor(m.ContextTokens) || !receipt.CleanupComplete {
 		return hostregistration.QualificationSample{}, fmt.Errorf("qualification workload or cleanup incomplete")
 	}
 	return hostregistration.QualificationSample{MeasurementID: measurementID, CertificationEvidence: hostregistration.CertificationEvidence{HostImageHash: receipt.HostImageHash, FileHash: m.FileHash, ImageDigest: m.ImageDigest, SampleMS: receipt.SampleMS, TokensPerSecond: receipt.TokensPerSecond, ThermalC: receipt.ThermalC, ContextTokens: m.ContextTokens, PromptTokens: receipt.ContextFit.PromptTokens, GeneratedTokens: receipt.ContextFit.GeneratedTokens, ContextElapsedMS: receipt.ContextFit.ElapsedMS, CleanupComplete: true}}, nil
@@ -361,7 +370,7 @@ func guidedQualification(ctx context.Context, path string, ui guidedUI, diagnost
 		}
 	}
 	if next.Action == "attention" {
-		fmt.Fprintln(ui.out, "This qualification attempt needs network-admin attention. Your measurements and registration are retained; services remain inactive.")
+		fmt.Fprintln(ui.out, "This qualification attempt needs network-admin attention. For a failed or expired attempt, select Authorize a new measurement attempt in the benchmark review below, then rerun this installer. Your measurements and registration are retained; services remain inactive.")
 	} else {
 		fmt.Fprintln(ui.out, "Measurements await network-admin review. Setup is saved; rerun this installer after approval to continue certification.")
 	}
