@@ -55,6 +55,7 @@ func TestRegistrationClassRequiresMeasuredMatch(t *testing.T){
 type fakeRegistrationRemote struct {
  states []string
  deviceID string
+ expiresAt string
  creates,completes,gets int
  seen []hostregistration.Request
 }
@@ -62,7 +63,7 @@ func (f *fakeRegistrationRemote) next(r hostregistration.Request)(hostregistrati
  f.seen=append(f.seen,r)
  if len(f.states)==0{return hostregistration.Status{},fmt.Errorf("lost response")}
  state:=f.states[0];f.states=f.states[1:]
- s:=hostregistration.Status{State:state,ApprovalPath:"/dashboard/hypermesh/host/approve/"+r.RequestID}
+ s:=hostregistration.Status{State:state,ExpiresAt:f.expiresAt,ApprovalPath:"/dashboard/hypermesh/host/approve/"+r.RequestID}
  if state=="completed"||state=="retired"{s.DeviceID=&f.deviceID}
  return s,nil
 }
@@ -267,4 +268,13 @@ func TestRegistrationRequiresNativeDocker(t *testing.T) {
   wantOK:=pkg=="docker.io"||pkg=="docker-ce"||pkg=="docker-ce:arm64"
   if (err==nil)!=wantOK{t.Fatalf("%s: %v",pkg,err)}
  })}
+}
+
+func TestRegistrationPersistsServerExpiryBeforeWaiting(t *testing.T){
+ _,j:=registrationFixture(t);j.Owner="owner"
+ expiry:=time.Now().Add(time.Minute).UTC().Truncate(time.Second)
+ remote:=&fakeRegistrationRemote{states:[]string{"pending"},expiresAt:expiry.Format(time.RFC3339)}
+ var saved registrationJournal
+ err:=finishRegistration(context.Background(),&j,remote,func(value registrationJournal)error{saved=value;return nil},func(registrationJournal)error{return nil},io.Discard,func(context.Context,time.Duration)error{return fmt.Errorf("interrupted")})
+ if err==nil||!saved.ExpiresAt.Equal(expiry)||saved.State!="pending"{t.Fatal("lost request deadline on interruption")}
 }

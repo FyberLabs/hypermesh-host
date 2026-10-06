@@ -194,6 +194,8 @@ func (g guidedFlow) apply(ctx context.Context,name,file,prompt string,extra ...s
 }
 func (g guidedFlow) advance()error {g.state.Stage++;return g.save()}
 func (g guidedFlow) finish(ctx context.Context)error {
+ ctx=context.WithValue(ctx,platformReviewPrompt{},g.ui.confirm)
+ ctx=context.WithValue(ctx,platformReviewOutput{},g.ui.out)
  s:=g.state;n,err:=installationNetwork(s.Network);if err!=nil{return err}
  setupPath:=filepath.Join(g.dir,"setup.json")
  agentPath:=filepath.Join(g.dir,"agent.json")
@@ -246,7 +248,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
  var ap agentInstallPlan
  if err=guidedRead(agentPath,&ap,true);err!=nil{return err}
  if s.Stage==3 {
-  fmt.Fprintln(g.ui.out,"Connect this host to your account. Open the sign-in link on any device, then approve this host in your dashboard.")
+  fmt.Fprintln(g.ui.out,"Checking the saved installation and registration before sign-in…")
   args:=[]string{"--plan",agentPath,"--approve-plan",ap.SHA256,"--issuer",n.Issuer,"--dashboard-url",n.Dashboard,"--class-id",s.Class}
   var registration registrationJournal
   if guidedRead(registrationPath(defaultSetupState,ap.SHA256),&registration,true)==nil && registration.State=="denied" {
