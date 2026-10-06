@@ -314,6 +314,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
 }
 func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diagnostic io.Writer)int {
  flags:=flag.NewFlagSet("install",flag.ContinueOnError);flags.SetOutput(diagnostic)
+ cacheSettings:=flags.Bool("cache-settings",false,"review host model cache quota and reserve")
  receipt:=flags.String("receipt","","download receipt (normally found beside the executable)")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0{return 2}
@@ -401,6 +402,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil{err=writeGuided(statePath,s)}
  }
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ if err=guidedCachePolicy(s.Directory,ui,*cacheSettings);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -43,12 +44,32 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	if a.localLease() != nil {
 		return fail("certification refused while a lease is recorded")
 	}
+	if job.SourceRef != "" && a.certModelPath == "" {
+		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
+			return fail(err.Error())
+		}
+		result := a.labPull(ctx, api.Job{CatalogID: job.CatalogID, ImageDigest: pin, SourceRef: job.SourceRef, SizeBytes: job.SizeBytes})
+		if !result.Passed {
+			return result
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	gguf := a.cfg.GGUFHostPath()
 	if cached, cacheErr := a.cacheDest(pin); cacheErr == nil && a.certModelPath == "" {
-		if _, statErr := os.Stat(cached); statErr == nil { gguf = cached }
+		if _, statErr := os.Stat(cached); statErr == nil {
+			gguf = cached
+		}
 	}
+	directory := filepath.Dir(gguf)
+	if filepath.Base(directory) == cacheDirName {
+		directory = filepath.Dir(directory)
+	}
+	unlock, lockErr := LockModelCache(ctx, directory)
+	if lockErr != nil {
+		return fail("model cache lock unavailable")
+	}
+	defer unlock()
 	if err := runtime.RequireGGUFFile(gguf); err != nil {
 		return fail("certification model is missing; pull the pinned model first")
 	}
@@ -63,11 +84,13 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		HostPort: a.cfg.PublishPort(), GGUFPath: gguf,
 		// Certification is local only; it never publishes on the host LAN or tunnel.
 		BindAddress: "127.0.0.1",
-		LlamaJinja: a.cfg.LlamaJinja, LlamaCtxSize: a.cfg.LlamaCtxSize,
+		LlamaJinja:  a.cfg.LlamaJinja, LlamaCtxSize: a.cfg.LlamaCtxSize,
 		LlamaTimeout: a.cfg.LlamaTimeout,
-		SingleSlot: a.certContextTokens > 0,
+		SingleSlot:   a.certContextTokens > 0,
 	})
-	if err != nil { return fail("certification runtime start failed") }
+	if err != nil {
+		return fail("certification runtime start failed")
+	}
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
@@ -78,24 +101,34 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	runner := a.pathb
 	runner.Model = job.CatalogID
 	runner.Endpoint = "http://127.0.0.1:" + a.cfg.PublishPort() + "/v1/chat/completions"
-	if a.certEndpoint != "" { runner.Endpoint = a.certEndpoint }
+	if a.certEndpoint != "" {
+		runner.Endpoint = a.certEndpoint
+	}
 	wait := a.certReadyWait
-	if wait <= 0 { wait = 3*time.Minute }
+	if wait <= 0 {
+		wait = 3 * time.Minute
+	}
 	ready, done := context.WithTimeout(ctx, wait)
 	defer done()
 	for !runner.Probe(ready) {
-		if ready.Err() != nil { return fail("certification completions not ready") }
-		timer := time.NewTimer(250*time.Millisecond)
+		if ready.Err() != nil {
+			return fail("certification completions not ready")
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
 		select {
-		case <-ready.Done(): timer.Stop(); return fail("certification completions not ready")
+		case <-ready.Done():
+			timer.Stop()
+			return fail("certification completions not ready")
 		case <-timer.C:
 		}
 	}
 	var fit *pathb.ContextFit
 	if a.certContextTokens > 0 {
 		var err error
-		fit,err=runner.CheckContextFit(ctx,a.certContextTokens)
-		if err!=nil{return fail("full-context check failed or evidence unavailable")}
+		fit, err = runner.CheckContextFit(ctx, a.certContextTokens)
+		if err != nil {
+			return fail("full-context check failed or evidence unavailable")
+		}
 	}
 	result = a.requireImageHash(job.Kind, runner.Run(ctx, job))
 	result.ContextFit = fit
@@ -104,10 +137,16 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	}
 	// Do not accept a measurement if the mounted bytes changed during execution.
 	after, err := certFileHash(ctx, gguf)
-	if err != nil || after != pin { return fail("certification model changed during execution") }
+	if err != nil || after != pin {
+		return fail("certification model changed during execution")
+	}
 	// Admission must observe the workload before deferred cleanup removes it.
-	if observe != nil { observe(ctx) }
-	if ctx.Err() != nil { return fail("certification observation timed out") }
+	if observe != nil {
+		observe(ctx)
+	}
+	if ctx.Err() != nil {
+		return fail("certification observation timed out")
+	}
 	result.WorkloadVerified = true
 	return result
 }
@@ -116,22 +155,36 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 // file read itself uses the OS filesystem semantics; no remote fetch occurs.
 func certFileHash(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	defer f.Close()
 	h := sha256.New()
 	buf := make([]byte, 1<<20)
 	for {
-		if err := ctx.Err(); err != nil { return "", err }
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		n, err := f.Read(buf)
-		if n > 0 { _, _ = h.Write(buf[:n]) }
-		if err == io.EOF { break }
-		if err != nil { return "", err }
+		if n > 0 {
+			_, _ = h.Write(buf[:n])
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
 	}
-	if err := ctx.Err(); err != nil { return "", err }
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
 }
 
 func certSuite(suite string) string {
-	if strings.TrimSpace(suite) == "" { return pathb.SuiteThinV1 }
+	if strings.TrimSpace(suite) == "" {
+		return pathb.SuiteThinV1
+	}
 	return strings.TrimSpace(suite)
 }

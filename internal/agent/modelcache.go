@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -126,6 +127,18 @@ func (a *Agent) modelCacheBudget(path string) (uint64, error) {
 		bound = uint64(capBytes) - floor
 	}
 	raw := strings.TrimSpace(a.cfg.ModelCacheMax)
+	policy, err := a.cachePolicy()
+	if err != nil {
+		return 0, err
+	}
+	if policy != nil {
+		raw = policyBudget(policy)
+		if capBytes >= 0 && uint64(capBytes) >= policy.ReserveBytes {
+			bound = uint64(capBytes) - policy.ReserveBytes
+		} else {
+			bound = 0
+		}
+	}
 	if raw == "" {
 		if capErr != nil {
 			return 0, capErr
@@ -157,6 +170,16 @@ func (a *Agent) reconcileModelCache() error {
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(filepath.Dir(dir)); os.IsNotExist(err) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	unlock, err := LockModelCache(ctx, filepath.Dir(dir))
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
 	if n, freed := removeCachePartials(dir); n > 0 && a.log != nil {
@@ -179,7 +202,7 @@ func removeCachePartials(dir string) (files int, freed int64) {
 			continue
 		}
 		name := ent.Name()
-		partial := strings.HasPrefix(name, "lab-pull-") && strings.HasSuffix(name, ".gguf")
+		partial := (strings.HasPrefix(name, "lab-pull-") && strings.HasSuffix(name, ".gguf")) || strings.HasPrefix(name, ".certification-model-")
 		temp := strings.HasPrefix(name, cacheIndexName+".tmp-")
 		if !partial && !temp {
 			continue
@@ -450,11 +473,18 @@ func (a *Agent) planModelEviction(dest, pin string, lim pull.Limits) (pull.Limit
 	if recErr != nil {
 		return lim, &pull.DiskError{StatErr: true}
 	}
-	plan := planEviction(idx.Models, idx.Loaded, leased, pendingIDs(idx), id, lim.Expected, budget, free, limFloor(lim), limMargin(lim))
+	idx, recErr = a.protectOwnerPins(idx)
+	if recErr != nil {
+		return lim, recErr
+	}
+	plan := planEviction(idx.Models, "", leased, pendingIDs(idx), id, lim.Expected, budget, free, limFloor(lim), limMargin(lim))
 	lim.Evictable = plan.Evictable
 	lim.WithEvictable = true
 	lim.Reclaim = 0
 	if !plan.Fits {
+		if used, evictable, ok := a.modelCacheUsage(); ok && lim.Expected > 0 && uint64(used-evictable)+uint64(lim.Expected) > budget {
+			return lim, fmt.Errorf("model_cache_quota_exceeded: model %d bytes, quota %d, protected %d; increase the host quota or remove an owner pin after its workload ends", lim.Expected, budget, used-evictable)
+		}
 		return lim, &pull.DiskError{
 			Need:          plan.Need,
 			Free:          free,
@@ -625,13 +655,17 @@ func (a *Agent) applyEvict(dir string, victims []string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	protected, err := a.protectOwnerPins(idx)
+	if err != nil {
+		return err
+	}
 	drop := map[string]struct{}{}
 	for _, id := range victims {
 		norm, err := normalizeModelID(id)
 		if err != nil {
 			continue
 		}
-		if norm == idx.Loaded || norm == leased || pendingPinned(idx, norm) {
+		if norm == leased || pendingPinned(protected, norm) {
 			continue
 		}
 		drop[norm] = struct{}{}
@@ -1037,8 +1071,8 @@ func (a *Agent) modelForLease() string {
 	return a.cfg.GGUFHostPath()
 }
 
-// modelCacheUsage is the bytes in the cache and the bytes that are not
-// the loaded model and not the active lease. ok is false when the cache
+// modelCacheUsage reports cached bytes and bytes outside active leases,
+// pending reservations, and owner pins. Loaded is a selection hint, not a pin. ok is false when the cache
 // directory cannot be read. A missing directory is an empty cache.
 func (a *Agent) modelCacheUsage() (used, evictable int64, ok bool) {
 	gguf := a.cfg.GGUFHostPath()
@@ -1062,7 +1096,10 @@ func (a *Agent) modelCacheUsage() (used, evictable int64, ok bool) {
 	if err != nil {
 		return 0, 0, false
 	}
-	loaded, _ := normalizeOptionalID(idx.Loaded)
+	idx, err = a.protectOwnerPins(idx)
+	if err != nil {
+		return 0, 0, false
+	}
 	for _, m := range idx.Models {
 		if m.Bytes < 0 {
 			continue
@@ -1071,7 +1108,7 @@ func (a *Agent) modelCacheUsage() (used, evictable int64, ok bool) {
 			return 0, 0, false
 		}
 		used += m.Bytes
-		if m.ID == loaded || m.ID == leased || pendingPinned(idx, m.ID) {
+		if m.ID == leased || pendingPinned(idx, m.ID) {
 			continue
 		}
 		evictable += m.Bytes

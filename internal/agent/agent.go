@@ -67,6 +67,7 @@ type Agent struct {
 	// fetchWeights downloads a pinned artifact for lab_pull. Nil uses
 	// the allowlisted HTTP fetcher. Tests stub this — never hit the network.
 	fetchWeights func(ctx context.Context, dest, sourceRef, pin string) error
+ modelFit func(context.Context,int64)error
 	// dockerRun runs docker CLI. Nil uses the NVIDIA runtime's runner when
 	// available; tests inject a stub for egress observation.
 	dockerRun runtime.DockerRunner
@@ -840,6 +841,10 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	}
 	dest := a.cfg.GGUFHostPath()
 	if source := strings.TrimSpace(job.SourceRef); source != "" {
+  if err:=downloadDestOK(a.cfg.GGUFHostPath());err!=nil{return pathb.Result{Reason:labPullFailReason(err)}}
+  directory:=filepath.Dir(a.cfg.GGUFHostPath())
+  if err:=os.MkdirAll(directory,0755);err!=nil{return pathb.Result{Reason:"model cache directory unavailable"}}
+  unlock,lockErr:=LockModelCache(ctx,directory);if lockErr!=nil{return pathb.Result{Reason:"model cache lock unavailable"}};defer unlock()
 		var err error
 		dest, err = a.cacheDest(pin)
 		if err != nil {
@@ -893,8 +898,9 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 	if err != nil {
 		return err
 	}
-	lim := a.pullLimits(size)
-	resolved, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
+	lim,err := a.policyLimits(a.pullLimits(size));if err!=nil{return err}
+ if hit,e:=a.verifyCachedArtifact(dest,pin,size);e!=nil{return e}else if hit{return nil}
+ resolved, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
 	if err != nil || resolved <= 0 {
 		free, statErr := lim.Stat(dest)
 		if statErr != nil || free < 0 {
@@ -923,7 +929,8 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 		}
 		return a.fetchWeights(ctx, dest, sourceRef, pin)
 	}
-	return pull.ToFileWith(ctx, dest, rawURL, pin, pull.HTTPGet(nil), lim)
+	fetch,err:=a.modelFetcher();if err!=nil{return err}
+ return pull.ToFileWith(ctx, dest, rawURL, pin, fetch, lim)
 }
 
 func (a *Agent) pullLimits(size int64) pull.Limits {
@@ -971,7 +978,7 @@ func labPullFailReason(err error) string {
 		return disk.Error()
 	}
 	msg := err.Error()
-	if strings.HasPrefix(msg, "insufficient_disk:") || strings.HasPrefix(msg, "size_exceeded:") {
+	if strings.HasPrefix(msg, "insufficient_disk:") || strings.HasPrefix(msg, "size_exceeded:") || strings.HasPrefix(msg,"model_cache_quota_exceeded:") {
 		return msg
 	}
 	switch {
@@ -1025,6 +1032,12 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		}
 		return a.leaseStartAlready(existing)
 	}
+ if job.SourceRef!="" {
+  if err:=a.checkDemandFit(ctx,job.SizeBytes);err!=nil{return pathb.Result{Reason:err.Error()}}
+  if job.SizeBytes<=0 {return pathb.Result{Reason:"model download requires expected size"}}
+  pulled:=a.labPull(ctx,api.Job{CatalogID:job.CatalogID,ImageDigest:job.FileHash,SourceRef:job.SourceRef,SizeBytes:job.SizeBytes})
+  if !pulled.Passed{return pulled}
+ }
 	gguf, pinID, havePin, refuse := a.leaseModelPath(job)
 	if refuse.Reason != "" {
 		return refuse
@@ -1038,6 +1051,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if res, ok := a.leaseHashCheck(job, hash, pinID, havePin); !ok {
 		return res
 	}
+ if job.SourceRef!="" {if err:=a.checkDemandFit(ctx,job.SizeBytes);err!=nil{return pathb.Result{Reason:err.Error()}}}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
 		LeaseID:      job.LeaseID,

@@ -94,6 +94,8 @@ func TestModelCacheNeverEvictsLoadedOrLeased(t *testing.T) {
 			{ID: idD, Bytes: 100, LastUsed: base.Add(3 * time.Hour)},
 		},
 	})
+ budget,err:=a.modelCacheBudget(a.cfg.GGUFHostPath());if err!=nil{t.Fatal(err)}
+ if err=WriteCachePolicy(filepath.Dir(cache),CachePolicy{Schema:1,MaxBytes:budget,Pins:[]string{idC}});err!=nil{t.Fatal(err)}
 	a.setLease(&runtime.Handle{LeaseID: "lease-1", FileHash: idD})
 	body := bytes.Repeat([]byte{'n'}, 100)
 	pin := shaPin(body)
@@ -222,6 +224,8 @@ func TestModelCacheDoesNotEvictWhenPinnedModelsExceedBudget(t *testing.T) {
 			{ID: idD, Bytes: 100, LastUsed: base.Add(2 * time.Hour)},
 		},
 	})
+ budget,err:=a.modelCacheBudget(a.cfg.GGUFHostPath());if err!=nil{t.Fatal(err)}
+ if err=WriteCachePolicy(filepath.Dir(cache),CachePolicy{Schema:1,MaxBytes:budget,Pins:[]string{idC}});err!=nil{t.Fatal(err)}
 	a.setLease(&runtime.Handle{LeaseID: "lease-1", FileHash: idD})
 	var fetches int
 	a.fetchWeights = func(context.Context, string, string, string) error {
@@ -235,8 +239,8 @@ func TestModelCacheDoesNotEvictWhenPinnedModelsExceedBudget(t *testing.T) {
 	if res.Passed {
 		t.Fatal("pinned models over budget must fail")
 	}
-	const want = "insufficient_disk: need 150, free 5000, evictable 50"
-	if res.Reason != want {
+	const want = "model_cache_quota_exceeded:"
+	if !strings.HasPrefix(res.Reason, want) {
 		t.Fatalf("reason %q", res.Reason)
 	}
 	if fetches != 0 {
@@ -633,7 +637,7 @@ func TestPendingPinExpiresAndLeaseReleaseClearsIt(t *testing.T) {
 	}
 	a.now = func() time.Time { return now.Add(2 * time.Minute) }
 	used, evictable, ok := a.modelCacheUsage()
-	if !ok || used != 160 || evictable != 120 {
+	if !ok || used != 160 || evictable != 160 {
 		t.Fatalf("usage used=%d evictable=%d ok=%v", used, evictable, ok)
 	}
 	idx = readIndex(t, cache)
@@ -1016,16 +1020,16 @@ func TestHeartbeatReportsModelCacheBytes(t *testing.T) {
 	if hb.Health == nil || hb.Health.ModelCacheBytes == nil || hb.Health.ModelCacheEvictableBytes == nil {
 		t.Fatalf("cache fields missing: %s", raw)
 	}
-	if *hb.Health.ModelCacheBytes != 30 || *hb.Health.ModelCacheEvictableBytes != 0 {
+	if *hb.Health.ModelCacheBytes != 30 || *hb.Health.ModelCacheEvictableBytes != 30 {
 		t.Fatalf("bytes %d evictable %d", *hb.Health.ModelCacheBytes, *hb.Health.ModelCacheEvictableBytes)
 	}
-	if !bytes.Contains(raw, []byte(`"model_cache_bytes":30`)) || !bytes.Contains(raw, []byte(`"model_cache_evictable_bytes":0`)) {
+	if !bytes.Contains(raw, []byte(`"model_cache_bytes":30`)) || !bytes.Contains(raw, []byte(`"model_cache_evictable_bytes":30`)) {
 		t.Fatalf("json %s", raw)
 	}
 	if !bytes.Contains([]byte(text), []byte("hypermesh_model_cache_bytes 30\n")) {
 		t.Fatalf("metrics\n%s", text)
 	}
-	if !bytes.Contains([]byte(text), []byte("hypermesh_model_cache_evictable_bytes 0\n")) {
+	if !bytes.Contains([]byte(text), []byte("hypermesh_model_cache_evictable_bytes 30\n")) {
 		t.Fatalf("metrics\n%s", text)
 	}
 }

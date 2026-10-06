@@ -163,6 +163,10 @@ func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, li
 			return err
 		}
 	}
+	lim.Reclaim = 0
+	if err := Preflight(dest, size, lim); err != nil {
+		return err
+	}
 	if fetch == nil {
 		fetch = HTTPGet(nil)
 	}
@@ -193,7 +197,12 @@ func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, li
 	if lim.Copied != nil {
 		lim.Copied(n, time.Since(copyStart))
 	}
+	syncErr := tmp.Sync()
 	closeErr := tmp.Close()
+	if syncErr != nil {
+		_ = os.Remove(tmpName)
+		return syncErr
+	}
 	if copyErr != nil {
 		_ = os.Remove(tmpName)
 		return copyErr
@@ -206,6 +215,10 @@ func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, li
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("size_exceeded: approved %d", size)
 	}
+	if n != size {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("hypermesh: artifact size mismatch")
+	}
 	got := hex.EncodeToString(sum.Sum(nil))
 	if got != want {
 		_ = os.Remove(tmpName)
@@ -215,5 +228,10 @@ func ToFileWith(ctx context.Context, dest, rawURL, pin string, fetch Fetcher, li
 		_ = os.Remove(tmpName)
 		return err
 	}
-	return nil
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

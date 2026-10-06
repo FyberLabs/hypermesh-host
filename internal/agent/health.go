@@ -121,9 +121,37 @@ func (a *Agent) fillHealth(ctx context.Context, h *api.HostHealth) {
 		a.metricDiskSize = nil
 	}
 	a.healthMu.Unlock()
+	// Updated hosts report zero admission capacity when cache policy is unreadable.
+	if a.cfg.GGUFHostPath() != "" {
+		zero := int64(0)
+		h.ModelCacheAvailableBytes = &zero
+	}
 	if used, evictable, ok := a.modelCacheUsage(); ok {
 		h.ModelCacheBytes = &used
 		h.ModelCacheEvictableBytes = &evictable
+		h.ModelCacheHashes = a.cachedHashes()
+		if budget, err := a.modelCacheBudget(a.cfg.GGUFHostPath()); err == nil && diskOK {
+			protected := uint64(used - evictable)
+			available := uint64(0)
+			if budget > protected {
+				available = budget - protected
+			}
+			lim, e := a.policyLimits(a.pullLimits(1))
+			if e == nil {
+				disk := uint64(free) + uint64(evictable)
+				reserve := lim.Floor + lim.Margin
+				if disk > reserve {
+					disk -= reserve
+				} else {
+					disk = 0
+				}
+				if available > disk {
+					available = disk
+				}
+				n := int64(available)
+				h.ModelCacheAvailableBytes = &n
+			}
+		}
 	}
 }
 

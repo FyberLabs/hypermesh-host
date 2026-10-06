@@ -45,7 +45,7 @@ type UpdateManifest struct {
 
 // EnrollRequest is POST /agent/enroll.
 type EnrollRequest struct {
-	HostName string `json:"host_name,omitempty"`
+	HostName    string `json:"host_name,omitempty"`
 	WGPublicKey string `json:"wg_public_key,omitempty"`
 	EnrollToken string `json:"enroll_token"`
 	ImageHash   string `json:"image_hash,omitempty"`
@@ -66,7 +66,7 @@ type EnrollResponse struct {
 // Health is additive. Older planes ignore it (pydantic extra='ignore').
 // Existing fields stay. A missing Health is the pre-health body.
 type HeartbeatRequest struct {
-	HostName string `json:"host_name,omitempty"`
+	HostName        string      `json:"host_name,omitempty"`
 	DeviceID        string      `json:"device_id"`
 	ImageHash       string      `json:"image_hash,omitempty"`
 	LoadedModelHash string      `json:"loaded_model_hash,omitempty"`
@@ -119,9 +119,11 @@ type HostHealth struct {
 	// ModelCacheEvictableBytes excludes the loaded model and any model
 	// backing an active lease. Both are omitted when the cache cannot
 	// be read. Zero is sent when the cache is empty.
-	ModelCacheBytes          *int64 `json:"model_cache_bytes,omitempty"`
-	ModelCacheEvictableBytes *int64 `json:"model_cache_evictable_bytes,omitempty"`
-	BuildCommit              string `json:"build_commit,omitempty"`
+	ModelCacheHashes         []string `json:"model_cache_hashes,omitempty"`
+	ModelCacheAvailableBytes *int64   `json:"model_cache_available_bytes,omitempty"`
+	ModelCacheBytes          *int64   `json:"model_cache_bytes,omitempty"`
+	ModelCacheEvictableBytes *int64   `json:"model_cache_evictable_bytes,omitempty"`
+	BuildCommit              string   `json:"build_commit,omitempty"`
 	// HostType is model or supervisor. The agent always sets it so a
 	// supervisor is not offered as a normal device.
 	HostType string `json:"host_type,omitempty"`
