@@ -32,13 +32,13 @@ func TestAcquisitionIntegrityAndNoReplacement(t *testing.T){
    if kind=="existing"{if err:=os.WriteFile(path,[]byte("KEEP"),0600);err!=nil{t.Fatal(err)}}
    if kind=="symlink"{if err:=os.Symlink(filepath.Join(dir,"absent"),path);err!=nil{t.Fatal(err)}}
    ctx,cancel:=context.WithCancel(context.Background());defer cancel();if kind=="cancel"{cancel()}
-   err:=acquireModel(ctx,path,pin,int64(len(payload)),func(context.Context)(io.ReadCloser,error){return io.NopCloser(bytes.NewReader(body)),nil})
+   err:=acquireModelFile(ctx,path,pin,int64(len(payload)),func(context.Context)(io.ReadCloser,error){return io.NopCloser(bytes.NewReader(body)),nil})
    if (err==nil)!=(kind=="pass"){t.Fatalf("%s: %v",kind,err)}
    entries,_:=os.ReadDir(dir)
    for _,entry:=range entries{if strings.HasPrefix(entry.Name(),".certification-model-"){t.Fatal("partial leaked")}}
    if kind=="pass"{
     if verifyAcquiredModel(context.Background(),path,pin,int64(len(payload)))!=nil{t.Fatal("bad artifact")}
-    if acquireModel(context.Background(),path,pin,int64(len(payload)),func(context.Context)(io.ReadCloser,error){t.Fatal("downloaded existing verified bytes");return nil,nil})!=nil{t.Fatal("reuse failed")}
+    if acquireModelFile(context.Background(),path,pin,int64(len(payload)),func(context.Context)(io.ReadCloser,error){t.Fatal("downloaded existing verified bytes");return nil,nil})!=nil{t.Fatal("reuse failed")}
    }
    if kind=="existing"{raw,_:=os.ReadFile(path);if string(raw)!="KEEP"{t.Fatal("replaced model")}}
   })
@@ -62,7 +62,7 @@ func TestModelTransferWholeDeadline(t *testing.T){
  server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.Write([]byte("G"));w.(http.Flusher).Flush();<-r.Context().Done()}));defer server.Close()
  ctx,cancel:=context.WithTimeout(context.Background(),30*time.Millisecond);defer cancel()
  start:=time.Now();path:=filepath.Join(t.TempDir(),"model.gguf")
- err:=acquireModel(ctx,path,"sha256:"+strings.Repeat("a",64),8,func(ctx context.Context)(io.ReadCloser,error){return modelBytes(ctx,server.Client(),server.URL,"")})
+ err:=acquireModelFile(ctx,path,"sha256:"+strings.Repeat("a",64),8,func(ctx context.Context)(io.ReadCloser,error){return modelBytes(ctx,server.Client(),server.URL,"")})
  if err==nil||time.Since(start)>time.Second{t.Fatal("transfer escaped deadline")}
 }
 

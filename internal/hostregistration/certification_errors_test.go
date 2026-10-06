@@ -43,3 +43,16 @@ func TestCertificationConflictExplainsReviewedModelPins(t *testing.T) {
 		t.Fatal(result)
 	}
 }
+
+func TestQualificationConflictExplainsMissingModelConfiguration(t *testing.T) {
+ server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+  w.WriteHeader(409)
+  json.NewEncoder(w).Encode(map[string]string{"detail": "Configure a reviewed model hash and context before qualification"})
+ }))
+ defer server.Close()
+ c, _ := New(server.URL, testTenant)
+ c.http = server.Client()
+ var result any
+ err := c.request(context.Background(), "POST", "/api/v1/hypermesh/agent/onboarding/qualification/next", "private-device-token", nil, &result)
+ if err == nil || !strings.Contains(err.Error(), "platform qualification model") || !strings.Contains(err.Error(), "no new registration") || strings.Contains(err.Error(), "class, host name, key") { t.Fatal(err) }
+}

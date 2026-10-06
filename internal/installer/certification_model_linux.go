@@ -16,6 +16,7 @@ import (
  "time"
 
  "github.com/FyberLabs/hypermesh-host/internal/pull"
+ "github.com/FyberLabs/hypermesh-host/internal/agent"
 )
 
 var certificationSourceRE=regexp.MustCompile(`(?i)^(bartowski|TheBloke|QuantFactory|ggml-org|lmstudio-community|FyberLabs)/[a-z0-9._-]+@[a-f0-9]{40}/[a-z0-9._/-]+\.gguf$`)
@@ -60,6 +61,9 @@ func verifyAcquiredModel(ctx context.Context,path,pin string,size int64)error{
  return nil
 }
 func acquireModel(ctx context.Context,path,pin string,size int64,fetch func(context.Context)(io.ReadCloser,error))error{
+ return agent.AcquireCachedModel(ctx,path,pin,size,func()error{return acquireModelFile(ctx,path,pin,size,fetch)})
+}
+func acquireModelFile(ctx context.Context,path,pin string,size int64,fetch func(context.Context)(io.ReadCloser,error))error{
  if err:=agentDirectory(filepath.Dir(path),false);err!=nil{return err}
  if _,err:=os.Lstat(path);err==nil{return verifyAcquiredModel(ctx,path,pin,size)}else if !os.IsNotExist(err){return fmt.Errorf("cannot inspect model destination")}
  if err:=pull.Preflight(path,size,pull.Limits{Expected:size});err!=nil{return fmt.Errorf("insufficient space on models filesystem for approved download and reserve")}

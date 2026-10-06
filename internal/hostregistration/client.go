@@ -113,7 +113,7 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
   case 429:action="rate limited; wait before retrying the same command"
   case 503:action="plane temporarily unavailable; retry the same command"
   }
-  if resp.StatusCode==409&&path=="/api/v1/hypermesh/agent/onboarding/certification/plan" {
+  if resp.StatusCode==409&&(path=="/api/v1/hypermesh/agent/onboarding/certification/plan"||path=="/api/v1/hypermesh/agent/onboarding/qualification/next") {
    action=certificationPlanConflict(resp.Body)
   }
   if resp.StatusCode==401&&strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/") {
@@ -196,10 +196,12 @@ func certificationPlanConflict(body io.Reader) string {
  var response struct{Detail string `json:"detail"`}
  if json.Unmarshal(raw,&response)!=nil{return fallback}
  switch response.Detail {
+ case "Configure a reviewed model hash and context before qualification", "Configure the suite model and immutable artifact pins first":
+  return "the platform qualification model is missing its reviewed artifact hash or context; the program operator must configure the suite model download source, size, SHA-256, runtime image and context, then retry this installer; no new registration is needed"
  case "A complete supported AIuditor class envelope is required":
   return "the platform has no complete supported certification baseline for this hardware class and suite model; the program operator must record or restore a reviewed class envelope from real measurements, then retry; do not re-enroll this host"
  case "Configure matching reviewed model source, size, hash, runtime and context pins":
-  return "the platform certification model is not fully configured; the program operator must align its immutable download source, size, hash, runtime image and context with the class envelope, then retry"
+  return "the platform onboarding model is not fully configured; the program operator must configure consistent immutable download source, size, hash, runtime image and context pins, then retry; no new registration is needed"
  case "Configure an authenticated AIuditor certification program", "AIuditor certification program is not ready":
   return "the platform AIuditor certification program is unavailable or unconfigured; the program operator must restore its authenticated program and suite configuration, then retry"
  case "Resolve intake, certification, hold or selling state before onboarding":

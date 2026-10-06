@@ -36,7 +36,7 @@ func TestLocalWorkloadPreflightUsesApprovedFileWithoutEnrollment(t *testing.T){
 		if !strings.Contains(joined,part){t.Fatalf("missing %q in %s",part,joined)}
 	}
 	entries,err:=os.ReadDir(state);if err!=nil{t.Fatal(err)}
-	if len(entries)!=1||entries[0].Name()!="model.gguf"{t.Fatal("local check changed enrollment/state")}
+	for _,entry:=range entries{if entry.Name()!="model.gguf"&&entry.Name()!=".hypermesh-cache.lock"{t.Fatal("local check changed enrollment/state")}}
 }
 
 func TestLocalWorkloadPreflightRefusesAnyLeaseState(t *testing.T){

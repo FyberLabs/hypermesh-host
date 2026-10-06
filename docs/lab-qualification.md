@@ -71,3 +71,8 @@ Before an automatic qualification attempt, the guide asks for an optional privat
 Hugging Face token file. Enter a file path for a gated model, or press Enter for
 public/cached models. The file is validated before starting the attempt, so a
 missing or invalid local credential file can be corrected without consuming a run.
+
+If the platform lacks reviewed qualification model pins, guided setup now identifies
+that configuration issue instead of reporting a host-name/key conflict. Keep the
+registered identity and rerun the same installer after the operator deploys the
+model configuration. Arbitrary server response bodies remain excluded from logs.
