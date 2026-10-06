@@ -76,3 +76,33 @@ If the platform lacks reviewed qualification model pins, guided setup now identi
 that configuration issue instead of reporting a host-name/key conflict. Keep the
 registered identity and rerun the same installer after the operator deploys the
 model configuration. Arbitrary server response bodies remain excluded from logs.
+
+### Full-context runtime compatibility and failed attempts
+
+The context probe reads `GET /props` and requires exactly one slot whose
+`default_generation_settings.n_ctx` matches the approved manifest. It does not
+require `generation_settings.n_ctx` in the completion response. The isolated
+qualification runtime disables context shifting and prompt caching; exact prompt
+and generation counts and a limit stop remain required. A `truncated=true` flag
+at that exact boundary is accepted: llama.cpp commit `7fe450e` sets the flag when
+no-context-shift generation reaches capacity, even after generating every
+requested token. Missing metadata, wrong capacity, multiple slots, early stops,
+and incomplete token counts still fail.
+
+Reference: https://github.com/ggml-org/llama.cpp/blob/7fe450e/tools/server/server-context.cpp
+
+Safe workload failure details are stored as `failure_detail` in the local
+qualification journal and displayed on failure/resume. Raw subprocess output and
+model response content are not added to the report. Historical journals containing
+only `failure_code` cannot reconstruct the discarded details.
+
+For an already-reported failed attempt, open the network-admin benchmark review
+at `/operator/benchmarks` and select **Authorize a new measurement attempt**.
+After the fixed signed installer is available, rerun guided setup and approve the
+new measurements. This uses the existing registration and cached model, retains
+the failed attempt, and does not enable selling or auto-approve a baseline.
+
+Implementation verification includes the AGX 16,368+16 token response, malformed
+or mismatched runtime metadata, incomplete boundary responses, and durable
+failure/replay behavior. Physical qualification on AGX remains to be rerun after
+deployment; the manual context response is not a submitted qualification result.

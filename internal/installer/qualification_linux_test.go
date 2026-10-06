@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"github.com/FyberLabs/hypermesh-host/internal/agent"
 	"github.com/FyberLabs/hypermesh-host/internal/hostregistration"
 	"io"
 	"os"
@@ -132,5 +133,28 @@ func TestGuidedQualificationCredentialPrompt(t *testing.T) {
 	ui := guidedUI{in: bufio.NewReader(strings.NewReader("/missing/token\n")), out: io.Discard}
 	if _, err := qualificationArgs(ui, "agent.json", "run-id"); err == nil {
 		t.Fatal("invalid credential accepted before run")
+	}
+}
+
+func TestQualificationPersistsSafeWorkloadDiagnostic(t *testing.T) {
+	j := qualificationJournal{State: "approved"}
+	j.Run.Manifest.MeasurementIDs = []string{"a", "b", "c"}
+	calls := 0
+	d := qualificationDeps{
+		Check: func(context.Context) error { return nil }, Acquire: func(context.Context) error { return nil }, Tunnel: func(context.Context) error { return nil },
+		Sample: func(context.Context, string) (hostregistration.QualificationSample, error) {
+			calls++
+			return hostregistration.QualificationSample{}, &agent.WorkloadFailure{Reason: "context token counts differ: prompt=496 generated=15 expected=496+16"}
+		},
+		Save: func(v qualificationJournal) error { return nil }, Report: func(context.Context, hostregistration.QualificationReport) error { return nil },
+	}
+	for range 2 {
+		err := performQualification(context.Background(), &j, d)
+		if err == nil || !strings.Contains(err.Error(), "generated=15") || !strings.Contains(j.FailureDetail, "generated=15") {
+			t.Fatal("lost safe detail", err, j)
+		}
+	}
+	if calls != 1 || j.State != "reported" || len(j.Report.Samples) != 0 {
+		t.Fatal("failure replayed or promoted")
 	}
 }
