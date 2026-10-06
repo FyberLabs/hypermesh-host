@@ -1929,3 +1929,12 @@ AGX physical validation: userspace repair, authenticated heartbeat, fresh
 WireGuard handshake, gateway overlay echo and temporary-interface cleanup have
 passed. Certification currently awaits genuine class-envelope measurements on
 the rebuilt test plane; hardware intake approval and activation remain pending.
+## First measured lab baseline
+
+Implemented an operator-authorized `qualify-host --run-id UUID` path for a registered
+inactive AGX/Jetson host. It performs three real pinned-model context and decode
+tests, preserves failed attempts, and submits evidence for separate AIuditor
+publication. See [initial lab qualification](lab-qualification.md). Physical AGX
+execution and operator publication remain pending; normal certification and owner
+activation follow afterward. Sustained-load packs and other runtime profiles remain
+separate roadmap work.
