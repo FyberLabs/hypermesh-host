@@ -258,3 +258,26 @@ func TestGuidedRepairsModeBeforeCheckingConnectivity(t *testing.T){
  if g.finish(context.Background())==nil{t.Fatal("continued after declined repair")}
  if !reflect.DeepEqual(*calls,[]string{"repair-wireguard"})||g.state.Stage!=4{t.Fatal("ran connectivity without repaired approval",*calls)}
 }
+
+func TestGuidedQualificationWaitsThenContinuesWithoutReenrollment(t *testing.T){
+ g,calls,_:=fixtureGuided(t,"y\ny\ny\ny\n")
+ ready:=false;decisions:=0
+ g.qualification=func(context.Context,string)(bool,error){decisions++;return ready,nil}
+ if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
+ if g.state.Stage!=5{t.Fatalf("review must retain certification stage: %d",g.state.Stage)}
+ for _,call:=range *calls{if call=="plan-certification"||call=="activate-agent"{t.Fatal("continued before review")}}
+ *calls=nil
+ if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
+ if len(*calls)!=0{t.Fatal("review wait repeated installation",*calls)}
+ ready=true
+ if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
+ if g.state.Stage!=7||decisions!=3{t.Fatal("did not resume certification")}
+ for _,call:=range *calls{if call=="register-agent"{t.Fatal("reenrolled after review")}}
+}
+func TestGuidedQualificationUnavailableDoesNotContinue(t *testing.T){
+ g,calls,_:=fixtureGuided(t,"y\ny\n")
+ g.qualification=func(context.Context,string)(bool,error){return false,fmt.Errorf("program unavailable")}
+ if err:=g.finish(context.Background());err==nil{t.Fatal("unavailable program accepted")}
+ if g.state.Stage!=5{t.Fatal(g.state.Stage)}
+ for _,call:=range *calls{if call=="certify-agent"||call=="activate-agent"{t.Fatal("advanced while unavailable")}}
+}

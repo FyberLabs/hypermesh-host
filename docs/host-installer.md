@@ -1938,3 +1938,13 @@ publication. See [initial lab qualification](lab-qualification.md). Physical AGX
 execution and operator publication remain pending; normal certification and owner
 activation follow afterward. Sustained-load packs and other runtime profiles remain
 separate roadmap work.
+
+### Automatic qualification for a class without a reference
+
+Implemented: guided setup now automatically creates/resumes initial qualification
+when the authoritative configured suite has no class/model reference. The owner
+still approves the pinned workload; network admins review its samples at
+`/operator/benchmarks`. Setup remains at stage 5 while review is pending, then
+resumes normal certification on the next invocation after approval. Enrollment,
+keys and completed measurements are preserved. See [lab qualification](lab-qualification.md).
+Physical AGX validation and future automated multi-host review remain outstanding.
