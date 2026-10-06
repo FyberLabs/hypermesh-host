@@ -402,7 +402,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
-  wireguardMode:detectGuidedWireguard,
+  wireguardMode:func()(string,string,error){return detectGuidedWireguard(ctx,ui.confirm)},
   repairWireguard:func(ctx context.Context,dir string,p agentInstallPlan)(agentInstallPlan,error){
    unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return p,e};defer unlockState()
    return repairGuidedWireguard(ctx,dir,p,ui)

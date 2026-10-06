@@ -189,3 +189,80 @@ func TestGuidedWireguardCapabilityPriority(t *testing.T) {
 		})
 	}
 }
+
+func TestWireguardTransitionRejectsUnrelatedPayloadUpgrade(t *testing.T) {
+	for _, path := range []string{"/usr/local/lib/hypermesh/update-rollback", "/etc/hypermesh/update-pubkey.asc"} {
+		t.Run(path, func(t *testing.T) {
+			_, _, r, _, _ := wireguardTransitionFixture(t)
+			old := r.Original
+			for i := range old.Files {
+				if old.Files[i].Path == path {
+					old.Files[i].SHA256 = digestSetupBytes([]byte("previous release content"))
+				}
+			}
+			old.SHA256 = agentPlanDigest(old)
+			if _, err := userspaceTransitionPlan(old); err == nil {
+				t.Fatal("adopted unrelated payload from newer installer")
+			}
+		})
+	}
+}
+func TestWireguardRepairWritesOnlyApprovedPaths(t *testing.T) {
+	root, dir, _, d, _ := wireguardTransitionFixture(t)
+	writes := 0
+	d.afterWrite = func(path string) error {
+		if !wireguardTransitionPath(path) {
+			t.Fatalf("unapproved write %s", path)
+		}
+		writes++
+		return nil
+	}
+	if err := resumeWireguardTransition(context.Background(), dir, root, d); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 3 {
+		t.Fatalf("expected environment and two units; wrote %d files", writes)
+	}
+}
+func TestGuidedKernelRequiresSuccessfulInsertion(t *testing.T) {
+	for _, kind := range []string{"loaded", "absent", "success", "signature_failure", "no_sys_module", "declined"} {
+		t.Run(kind, func(t *testing.T) {
+			loaded := kind == "loaded"
+			dry, insert, approvals := 0, 0, 0
+			available, err := checkGuidedKernel(func() bool { return loaded }, func(args ...string) error {
+				if len(args) == 3 {
+					dry++
+					if kind == "absent" {
+						return fmt.Errorf("not found")
+					}
+					return nil
+				}
+				insert++
+				if kind == "signature_failure" {
+					return fmt.Errorf("insertion failed")
+				}
+				loaded = kind == "success"
+				return nil
+			}, func(string) error {
+				approvals++
+				if kind == "declined" {
+					return fmt.Errorf("declined")
+				}
+				return nil
+			})
+			want := kind == "loaded" || kind == "success"
+			if available != want || (err != nil) != (kind == "declined") {
+				t.Fatal(available, err)
+			}
+			if kind == "loaded" && (dry != 0 || insert != 0 || approvals != 0) {
+				t.Fatal("loaded module reprobed")
+			}
+			if (kind == "absent" || kind == "declined") && insert != 0 {
+				t.Fatal("unapproved insertion")
+			}
+			if insert > 0 && approvals != 1 {
+				t.Fatal("insertion without approval")
+			}
+		})
+	}
+}

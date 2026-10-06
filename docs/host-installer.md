@@ -1866,7 +1866,10 @@ Guided onboarding and certification also offer installed-package reviews after r
 ### Guided WireGuard selection and inactive-host repair
 
 Guided setup detects kernel WireGuard availability before generating the
-prerequisite plan. A loaded/loadable kernel module selects kernel mode; otherwise
+prerequisite plan. An already loaded module selects kernel mode. If a dry-run
+finds an installed module, the guide asks permission to load it, runs a bounded
+real `modprobe`, and confirms `/sys/module/wireguard` before selecting kernel
+mode. Failed insertion falls through to userspace detection. Otherwise
 the guide checks that `/dev/net/tun` is a character device and looks for the
 `wireguard-go` executable. With TUN available it selects userspace mode and
 includes any missing package requirements in the normal reviewed installation
@@ -1899,3 +1902,8 @@ need to delete installer state, edit `agent.env` manually, or enroll again.
 Implementation and interruption/identity-preservation tests are complete. The
 physical retest on AGX with kernel `6.8.12-1021-tegra` (no WireGuard module,
 `wireguard-go` and `/dev/net/tun` present) remains pending the signed release.
+
+The mode repair writes only `agent.env`, `hypermesh-agent.service`, and
+`hypermesh-wg.service`. If a newer installer's unrelated embedded payloads differ
+(for example its rollback helper), this narrow repair requires a separately
+reviewed update instead of silently replacing that executable or trust material.

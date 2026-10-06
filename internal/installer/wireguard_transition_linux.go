@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
+	"time"
 )
 
 // The original approval is retained. A separate, machine-bound approval permits
@@ -91,12 +91,33 @@ func userspaceTransitionPlan(old agentInstallPlan) (agentInstallPlan, error) {
 	p.Setup.PlanSHA256 = setupPlanDigest(p.Setup)
 	p.Files = agentFileManifest(agentPayloads(p, nil))
 	p.Files[0] = old.Files[0]
+	// A mode repair is not authorization to upgrade the rollback executable or
+	// trust material embedded in a newer installer.
+	for _, f := range p.Files {
+		if wireguardTransitionPath(f.Path) {
+			continue
+		}
+		matched := false
+		for _, original := range old.Files {
+			if sameSetupJSON(f, original) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return p, fmt.Errorf("unrelated installed payload %s differs from this installer; a separately reviewed update is required", f.Path)
+		}
+	}
 	p.SHA256 = agentPlanDigest(p)
 	return p, validateInstalledAgentInputs(p)
 }
 func repairGuidedWireguard(ctx context.Context, dir string, p agentInstallPlan, ui guidedUI) (agentInstallPlan, error) {
-	if p.Setup.WireGuardMode != "kernel" || tunnel.KernelAvailable() {
+	if p.Setup.WireGuardMode != "kernel" {
 		return p, nil
+	}
+	available, err := probeGuidedKernel(ctx, ui.confirm)
+	if err != nil || available {
+		return p, err
 	}
 	target, err := userspaceTransitionPlan(p)
 	if err != nil {
@@ -266,10 +287,10 @@ func resumeWireguardTransition(ctx context.Context, dir, root string, deps wireg
 	if !sameSetupJSON(current, r.Original) && !sameSetupJSON(current, r.Target) {
 		return fmt.Errorf("WireGuard transition does not match the guided plan")
 	}
-	for i, f := range agentPayloads(r.Target, nil) {
-		if i == 0 {
+	for _, f := range agentPayloads(r.Target, nil) {
+		if !wireguardTransitionPath(f.Path) {
 			continue
-		} // Never replace the signed agent executable.
+		}
 		if err := verifyInstalledPayload(ctx, root, r.Target, f.agentFile); err == nil {
 			continue
 		}
@@ -335,8 +356,12 @@ func resumeWireguardTransition(ctx context.Context, dir, root string, deps wireg
 
 // Check kernel capability first. TUN is a userspace transport device, not a
 // WireGuard kernel-module indicator. Missing packages go through plan-setup.
-func detectGuidedWireguard() (string, string, error) {
-	if tunnel.KernelAvailable() {
+func detectGuidedWireguard(ctx context.Context, approve func(string) error) (string, string, error) {
+	available, err := probeGuidedKernel(ctx, approve)
+	if err != nil {
+		return "", "", err
+	}
+	if available {
 		return selectGuidedWireguard(true, false, false)
 	}
 	info, err := os.Stat("/dev/net/tun")
@@ -355,4 +380,39 @@ func selectGuidedWireguard(kernel, tun, userspace bool) (string, string, error) 
 		return "userspace", "kernel module unavailable; wireguard-go and /dev/net/tun found", nil
 	}
 	return "userspace", "kernel module unavailable; /dev/net/tun found; required userspace packages will be included in the installation plan for your approval", nil
+}
+
+func wireguardTransitionPath(path string) bool {
+	switch path {
+	case "/etc/hypermesh/agent.env", "/etc/systemd/system/hypermesh-agent.service", "/etc/systemd/system/hypermesh-wg.service":
+		return true
+	}
+	return false
+}
+func probeGuidedKernel(ctx context.Context, approve func(string) error) (bool, error) {
+	loaded := func() bool { info, e := os.Stat("/sys/module/wireguard"); return e == nil && info.IsDir() }
+	run := func(args ...string) error {
+		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return exec.CommandContext(bounded, "modprobe", args...).Run()
+	}
+	return checkGuidedKernel(loaded, run, approve)
+}
+func checkGuidedKernel(loaded func() bool, run func(...string) error, approve func(string) error) (bool, error) {
+	if loaded() {
+		return true, nil
+	}
+	if run("-n", "-q", "wireguard") != nil {
+		return false, nil
+	}
+	if approve == nil {
+		return false, fmt.Errorf("loading the installed WireGuard module requires approval")
+	}
+	if err := approve("Load the installed WireGuard kernel module to verify it works? No packages or kernel files will be changed."); err != nil {
+		return false, err
+	}
+	if run("wireguard") != nil {
+		return false, nil
+	}
+	return loaded(), nil
 }
