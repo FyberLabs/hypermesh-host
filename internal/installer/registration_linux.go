@@ -155,6 +155,12 @@ func verifyInstalledForActivation(ctx context.Context,root string,p agentInstall
  for i,f:=range p.Files {
   if f.Path!=expected[i].Path||f.Mode!=expected[i].Mode||!setupDigestRE.MatchString(f.SHA256)||
    (i!=0&&f.SHA256!=expected[i].SHA256)||installed.Completed[i]!=f.Path{return fmt.Errorf("invalid installed manifest")}
+  if err=verifyInstalledPayload(ctx,root,p,f);err!=nil{return err}
+ }
+ return nil
+}
+func verifyInstalledPayload(ctx context.Context,root string,p agentInstallPlan,f agentFile)error {
+ var err error
   if err=ctx.Err();err!=nil{return fmt.Errorf("installation verification interrupted")}
   path:=agentDest(root,f.Path)
   if err=agentDirectory(filepath.Dir(path),false);err!=nil{return err}
@@ -170,9 +176,8 @@ func verifyInstalledForActivation(ctx context.Context,root string,p agentInstall
   got:=hex.EncodeToString(hash.Sum(nil))
   if e!=nil||info.Size()>256<<20{return fmt.Errorf("installed payload differs from approved plan")}
   if got!=f.SHA256 {
-   if i!=0||verifyInstalledUpdate(root,p,got)!=nil{return fmt.Errorf("installed payload differs and has no matching trusted signed update evidence")}
+   if f.Path!="/usr/local/bin/hypermesh-agent"||verifyInstalledUpdate(root,p,got)!=nil{return fmt.Errorf("installed payload differs and has no matching trusted signed update evidence")}
   }
- }
  return nil
 }
 func registrationKeyDir(j registrationJournal)string{return "/var/lib/hypermesh/registration-keys/"+j.Request.RequestID}
