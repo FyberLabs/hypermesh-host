@@ -127,3 +127,57 @@ func TestPrivateModelCredentialValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLegacySizeCacheHitAndCorruptionRepair(t *testing.T) {
+	for _, corruption := range []string{"", "short", "wrong"} {
+		t.Run(corruption, func(t *testing.T) {
+			a, cache := newCacheAgent(t)
+			body := bytes.Repeat([]byte{'m'}, 100)
+			pin := seedCachedModel(t, cache, body, time.Now())
+			dest := filepath.Join(cache, fileName(pin))
+			if corruption == "short" {
+				os.WriteFile(dest, []byte("short"), 0600)
+			}
+			if corruption == "wrong" {
+				os.WriteFile(dest, bytes.Repeat([]byte{'x'}, 100), 0600)
+			}
+			heads, downloads := 0, 0
+			a.headLength = func(context.Context, string) (int64, error) { heads++; return 100, nil }
+			a.fetchWeights = func(_ context.Context, path, _, _ string) error { downloads++; return os.WriteFile(path, body, 0600) }
+			if result := pullModel(t, a, pin, 0); !result.Passed {
+				t.Fatal(result)
+			}
+			expected := 0
+			if corruption != "" {
+				expected = 1
+			}
+			if heads == 0 || downloads != expected {
+				t.Fatalf("heads=%d downloads=%d", heads, downloads)
+			}
+			got, _ := os.ReadFile(dest)
+			if !bytes.Equal(got, body) {
+				t.Fatal("not repaired")
+			}
+		})
+	}
+}
+
+func TestInstallerCacheProtectsPersistedAgentLease(t *testing.T) {
+	a, cache := newCacheAgent(t)
+	old := seedCachedModel(t, cache, bytes.Repeat([]byte{'o'}, 100), time.Now())
+	writeSeedIndex(t, cache, cacheIndex{Models: []cacheModel{{ID: old, Bytes: 100}}})
+	if err := WriteCachePolicy(filepath.Dir(cache), CachePolicy{Schema: 1, MaxBytes: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.saveLease(&runtime.Handle{LeaseID: "active", FileHash: old}); err != nil {
+		t.Fatal(err)
+	}
+	pin := shaPin(bytes.Repeat([]byte{'n'}, 100))
+	err := acquireCachedModel(context.Background(), filepath.Join(cache, fileName(pin)), pin, 100, a.cfg.StateDir, func() error { t.Fatal("download with occupied quota"); return nil })
+	if err == nil {
+		t.Fatal("active lease evicted")
+	}
+	if _, err := os.Stat(filepath.Join(cache, fileName(old))); err != nil {
+		t.Fatal(err)
+	}
+}

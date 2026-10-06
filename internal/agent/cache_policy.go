@@ -157,6 +157,10 @@ func (a *Agent) protectOwnerPins(idx cacheIndex) (cacheIndex, error) {
 // AcquireCachedModel lets approved installer runs share the agent's LRU, quota,
 // reserve and content identity. The callback retains authenticated transfer policy.
 func AcquireCachedModel(ctx context.Context, path, pin string, size int64, fetch func() error) error {
+	return acquireCachedModel(ctx, path, pin, size, defaultStateDir, fetch)
+}
+
+func acquireCachedModel(ctx context.Context, path, pin string, size int64, stateDir string, fetch func() error) error {
 	directory := filepath.Dir(filepath.Dir(path))
 	expected, err := cacheFilePath(filepath.Join(directory, cacheDirName), pin)
 	if err != nil || expected != path || size <= 0 {
@@ -167,7 +171,7 @@ func AcquireCachedModel(ctx context.Context, path, pin string, size int64, fetch
 		return err
 	}
 	defer unlock()
-	a := &Agent{cfg: Config{GGUFPath: filepath.Join(directory, "model.gguf")}, log: slog.Default()}
+	a := &Agent{cfg: Config{GGUFPath: filepath.Join(directory, "model.gguf"), StateDir: stateDir}, log: slog.Default()}
 	if _, err = a.cachePolicy(); err != nil {
 		return err
 	}
@@ -213,12 +217,18 @@ func (a *Agent) verifyCachedArtifact(path, pin string, size int64) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	if !st.Mode().IsRegular() || size <= 0 || st.Size() != size {
+	if !st.Mode().IsRegular() {
 		return false, fmt.Errorf("cached artifact size or type differs")
 	}
+	if size <= 0 || st.Size() != size {
+		return false, nil
+	}
 	actual, err := runtime.HashGGUFFile(path)
-	if err != nil || actual != pin {
-		return false, fmt.Errorf("cached artifact hash mismatch")
+	if err != nil {
+		return false, err
+	}
+	if actual != pin {
+		return false, nil
 	}
 	return true, nil
 }

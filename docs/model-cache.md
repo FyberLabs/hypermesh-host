@@ -53,3 +53,10 @@ Validation covers quota refusal before transfer, eviction ordering, protected
 models, concurrent reuse, lease-triggered acquisition, guided approval, and
 installer acquisition. Physical AGX qualification and lease testing remain the
 next deployment acceptance checks. Rental billing rules are unchanged.
+
+Installer cache eviction reads the agent's persisted lease in `/var/lib/hypermesh`
+(the state directory written by guided installation), as well as pending and
+owner pins. An active model remains protected across installer/agent processes.
+Older jobs without a size resolve it before cache verification; regular files
+with a wrong size or digest are downloaded again rather than requiring manual
+cache deletion. Unsafe file types remain errors.

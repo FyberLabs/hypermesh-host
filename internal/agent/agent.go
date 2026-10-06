@@ -899,7 +899,6 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 		return err
 	}
 	lim,err := a.policyLimits(a.pullLimits(size));if err!=nil{return err}
- if hit,e:=a.verifyCachedArtifact(dest,pin,size);e!=nil{return e}else if hit{return nil}
  resolved, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
 	if err != nil || resolved <= 0 {
 		free, statErr := lim.Stat(dest)
@@ -909,6 +908,7 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 		return &pull.DiskError{Unknown: true, Free: free}
 	}
 	lim.Expected = resolved
+ if hit, e := a.verifyCachedArtifact(dest, pin, resolved); e != nil { return e } else if hit { return nil }
 	lim, err = a.planModelEviction(dest, pin, lim)
 	if err != nil {
 		return err
