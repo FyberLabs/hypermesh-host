@@ -3,11 +3,14 @@
 package installer
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"github.com/FyberLabs/hypermesh-host/internal/hostregistration"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,5 +108,29 @@ func TestQualificationRejectsReplayedSample(t *testing.T) {
 	}}
 	if performQualification(context.Background(), &j, d) == nil {
 		t.Fatal("replayed sample became success")
+	}
+}
+
+func TestGuidedQualificationCredentialPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hf-token")
+	if err := os.WriteFile(path, []byte("hf_private_test_token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, answer := range []string{"", path} {
+		ui := guidedUI{in: bufio.NewReader(strings.NewReader(answer + "\n")), out: io.Discard}
+		args, err := qualificationArgs(ui, "agent.json", "run-id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if answer == "" && len(args) != 4 {
+			t.Fatal(args)
+		}
+		if answer != "" && (len(args) != 6 || args[4] != "--model-token-file" || args[5] != path) {
+			t.Fatal(args)
+		}
+	}
+	ui := guidedUI{in: bufio.NewReader(strings.NewReader("/missing/token\n")), out: io.Discard}
+	if _, err := qualificationArgs(ui, "agent.json", "run-id"); err == nil {
+		t.Fatal("invalid credential accepted before run")
 	}
 }

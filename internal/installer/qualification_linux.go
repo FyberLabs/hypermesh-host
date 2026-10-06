@@ -352,7 +352,11 @@ func guidedQualification(ctx context.Context, path string, ui guidedUI, diagnost
 	}
 	if next.Action == "qualification" {
 		fmt.Fprintln(ui.out, "This hardware class has no reference benchmark. Your host will measure the configured model for network-admin review.")
-		if code := RunQualifyHost(ctx, []string{"--agent-plan", path, "--run-id", *next.RunID}, ui.in, ui.out, diagnostic); code != 0 {
+		args, err := qualificationArgs(ui, path, *next.RunID)
+		if err != nil {
+			return false, err
+		}
+		if code := RunQualifyHost(ctx, args, ui.in, ui.out, diagnostic); code != 0 {
 			return false, fmt.Errorf("qualification paused; evidence and registration are retained")
 		}
 	}
@@ -363,4 +367,19 @@ func guidedQualification(ctx context.Context, path string, ui guidedUI, diagnost
 	}
 	fmt.Fprintln(ui.out, "Admin review: "+identity.Dashboard+"/operator/benchmarks")
 	return false, nil
+}
+
+func qualificationArgs(ui guidedUI, path, id string) ([]string, error) {
+	tokenPath, err := ui.ask("Private Hugging Face token file for a gated model (Enter for public or cached models)", "")
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"--agent-plan", path, "--run-id", id}
+	if tokenPath != "" {
+		if _, err = modelAccessToken(tokenPath); err != nil {
+			return nil, err
+		}
+		args = append(args, "--model-token-file", tokenPath)
+	}
+	return args, nil
 }

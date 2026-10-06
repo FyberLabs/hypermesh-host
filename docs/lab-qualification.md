@@ -66,3 +66,8 @@ Network admins can reject evidence or authorize a fresh attempt after failure or
 expiry; earlier journals and measurements remain intact. An unavailable AIuditor
 or invalid configuration is not treated as an absent reference. Physical AGX
 execution remains pending deployment of both the plane and signed host build.
+
+Before an automatic qualification attempt, the guide asks for an optional private
+Hugging Face token file. Enter a file path for a gated model, or press Enter for
+public/cached models. The file is validated before starting the attempt, so a
+missing or invalid local credential file can be corrected without consuming a run.
