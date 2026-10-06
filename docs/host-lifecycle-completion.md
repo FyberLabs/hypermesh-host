@@ -86,3 +86,10 @@ build into an AGX trial. The website verifier and guide are mirrored from this
 repository; future trust/guide changes must update both copies in the same rollout.
 No host has been modified, no physical acceptance marked passed, and no selling
 enabled by these implementations.
+
+## Demand-driven model cache
+
+Implemented shared installer/agent quota and reserve policy, on-demand lease and
+benchmark acquisition, protected LRU eviction, concurrent download reuse, and
+cache admission telemetry. See [model storage](model-cache.md) for host controls
+and remaining physical acceptance checks. Blob-cache serving remains future work.
