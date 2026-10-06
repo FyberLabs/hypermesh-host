@@ -29,7 +29,7 @@ type qualificationDeps struct {
 	Check   func(context.Context) error
 	Acquire func(context.Context) error
 	Tunnel  func(context.Context) error
-	Sample  func(context.Context) (hostregistration.CertificationEvidence, error)
+	Sample  func(context.Context, string) (hostregistration.QualificationSample, error)
 	Save    func(qualificationJournal) error
 	Report  func(context.Context, hostregistration.QualificationReport) error
 }
@@ -70,8 +70,8 @@ func performQualification(ctx context.Context, j *qualificationJournal, d qualif
 					fail("tunnel")
 					break
 				}
-				sample, e := d.Sample(ctx)
-				if e != nil {
+				sample, e := d.Sample(ctx, j.Run.Manifest.MeasurementIDs[i])
+				if e != nil || sample.MeasurementID != j.Run.Manifest.MeasurementIDs[i] {
 					fail("workload")
 					break
 				}
@@ -102,21 +102,21 @@ func performQualification(ctx context.Context, j *qualificationJournal, d qualif
 	}
 	return nil
 }
-func qualificationSample(ctx context.Context, p certificationPlan) (hostregistration.CertificationEvidence, error) {
+func qualificationSample(ctx context.Context, p certificationPlan, measurementID string) (hostregistration.QualificationSample, error) {
 	m := p.Run.Manifest
-	request := agent.WorkloadPreflight{PlanSHA256: p.SHA256, CatalogID: m.CatalogID, ImageDigest: m.ImageDigest, ModelPath: p.ModelPath, FileHash: m.FileHash, ContextTokens: m.ContextTokens, FullContext: true, SuiteID: m.SuiteID}
+	request := agent.WorkloadPreflight{PlanSHA256: measurementID, CatalogID: m.CatalogID, ImageDigest: m.ImageDigest, ModelPath: p.ModelPath, FileHash: m.FileHash, ContextTokens: m.ContextTokens, FullContext: true, SuiteID: m.SuiteID}
 	config, err := os.MkdirTemp(defaultSetupState, ".qualification-docker-")
 	if err != nil {
-		return hostregistration.CertificationEvidence{}, err
+		return hostregistration.QualificationSample{}, err
 	}
 	defer os.RemoveAll(config)
 	receipt, err := agent.RunWorkloadPreflight(ctx, request, "/var/lib/hypermesh", func(ctx context.Context, _ string, args ...string) ([]byte, error) {
 		return workloadDocker(ctx, config, args...)
 	})
 	if err != nil || receipt.ContextFit == nil || !receipt.ContextFit.ValidFor(m.ContextTokens) || !receipt.CleanupComplete {
-		return hostregistration.CertificationEvidence{}, fmt.Errorf("qualification workload or cleanup incomplete")
+		return hostregistration.QualificationSample{}, fmt.Errorf("qualification workload or cleanup incomplete")
 	}
-	return hostregistration.CertificationEvidence{HostImageHash: receipt.HostImageHash, FileHash: m.FileHash, ImageDigest: m.ImageDigest, SampleMS: receipt.SampleMS, TokensPerSecond: receipt.TokensPerSecond, ThermalC: receipt.ThermalC, ContextTokens: m.ContextTokens, PromptTokens: receipt.ContextFit.PromptTokens, GeneratedTokens: receipt.ContextFit.GeneratedTokens, ContextElapsedMS: receipt.ContextFit.ElapsedMS, CleanupComplete: true}, nil
+	return hostregistration.QualificationSample{MeasurementID: measurementID, CertificationEvidence: hostregistration.CertificationEvidence{HostImageHash: receipt.HostImageHash, FileHash: m.FileHash, ImageDigest: m.ImageDigest, SampleMS: receipt.SampleMS, TokensPerSecond: receipt.TokensPerSecond, ThermalC: receipt.ThermalC, ContextTokens: m.ContextTokens, PromptTokens: receipt.ContextFit.PromptTokens, GeneratedTokens: receipt.ContextFit.GeneratedTokens, ContextElapsedMS: receipt.ContextFit.ElapsedMS, CleanupComplete: true}}, nil
 }
 func RunQualifyHost(ctx context.Context, args []string, input io.Reader, out, diagnostic io.Writer) int {
 	f := flag.NewFlagSet("qualify-host", flag.ContinueOnError)
@@ -160,7 +160,8 @@ func RunQualifyHost(ctx context.Context, args []string, input io.Reader, out, di
 	defer unlock()
 	var p certificationPlan
 	p.Schema = 1
-	if err = guidedRead(*path, &p.Agent, true); err == nil {
+	err = readQualificationAgentPlan(*path, &p.Agent)
+	if err == nil {
 		err = validateInstalledAgentInputs(p.Agent)
 	}
 	if err == nil && agentPlanDigest(p.Agent) != p.Agent.SHA256 {
@@ -210,7 +211,7 @@ func RunQualifyHost(ctx context.Context, args []string, input io.Reader, out, di
 		}
 		if err == nil {
 			j.State = "approved"
-			j.Report.Samples = []hostregistration.CertificationEvidence{}
+			j.Report.Samples = []hostregistration.QualificationSample{}
 			j.Report.Software = hostregistration.QualificationSoftware{Kernel: p.Agent.Setup.Platform.Kernel, OSVersion: p.Agent.Setup.Platform.Version, InstallerCommit: buildinfo.Current()}
 			err = writeGuided(journalPath, j)
 		}
@@ -257,14 +258,18 @@ func RunQualifyHost(ctx context.Context, args []string, input io.Reader, out, di
 			})
 		},
 		Tunnel: func(ctx context.Context) error { return certTunnel(ctx, p, identity, c) },
-		Sample: func(ctx context.Context) (hostregistration.CertificationEvidence, error) {
+		Sample: func(ctx context.Context, measurementID string) (hostregistration.QualificationSample, error) {
 			fmt.Fprintf(out, "Running measurement %d/3…\n", len(j.Report.Samples)+1)
-			return qualificationSample(ctx, p)
+			return qualificationSample(ctx, p, measurementID)
 		},
 		Save: func(value qualificationJournal) error { return writeGuided(journalPath, value) },
 		Report: func(ctx context.Context, report hostregistration.QualificationReport) error {
 			result, err := c.ReportQualification(ctx, identity.Request, identity.DeviceID, identity.DeviceSecret, j.Run, report)
-			if err == nil && result.State != "passed" && report.FailureCode == "" {
+			expected := "passed"
+			if report.FailureCode != "" {
+				expected = "failed"
+			}
+			if err == nil && result.State != expected {
 				return fmt.Errorf("plane rejected qualification evidence; operator review required")
 			}
 			return err
@@ -280,6 +285,14 @@ func RunQualifyHost(ctx context.Context, args []string, input io.Reader, out, di
 }
 
 func validQualificationCheckpoint(j qualificationJournal) bool {
+	if j.Run.Manifest.ValidateQualification() != nil {
+		return false
+	}
+	for i, sample := range j.Report.Samples {
+		if i >= 3 || sample.MeasurementID != j.Run.Manifest.MeasurementIDs[i] {
+			return false
+		}
+	}
 	if len(j.Report.Samples) > 3 || !supportOneOf(j.Report.FailureCode, "", "preflight", "acquisition", "workload", "tunnel", "interrupted") {
 		return false
 	}
@@ -293,4 +306,12 @@ func validQualificationCheckpoint(j qualificationJournal) bool {
 		return false
 	}
 	return j.Report.Software.Kernel != "" && j.Report.Software.OSVersion != "" && len(j.Report.Software.InstallerCommit) == 40
+}
+
+func readQualificationAgentPlan(path string, plan *agentInstallPlan) error {
+	raw, err := readSetupRegular(path, false)
+	if err != nil {
+		return err
+	}
+	return decodeSetupJSON(raw, plan)
 }

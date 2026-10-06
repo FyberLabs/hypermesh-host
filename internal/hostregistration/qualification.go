@@ -17,10 +17,14 @@ type QualificationSoftware struct {
 	OSVersion       string `json:"os_version"`
 	InstallerCommit string `json:"installer_commit"`
 }
+type QualificationSample struct {
+	CertificationEvidence
+	MeasurementID string `json:"measurement_id"`
+}
 type QualificationReport struct {
-	Samples     []CertificationEvidence `json:"samples"`
-	FailureCode string                  `json:"failure_code"`
-	Software    QualificationSoftware   `json:"software"`
+	Samples     []QualificationSample `json:"samples"`
+	FailureCode string                `json:"failure_code"`
+	Software    QualificationSoftware `json:"software"`
 }
 
 func (c *Client) qualification(ctx context.Context, r Request, device, secret, id string, previous *QualificationRun, report *QualificationReport) (QualificationRun, error) {
@@ -52,6 +56,15 @@ func (c *Client) qualification(ctx context.Context, r Request, device, secret, i
 	}
 	if previous != nil && (out.ManifestSHA256 != previous.ManifestSHA256 || !SameManifest(out.Manifest, previous.Manifest)) {
 		return QualificationRun{}, fmt.Errorf("qualification manifest changed")
+	}
+	if report != nil {
+		expected := "passed"
+		if report.FailureCode != "" {
+			expected = "failed"
+		}
+		if out.State != expected {
+			return QualificationRun{}, fmt.Errorf("qualification result not acknowledged in expected terminal state")
+		}
 	}
 	return out, nil
 }

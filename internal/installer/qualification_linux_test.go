@@ -6,17 +6,20 @@ import (
 	"context"
 	"errors"
 	"github.com/FyberLabs/hypermesh-host/internal/hostregistration"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestQualificationRecordsThreeSamplesAndRetriesOnlyUpload(t *testing.T) {
 	j := qualificationJournal{State: "approved"}
+	j.Run.Manifest.MeasurementIDs = []string{"a", "b", "c"}
 	calls, reports := 0, 0
 	d := qualificationDeps{
 		Check: func(context.Context) error { return nil }, Acquire: func(context.Context) error { return nil }, Tunnel: func(context.Context) error { return nil },
-		Sample: func(context.Context) (hostregistration.CertificationEvidence, error) {
+		Sample: func(_ context.Context, id string) (hostregistration.QualificationSample, error) {
 			calls++
-			return hostregistration.CertificationEvidence{TokensPerSecond: float64(calls)}, nil
+			return hostregistration.QualificationSample{MeasurementID: id, CertificationEvidence: hostregistration.CertificationEvidence{TokensPerSecond: float64(calls)}}, nil
 		},
 		Save: func(qualificationJournal) error { return nil }, Report: func(_ context.Context, r hostregistration.QualificationReport) error {
 			reports++
@@ -56,6 +59,7 @@ func TestQualificationInterruptedRunCannotBecomeSuccess(t *testing.T) {
 }
 func TestQualificationAcquisitionFailureRetainsReason(t *testing.T) {
 	j := qualificationJournal{State: "approved"}
+	j.Run.Manifest.MeasurementIDs = []string{"a", "b", "c"}
 	d := qualificationDeps{Check: func(context.Context) error { return nil }, Acquire: func(context.Context) error { return errors.New("download failed") }, Save: func(qualificationJournal) error { return nil }, Report: func(_ context.Context, r hostregistration.QualificationReport) error {
 		if r.FailureCode != "acquisition" || len(r.Samples) != 0 {
 			t.Fatal("incorrect failure")
@@ -64,5 +68,42 @@ func TestQualificationAcquisitionFailureRetainsReason(t *testing.T) {
 	}}
 	if performQualification(context.Background(), &j, d) == nil {
 		t.Fatal("failed acquisition accepted")
+	}
+}
+
+func TestQualificationReadsOrdinaryPlanButRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	var plan agentInstallPlan
+	if err := readQualificationAgentPlan(path, &plan); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if readQualificationAgentPlan(link, &plan) == nil {
+		t.Fatal("symlink accepted")
+	}
+}
+func TestQualificationRejectsReplayedSample(t *testing.T) {
+	j := qualificationJournal{State: "approved"}
+	j.Run.Manifest.MeasurementIDs = []string{"a", "b", "c"}
+	d := qualificationDeps{Check: func(context.Context) error { return nil }, Acquire: func(context.Context) error { return nil }, Tunnel: func(context.Context) error { return nil }, Sample: func(context.Context, string) (hostregistration.QualificationSample, error) {
+		return hostregistration.QualificationSample{MeasurementID: "a"}, nil
+	}, Save: func(qualificationJournal) error { return nil }, Report: func(_ context.Context, r hostregistration.QualificationReport) error {
+		if r.FailureCode != "workload" || len(r.Samples) != 1 {
+			t.Fatal("replay accepted")
+		}
+		return nil
+	}}
+	if performQualification(context.Background(), &j, d) == nil {
+		t.Fatal("replayed sample became success")
 	}
 }

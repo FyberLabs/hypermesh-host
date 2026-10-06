@@ -12,6 +12,8 @@ import (
 )
 
 type CertificationManifest struct {
+ Quant *string `json:"quant,omitempty"`
+ MeasurementIDs []string `json:"measurement_ids,omitempty"`
  Purpose string `json:"purpose,omitempty"`
  Repetitions int `json:"repetitions,omitempty"`
  SuiteID string `json:"suite_id"`
@@ -64,10 +66,12 @@ func NewRunID()(string,error){
  return fmt.Sprintf("%x-%x-%x-%x-%x",b[:4],b[4:6],b[6:8],b[8:10],b[10:]),nil
 }
 func (m CertificationManifest) Validate()error{
- if m.Purpose!=""||m.Repetitions!=0{return fmt.Errorf("qualification is not host certification")}
+ if m.Purpose!=""||m.Repetitions!=0||len(m.MeasurementIDs)!=0{return fmt.Errorf("qualification is not host certification")}
  return m.validatePins(true)
 }
 func (m CertificationManifest) ValidateQualification()error{
+ if len(m.MeasurementIDs)!=3{return fmt.Errorf("three measurement identities required")}
+ seen:=map[string]bool{};for _,id:=range m.MeasurementIDs{if !hashRE.MatchString(id)||seen[id]{return fmt.Errorf("invalid measurement identity")};seen[id]=true}
  if m.Purpose!="lab-qualification-v1"||m.Repetitions!=3||m.DecodeTokS!=0||m.ThermalC!=nil{return fmt.Errorf("invalid qualification purpose or measurement policy")}
  return m.validatePins(false)
 }

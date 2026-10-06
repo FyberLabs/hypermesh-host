@@ -39,3 +39,11 @@ qualification remains pending deployment of the matching Panopticon API and sign
 host build. The operator procedure is documented in Panopticon's
 `docs/initial-host-qualification.md`. AMD and additional boards need their own
 runtime profiles and physical evidence; this change does not certify them.
+
+Each repetition uses its own manifest-bound workload/measurement ID. Replayed
+samples are rejected, including during journal recovery. Reporting advances the
+durable checkpoint only when the plane confirms the expected terminal state
+(`passed` for successful measurements, `failed` for a recorded failure).
+Standalone agent plans use the same regular-file reader as other installer
+commands; private registration and qualification journals retain their stricter
+ownership and permission checks.
