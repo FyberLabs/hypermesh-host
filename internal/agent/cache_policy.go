@@ -175,15 +175,25 @@ func acquireCachedModel(ctx context.Context, path, pin string, size int64, state
 	if _, err = a.cachePolicy(); err != nil {
 		return err
 	}
-	if st, e := os.Lstat(path); e == nil {
-		if !st.Mode().IsRegular() || st.Size() != size {
-			return fmt.Errorf("cached model size or type differs")
-		}
+
+	hit, err := a.verifyCachedArtifact(path, pin, size)
+	if err != nil {
+		return err
+	}
+	if hit {
+		// Retain the installer's ownership/permissions verification on valid bytes.
 		if err = fetch(); err != nil {
 			return err
-		} // Existing file is verified by the installer.
+		}
 	} else {
-		if !os.IsNotExist(e) {
+		if _, e := os.Lstat(path); e == nil {
+			if err = a.applyEvict(filepath.Dir(path), []string{pin}); err != nil {
+				return err
+			}
+			if _, e = os.Lstat(path); !os.IsNotExist(e) {
+				return fmt.Errorf("invalid cached model is active or pinned; finish its workload or remove its pin before repair")
+			}
+		} else if !os.IsNotExist(e) {
 			return e
 		}
 		limits, err := a.policyLimits(a.pullLimits(size))
@@ -207,6 +217,7 @@ func acquireCachedModel(ctx context.Context, path, pin string, size int64, state
 			return err
 		}
 	}
+
 	return a.admitModel("", pin, path)
 }
 func (a *Agent) verifyCachedArtifact(path, pin string, size int64) (bool, error) {

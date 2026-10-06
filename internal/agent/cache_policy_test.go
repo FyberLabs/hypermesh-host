@@ -181,3 +181,27 @@ func TestInstallerCacheProtectsPersistedAgentLease(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInstallerRepairsCorruptCache(t *testing.T) {
+	for _, broken := range [][]byte{[]byte("short"), bytes.Repeat([]byte{'x'}, 100)} {
+		a, cache := newCacheAgent(t)
+		body := bytes.Repeat([]byte{'m'}, 100)
+		pin := seedCachedModel(t, cache, body, time.Now())
+		path := filepath.Join(cache, fileName(pin))
+		os.WriteFile(path, broken, 0600)
+		if err := WriteCachePolicy(filepath.Dir(cache), CachePolicy{Schema: 1, MaxBytes: 200}); err != nil {
+			t.Fatal(err)
+		}
+		downloads := 0
+		err := acquireCachedModel(context.Background(), path, pin, 100, a.cfg.StateDir, func() error {
+			if _, e := os.Lstat(path); !os.IsNotExist(e) {
+				t.Fatal("corrupt destination remains")
+			}
+			downloads++
+			return os.WriteFile(path, body, 0600)
+		})
+		if err != nil || downloads != 1 {
+			t.Fatalf("err=%v downloads=%d", err, downloads)
+		}
+	}
+}
