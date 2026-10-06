@@ -74,3 +74,53 @@ func (c *Client) PlanQualification(ctx context.Context, r Request, device, secre
 func (c *Client) ReportQualification(ctx context.Context, r Request, device, secret string, run QualificationRun, report QualificationReport) (QualificationRun, error) {
 	return c.qualification(ctx, r, device, secret, run.RunID, &run, &report)
 }
+
+// QualificationNext is a device-bound decision, never authority to activate.
+type QualificationNext struct {
+	ProtocolVersion   int     `json:"protocol_version"`
+	Nonce             string  `json:"nonce"`
+	TenantID          string  `json:"tenant_id"`
+	DeviceID          string  `json:"device_id"`
+	RequestID         string  `json:"request_id"`
+	Action            string  `json:"action"`
+	RunID             *string `json:"run_id"`
+	State             *string `json:"state"`
+	SellingAllowed    *bool   `json:"selling_allowed"`
+	ActivationAllowed *bool   `json:"activation_allowed"`
+}
+
+func (c *Client) NextQualification(ctx context.Context, r Request, device, secret string) (QualificationNext, error) {
+	var out QualificationNext
+	if r.Validate() != nil || !UUID.MatchString(device) || !onboardingSecretRE.MatchString(secret) {
+		return out, fmt.Errorf("invalid qualification identity")
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return out, err
+	}
+	nonce := hex.EncodeToString(b)
+	id, err := NewRunID()
+	if err != nil {
+		return out, err
+	}
+	body := map[string]any{"protocol_version": 1, "nonce": nonce, "request_id": r.RequestID, "device_id": device, "run_id": id}
+	if err = c.request(ctx, "POST", "/api/v1/hypermesh/agent/onboarding/qualification/next", secret, body, &out); err != nil {
+		return out, err
+	}
+	if out.ProtocolVersion != 1 || out.Nonce != nonce || out.TenantID != c.tenant || out.DeviceID != device || out.RequestID != r.RequestID || out.SellingAllowed == nil || *out.SellingAllowed || out.ActivationAllowed == nil || *out.ActivationAllowed {
+		return QualificationNext{}, fmt.Errorf("qualification decision is not bound to this inactive host")
+	}
+	if out.Action == "certification" {
+		if out.RunID != nil || out.State != nil {
+			return QualificationNext{}, fmt.Errorf("invalid certification decision")
+		}
+		return out, nil
+	}
+	if !oneOf(out.Action, "qualification", "review", "attention") || out.RunID == nil || !UUID.MatchString(*out.RunID) || out.State == nil || !oneOf(*out.State, "planned", "passed", "failed") {
+		return QualificationNext{}, fmt.Errorf("invalid qualification decision")
+	}
+	if (out.Action == "qualification" && *out.State != "planned") || (out.Action == "review" && *out.State != "passed") {
+		return QualificationNext{}, fmt.Errorf("invalid qualification phase")
+	}
+	return out, nil
+}

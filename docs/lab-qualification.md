@@ -47,3 +47,22 @@ durable checkpoint only when the plane confirms the expected terminal state
 Standalone agent plans use the same regular-file reader as other installer
 commands; private registration and qualification journals retain their stricter
 ownership and permission checks.
+
+## Automatic guided qualification
+
+Running `sudo ./hypermesh-deploy` now checks whether the configured hardware-class
+suite model has an authoritative reference. If it has none, the plane creates or
+resumes a qualification attempt and the guide offers the pinned workload for
+approval. It executes the same three-sample qualification without asking the host
+owner to obtain an operator key or enter a run ID.
+
+After submission the guide leaves setup saved at the certification stage and
+prints the network-admin review URL (`/operator/benchmarks`). Rerunning while
+review is pending does not repeat workloads or registration. Once the admin
+publishes a baseline, the same command continues ordinary certification. Services
+remain inactive until the separate owner activation flow completes.
+
+Network admins can reject evidence or authorize a fresh attempt after failure or
+expiry; earlier journals and measurements remain intact. An unavailable AIuditor
+or invalid configuration is not treated as an absent reference. Physical AGX
+execution remains pending deployment of both the plane and signed host build.

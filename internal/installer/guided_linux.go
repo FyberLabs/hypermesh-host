@@ -132,6 +132,7 @@ type guidedFlow struct {
  rebootNeeded func(SetupPlan)(bool,error)
  boot func()(string,string,error)
  wireguardMode func()(string,string,error)
+ qualification func(context.Context,string)(bool,error)
  repairWireguard func(context.Context,string,agentInstallPlan)(agentInstallPlan,error)
 }
 func guidedCommand(name string)guidedRunner {
@@ -268,6 +269,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   if err=g.advance();err!=nil{return err}
  }
  if s.Stage==5 {
+  if g.qualification!=nil {ready,e:=g.qualification(ctx,agentPath);if e!=nil{return e};if !ready{return nil}}
   fmt.Fprintln(g.ui.out,"Preparing the model and runtime test required for this host…")
   if _,err=g.plan(ctx,"plan-certification","certification.json","--agent-plan",agentPath);err!=nil{return err}
   var p certificationPlan;if err=guidedRead(certPath,&p,true);err!=nil{return err}
@@ -402,6 +404,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
+  qualification:func(ctx context.Context,path string)(bool,error){return guidedQualification(ctx,path,ui,diagnostic)},
   wireguardMode:func()(string,string,error){return detectGuidedWireguard(ctx,ui.confirm)},
   repairWireguard:func(ctx context.Context,dir string,p agentInstallPlan)(agentInstallPlan,error){
    unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return p,e};defer unlockState()

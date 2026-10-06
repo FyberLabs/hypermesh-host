@@ -315,3 +315,52 @@ func readQualificationAgentPlan(path string, plan *agentInstallPlan) error {
 	}
 	return decodeSetupJSON(raw, plan)
 }
+
+// Called before ordinary certification planning. The guide remains at this
+// stage until an authoritative baseline exists; it never treats review as failure.
+func guidedQualification(ctx context.Context, path string, ui guidedUI, diagnostic io.Writer) (bool, error) {
+	var plan agentInstallPlan
+	if err := readQualificationAgentPlan(path, &plan); err != nil {
+		return false, err
+	}
+	if err := validateInstalledAgentInputs(plan); err != nil {
+		return false, err
+	}
+	if agentPlanDigest(plan) != plan.SHA256 {
+		return false, fmt.Errorf("agent plan changed")
+	}
+	var identity registrationJournal
+	if err := guidedRead(registrationPath(defaultSetupState, plan.SHA256), &identity, true); err != nil {
+		return false, err
+	}
+	if err := validateRegistration(identity, plan, identity.Issuer, identity.Dashboard, identity.Request.ClassID); err != nil {
+		return false, err
+	}
+	if identity.State != "registered-inactive" {
+		return false, fmt.Errorf("qualification requires inactive registration")
+	}
+	client, err := hostregistration.New(plan.ControlPlane, plan.TenantID)
+	if err != nil {
+		return false, err
+	}
+	next, err := client.NextQualification(ctx, identity.Request, identity.DeviceID, identity.DeviceSecret)
+	if err != nil {
+		return false, err
+	}
+	if next.Action == "certification" {
+		return true, nil
+	}
+	if next.Action == "qualification" {
+		fmt.Fprintln(ui.out, "This hardware class has no reference benchmark. Your host will measure the configured model for network-admin review.")
+		if code := RunQualifyHost(ctx, []string{"--agent-plan", path, "--run-id", *next.RunID}, ui.in, ui.out, diagnostic); code != 0 {
+			return false, fmt.Errorf("qualification paused; evidence and registration are retained")
+		}
+	}
+	if next.Action == "attention" {
+		fmt.Fprintln(ui.out, "This qualification attempt needs network-admin attention. Your measurements and registration are retained; services remain inactive.")
+	} else {
+		fmt.Fprintln(ui.out, "Measurements await network-admin review. Setup is saved; rerun this installer after approval to continue certification.")
+	}
+	fmt.Fprintln(ui.out, "Admin review: "+identity.Dashboard+"/operator/benchmarks")
+	return false, nil
+}
