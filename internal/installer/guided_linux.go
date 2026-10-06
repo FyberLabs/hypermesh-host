@@ -151,7 +151,6 @@ func guidedCommand(name string)guidedRunner {
  panic("unknown guided operation")
 }
 func (g guidedFlow) execute(ctx context.Context,name string,args ...string)error {
- if name=="register-agent"{ctx=context.WithValue(ctx,platformReviewPrompt{},g.ui.confirm)}
  var output bytes.Buffer
  code:=g.run(name)(ctx,args,&output,g.diagnostic)
  if name=="host-status"||name=="check-agent" {
@@ -195,6 +194,8 @@ func (g guidedFlow) apply(ctx context.Context,name,file,prompt string,extra ...s
 }
 func (g guidedFlow) advance()error {g.state.Stage++;return g.save()}
 func (g guidedFlow) finish(ctx context.Context)error {
+ ctx=context.WithValue(ctx,platformReviewPrompt{},g.ui.confirm)
+ ctx=context.WithValue(ctx,platformReviewOutput{},g.ui.out)
  s:=g.state;n,err:=installationNetwork(s.Network);if err!=nil{return err}
  setupPath:=filepath.Join(g.dir,"setup.json")
  agentPath:=filepath.Join(g.dir,"agent.json")

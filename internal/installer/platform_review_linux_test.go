@@ -5,6 +5,7 @@ package installer
 import (
  "context"
  "fmt"
+ "io"
  "reflect"
  "strings"
  "testing"
@@ -34,7 +35,7 @@ func TestLocalExpiryPreservesAmbiguousCompletion(t *testing.T){
  now:=time.Now()
  for _,state:=range []string{"prepared","pending","expired","approved","completed","registered-inactive","denied","retired"}{
   j:=registrationJournal{State:state,ExpiresAt:now.Add(-time.Minute)}
-  if savedRegistrationExpired(j,now)!=(state=="pending"||state=="expired"){t.Fatal(state)}
+  if savedRegistrationExpired(j,now)!=(state=="expired"){t.Fatal(state)}
  }
  if savedRegistrationExpired(registrationJournal{State:"pending"},now){t.Fatal("invented legacy expiry")}
  if savedRegistrationExpired(registrationJournal{State:"pending",ExpiresAt:now.Add(time.Minute)},now){t.Fatal("unexpired request replaced")}
@@ -45,4 +46,27 @@ func TestSavedServerExpiryCheckedBeforeCreate(t *testing.T){
  renewals:=0
  err:=prepareSavedRegistration(context.Background(),j,remote,func(status hostregistration.Status)error{renewals++;return nil})
  if err!=nil||renewals!=1||remote.gets!=1||remote.creates!=0{t.Fatal(err,renewals,remote)}
+}
+
+func TestPendingApprovalReconcilesWithoutReplacement(t *testing.T){
+ _,j:=registrationFixture(t);j.State="pending";j.ExpiresAt=time.Now().Add(-time.Hour)
+ remote:=&fakeRegistrationRemote{states:[]string{"approved"}}
+ err:=prepareSavedRegistration(context.Background(),j,remote,func(hostregistration.Status)error{t.Fatal("replaced approved request");return nil})
+ if err!=nil||remote.gets!=1||remote.creates!=0{t.Fatal(err,remote)}
+ if savedRegistrationExpired(j,time.Now()){t.Fatal("replaced from stale pending journal")}
+}
+func TestGuidedLaterStagesCarryPlatformReview(t *testing.T){
+ g,_,_:=fixtureGuided(t,"y\ny\ny\ny\n")
+ original:=g.run
+ seen:=map[string]bool{}
+ g.run=func(name string)guidedRunner{return func(ctx context.Context,args []string,out,diagnostic io.Writer)int{
+  if name=="check-agent"||name=="plan-certification"||name=="certify-agent"||name=="activate-agent"{
+   if _,ok:=ctx.Value(platformReviewPrompt{}).(func(string)error);!ok{t.Fatal("review unavailable",name)}
+   if ctx.Value(platformReviewOutput{})==nil{t.Fatal("review changes cannot be displayed",name)}
+   seen[name]=true
+  }
+  return original(name)(ctx,args,out,diagnostic)
+ }}
+ if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
+ if len(seen)!=4{t.Fatal(seen)}
 }

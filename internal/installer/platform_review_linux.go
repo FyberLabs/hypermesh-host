@@ -11,6 +11,7 @@ import (
 )
 
 type platformReviewPrompt struct{}
+type platformReviewOutput struct{}
 type installedPlatformReview struct {
  Schema int `json:"schema"`
  PlanSHA256 string `json:"plan_sha256"`

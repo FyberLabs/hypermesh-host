@@ -252,6 +252,9 @@ func registrationPackages(p SetupPlan,installed map[string]string)([]PackageChan
 }
 
 func registrationPreflight(ctx context.Context,p agentInstallPlan,class string)(Plan,error) {
+ if confirm,ok:=ctx.Value(platformReviewPrompt{}).(func(string)error);ok{
+  if err:=reviewRegistrationPlatform(ctx,p,class,confirm,func(message string){if out,ok:=ctx.Value(platformReviewOutput{}).(io.Writer);ok{fmt.Fprintln(out,message)}});err!=nil{return Plan{},err}
+ }
  setup,err:=reviewedRegistrationSetup(p);if err!=nil{return Plan{},err}
  return registrationPreflightSetup(ctx,p,class,setup)
 }
@@ -277,11 +280,11 @@ func waitRegistration(ctx context.Context,d time.Duration)error {
  timer:=time.NewTimer(d);defer timer.Stop()
  select {case <-ctx.Done():return fmt.Errorf("approval interrupted; rerun to recover");case <-timer.C:return nil}
 }
-// Pending means completion has never been requested locally: approved is
-// durably journaled before Complete. Ambiguous approved/completed outcomes must
-// be reconciled with the server rather than replaced from the local clock.
-func savedRegistrationExpired(j registrationJournal,now time.Time)bool{
- return j.State=="expired"||(j.State=="pending"&&!j.ExpiresAt.IsZero()&&!j.ExpiresAt.After(now))
+// Only a server-confirmed expired journal can be replaced before login.
+// Pending is only the last observation: browser approval may have happened
+// since that poll, so its saved deadline cannot authorize local replacement.
+func savedRegistrationExpired(j registrationJournal,_ time.Time)bool{
+ return j.State=="expired"
 }
 // A resumed request is checked before Create or approval polling. A fresh login
 // does not reset its deadline. Keep completed/denied/retired server decisions.
@@ -392,7 +395,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
   raw,err=readSetupRegular(journalPath,true)
   if err==nil{err=decodeSetupJSON(raw,&j)}
   if err==nil{err=validateRegistration(j,p,*issuer,*dashboard,*class)}
-  if err==nil&&j.State!="completed"&&j.State!="registered-inactive"&&j.State!="retired"{err=reviewPlatform()}
+  if err==nil&&j.State!="retired"&&(confirm!=nil||(j.State!="completed"&&j.State!="registered-inactive")){err=reviewPlatform()}
  } else if !os.IsNotExist(statErr){err=fmt.Errorf("cannot inspect registration journal")} else {
   if _,e:=os.Lstat("/var/lib/hypermesh/device.json");!os.IsNotExist(e){err=fmt.Errorf("existing host identity requires repair or reinstall")}
   var fresh Plan
