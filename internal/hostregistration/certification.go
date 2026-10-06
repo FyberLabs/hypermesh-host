@@ -12,6 +12,10 @@ import (
 )
 
 type CertificationManifest struct {
+ Quant *string `json:"quant,omitempty"`
+ MeasurementIDs []string `json:"measurement_ids,omitempty"`
+ Purpose string `json:"purpose,omitempty"`
+ Repetitions int `json:"repetitions,omitempty"`
  SuiteID string `json:"suite_id"`
  CatalogID string `json:"catalog_id"`
  ClassID string `json:"class_id"`
@@ -62,12 +66,22 @@ func NewRunID()(string,error){
  return fmt.Sprintf("%x-%x-%x-%x-%x",b[:4],b[4:6],b[6:8],b[8:10],b[10:]),nil
 }
 func (m CertificationManifest) Validate()error{
+ if m.Purpose!=""||m.Repetitions!=0||len(m.MeasurementIDs)!=0{return fmt.Errorf("qualification is not host certification")}
+ return m.validatePins(true)
+}
+func (m CertificationManifest) ValidateQualification()error{
+ if len(m.MeasurementIDs)!=3{return fmt.Errorf("three measurement identities required")}
+ seen:=map[string]bool{};for _,id:=range m.MeasurementIDs{if !hashRE.MatchString(id)||seen[id]{return fmt.Errorf("invalid measurement identity")};seen[id]=true}
+ if m.Purpose!="lab-qualification-v1"||m.Repetitions!=3||m.DecodeTokS!=0||m.ThermalC!=nil{return fmt.Errorf("invalid qualification purpose or measurement policy")}
+ return m.validatePins(false)
+}
+func (m CertificationManifest) validatePins(baseline bool)error{
  if !oneOf(m.SuiteID,"pack-v1","thin-v1")||!regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(m.CatalogID)||
  !oneOf(m.ClassID,"agx-large","nx-volume")||
  !regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(m.FileHash)||
  !regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$`).MatchString(m.ImageDigest)||
  m.SizeBytes<=0||m.SizeBytes>512<<30||m.Runtime!="nvidia"||m.Backend!="cuda-jetson"||
- m.ContextTokens<512||m.ContextTokens>131072||!m.FullContext||m.DecodeTokS<=0||math.IsNaN(m.DecodeTokS)||math.IsInf(m.DecodeTokS,0)||
+ m.ContextTokens<512||m.ContextTokens>131072||!m.FullContext||(baseline&&m.DecodeTokS<=0)||math.IsNaN(m.DecodeTokS)||math.IsInf(m.DecodeTokS,0)||
  (m.ThermalC!=nil&&(math.IsNaN(*m.ThermalC)||math.IsInf(*m.ThermalC,0))){
  return fmt.Errorf("incomplete or unsupported certification manifest")
  }

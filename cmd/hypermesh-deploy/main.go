@@ -19,6 +19,12 @@ import (
 )
 
 func main() {
+ if len(os.Args)>1 && os.Args[1]=="qualify-host" {
+  ctx,cancel:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
+  defer cancel()
+  os.Exit(installer.RunQualifyHost(ctx,os.Args[2:],os.Stdin,os.Stdout,os.Stderr))
+ }
+
  if len(os.Args) < 2 || os.Args[1] == "install" {
   args := []string{}
   if len(os.Args) > 1 { args = os.Args[2:] }
@@ -204,6 +210,7 @@ Commands:
   reboot-status  read the saved checkpoint; --plan-sha SHA256
   host-status  read current installed-service and authenticated plane state; --plan CERTIFICATION_PLAN_FILE
   certification-status  read redacted historical certification/activation evidence; --plan-sha SHA256
+  qualify-host      run an operator-authorized initial lab baseline; --run-id UUID
   plan-certification  obtain an authenticated frozen model/runtime plan; --agent-plan FILE
   certify-agent  acquire and certify while inactive; --plan FILE --approve-plan SHA256 --run
   activate-agent  original-owner approval and paused startup; --plan FILE --approve-plan SHA256 --start
