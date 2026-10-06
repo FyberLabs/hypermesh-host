@@ -188,7 +188,7 @@ func TestGuidedSetupDoesNotPassLegacyMemoryBudget(t *testing.T) {
 }
 
 func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
- for _,kind:=range []string{"pass","connectivity","decline","payload","stage","network","downgrade"} {
+ for _,kind:=range []string{"pass","connectivity","certification","activation","decline","payload","stage","network","downgrade"} {
   t.Run(kind,func(t *testing.T){
    p:=agentInstallFixture(t)
    network,_:=installationNetwork("test");p.ControlPlane=network.Plane;p.SHA256=agentPlanDigest(p)
@@ -199,7 +199,7 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
    state:=guidedState{Schema:1,Stage:3,PlanDirectory:filepath.Base(planDir),Network:"test",Host:p.HostName,Tenant:p.TenantID,Directory:p.Setup.Preflight.Resources.ModelDirectory,
     Download:guidedDownload{Build:21,Commit:p.Setup.InstallerCommit,Channel:"test"}}
    if kind=="stage"{state.Stage=7}
-   expectedStage:=3;if kind=="connectivity"{state.Stage=4;expectedStage=4}
+   expectedStage:=3;if kind=="connectivity"{state.Stage=4;expectedStage=4};if kind=="certification"{state.Stage=5;expectedStage=5};if kind=="activation"{state.Stage=6;expectedStage=6}
    if kind=="network"{state.Network="production"}
    buildinfo.Build="22";buildinfo.Commit=strings.Repeat("b",40)
    download:=guidedDownload{Schema:1,Build:22,Commit:buildinfo.Commit,Channel:"test",ReleaseURL:"https://example.test/test/22",TrustedKey:filepath.Join(dir,"public.asc")}
@@ -213,7 +213,7 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
    err:=upgradeGuidedInstalled(context.Background(),dir,session,receipt,&state,ui,func(agentInstallPlan)error{
     checks++;if kind=="payload"{return fmt.Errorf("payload mismatch")};return nil})
    after,_:=os.ReadFile(planPath);if string(before)!=string(after){t.Fatal("approval changed")}
-   if kind=="pass"||kind=="connectivity" {
+   if kind=="pass"||kind=="connectivity"||kind=="certification"||kind=="activation" {
     if err!=nil||checks!=2||state.Stage!=expectedStage||state.Download.Build!=22{t.Fatal(err,checks,state.Stage)}
     var reopened guidedState
     if err:=guidedRead(session,&reopened,true);err!=nil{t.Fatal(err)}
