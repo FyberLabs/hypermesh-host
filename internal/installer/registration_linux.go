@@ -4,6 +4,7 @@ package installer
 
 import (
  "context"
+ "bufio"
  "crypto/rand"
  "crypto/sha256"
  "encoding/base64"
@@ -38,6 +39,7 @@ type registrationJournal struct {
  DeviceSecret string `json:"device_secret"`
  DeviceID string `json:"device_id"`
  State string `json:"state"`
+ ExpiresAt time.Time `json:"expires_at,omitempty"`
 }
 func (registrationJournal) String()string{return "[redacted private registration journal]"}
 func (registrationJournal) GoString()string{return "[redacted private registration journal]"}
@@ -250,9 +252,13 @@ func registrationPackages(p SetupPlan,installed map[string]string)([]PackageChan
 }
 
 func registrationPreflight(ctx context.Context,p agentInstallPlan,class string)(Plan,error) {
+ setup,err:=reviewedRegistrationSetup(p);if err!=nil{return Plan{},err}
+ return registrationPreflightSetup(ctx,p,class,setup)
+}
+func registrationPreflightSetup(ctx context.Context,p agentInstallPlan,class string,setup SetupPlan)(Plan,error) {
  var fresh Plan
  deps:=setupApplyDeps{Source:setupSource{},Preflight:func(ctx context.Context,plan SetupPlan)(Plan,error){var err error;fresh,err=freshSetupPreflight(ctx,plan);return fresh,err}}
- remaining,target,err:=validateSetupHostPackages(ctx,p.Setup,deps,registrationPackages)
+ remaining,target,err:=validateSetupHostPackages(ctx,setup,deps,registrationPackages)
  if err==nil&&(len(remaining)>0||(p.Setup.HeadlessRequested&&target!="multi-user.target")){err=fmt.Errorf("approved prerequisites are incomplete")}
  if err==nil{err=registrationClass(class,fresh)}
  return fresh,err
@@ -270,6 +276,20 @@ func verifyRegistrationService(ctx context.Context,p agentInstallPlan)error {
 func waitRegistration(ctx context.Context,d time.Duration)error {
  timer:=time.NewTimer(d);defer timer.Stop()
  select {case <-ctx.Done():return fmt.Errorf("approval interrupted; rerun to recover");case <-timer.C:return nil}
+}
+// Pending means completion has never been requested locally: approved is
+// durably journaled before Complete. Ambiguous approved/completed outcomes must
+// be reconciled with the server rather than replaced from the local clock.
+func savedRegistrationExpired(j registrationJournal,now time.Time)bool{
+ return j.State=="expired"||(j.State=="pending"&&!j.ExpiresAt.IsZero()&&!j.ExpiresAt.After(now))
+}
+// A resumed request is checked before Create or approval polling. A fresh login
+// does not reset its deadline. Keep completed/denied/retired server decisions.
+func prepareSavedRegistration(ctx context.Context,j registrationJournal,remote registrationRemote,renew func(hostregistration.Status)error)error{
+ if j.State=="prepared"{return nil}
+ status,err:=remote.Get(ctx,j.Request);if err!=nil{return err}
+ if status.State=="expired"{return renew(status)}
+ return nil
 }
 var errRegistrationExpired = errors.New("registration approval expired")
 
@@ -290,6 +310,7 @@ func finishRegistration(ctx context.Context,j *registrationJournal,remote regist
  for {
   if j.DeviceID!="" && (s.DeviceID==nil||*s.DeviceID!=j.DeviceID){return fmt.Errorf("server device identity changed; preserve local state")}
   j.State=s.State
+  if expiry,e:=time.Parse(time.RFC3339Nano,s.ExpiresAt);e==nil{j.ExpiresAt=expiry}
   if s.DeviceID!=nil{j.DeviceID=*s.DeviceID}
   if err=save(*j);err!=nil{return err}
   switch s.State {
@@ -340,6 +361,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  issuer:=flags.String("issuer","","trusted HTTPS Keycloak realm issuer")
  dashboard:=flags.String("dashboard-url","","trusted HTTPS dashboard origin")
  class:=flags.String("class-id","","candidate platform class; checked against measured hardware")
+ reviewUpdates:=flags.Bool("review-platform-updates",false,"interactively review already-installed platform updates before sign-in")
  restart:=flags.Bool("restart-approval",false,"explicitly replace a denied/expired approval with fresh keys; preserves private history")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0||*path==""||!setupDigestRE.MatchString(*approved)||validateEndpoint(*issuer)!=nil||!hostregistration.Origin(*dashboard)||*class==""{fmt.Fprintln(diagnostic,"require --plan, --approve-plan, --issuer, --dashboard-url and --class-id");return 2}
@@ -361,15 +383,20 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
   if !hardware.MatchesReportedHardware(p.Setup.Preflight.Hardware,now) {err=fmt.Errorf("hardware changed from approved installation; preserve identity and review preflight")}
  }
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ confirm,_:=ctx.Value(platformReviewPrompt{}).(func(string)error)
+ if confirm==nil&&*reviewUpdates{ui:=guidedUI{in:bufio.NewReader(os.Stdin),out:diagnostic,ctx:ctx};confirm=ui.confirm}
+ reviewPlatform:=func()error{return reviewRegistrationPlatform(ctx,p,*class,confirm,func(message string){fmt.Fprintln(diagnostic,message)})}
  journalPath:=registrationPath(defaultSetupState,p.SHA256)
  var j registrationJournal
  if _,statErr:=os.Lstat(journalPath);statErr==nil {
   raw,err=readSetupRegular(journalPath,true)
   if err==nil{err=decodeSetupJSON(raw,&j)}
   if err==nil{err=validateRegistration(j,p,*issuer,*dashboard,*class)}
+  if err==nil&&j.State!="completed"&&j.State!="registered-inactive"&&j.State!="retired"{err=reviewPlatform()}
  } else if !os.IsNotExist(statErr){err=fmt.Errorf("cannot inspect registration journal")} else {
   if _,e:=os.Lstat("/var/lib/hypermesh/device.json");!os.IsNotExist(e){err=fmt.Errorf("existing host identity requires repair or reinstall")}
   var fresh Plan
+  if err==nil{err=reviewPlatform()}
   if err==nil{fresh,err=registrationPreflight(ctx,p,*class)}
   if err==nil{j,err=newRegistration(p,*issuer,*dashboard,*class,fresh)}
   if err==nil{err=saveRegistration(journalPath,j)}
@@ -377,6 +404,12 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  if err==nil{err=checkRegistrationIdentity("",j,j.State=="registered-inactive")}
  if err!=nil{fmt.Fprintln(diagnostic,"registration state validation failed; preserve existing files:",err);return 1}
  save:=func(value registrationJournal)error{return saveRegistration(journalPath,value)}
+ if savedRegistrationExpired(j,time.Now()){
+  fresh,e:=registrationPreflight(ctx,p,*class)
+  if e==nil{j,e=restartRegistration(j,hostregistration.Status{State:"expired"},p,fresh,func(old registrationJournal)error{return archiveRegistration(defaultSetupState,old)},save)}
+  if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
+  fmt.Fprintln(diagnostic,"Prepared a fresh installation request before sign-in; the previous request is archived.")
+ }
  login:=func(ctx context.Context)error{
  token,e:=deviceauth.Authorize(ctx,*issuer,diagnostic);if e!=nil{return e}
  return remote.Login(ctx,token.Bearer(),func(owner string)error{
@@ -384,6 +417,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
   if j.Owner==""{j.Owner=owner;return save(j)}
   return nil
  })}
+ fmt.Fprintln(diagnostic,"Connect this host to your account. Open the sign-in link on any device, then approve this host in your dashboard.")
  err=login(ctx)
  remote.SetSessionRecovery(func(ctx context.Context)error{
   fmt.Fprintln(diagnostic,"Setup authentication needs sign-in again. Keeping the installation request and keys.")
@@ -401,6 +435,15 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
    }
   }
  }
+ renewExpired:=func(status hostregistration.Status)error{
+  if status.State!="expired"{return fmt.Errorf("registration changed while renewing approval; preserve local state")}
+  if e:=verifyRegistrationService(ctx,p);e!=nil{return e}
+  fresh,e:=registrationPreflight(ctx,p,*class);if e!=nil{return e}
+  if e=checkRegistrationIdentity("",j,false);e!=nil{return e}
+  j,e=restartRegistration(j,status,p,fresh,func(old registrationJournal)error{return archiveRegistration(defaultSetupState,old)},save)
+  return e
+ }
+ if err==nil {err=prepareSavedRegistration(ctx,j,remote,renewExpired)}
  if err==nil{
   checked:=preflightRegistrationRemote{remote,func(ctx context.Context)error{
    if err:=verifyRegistrationService(ctx,p);err!=nil{return err}
@@ -411,12 +454,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
    return publishRegistration("",value)
   },diagnostic,waitRegistration)},func()error{
    status,e:=remote.Get(ctx,j.Request);if e!=nil{return e}
-   if status.State!="expired"{return fmt.Errorf("registration changed while renewing approval; preserve local state")}
-   if e=verifyRegistrationService(ctx,p);e!=nil{return e}
-   fresh,e:=registrationPreflight(ctx,p,*class);if e!=nil{return e}
-   if e=checkRegistrationIdentity("",j,false);e!=nil{return e}
-   j,e=restartRegistration(j,status,p,fresh,func(old registrationJournal)error{return archiveRegistration(defaultSetupState,old)},save)
-   return e
+   return renewExpired(status)
   },diagnostic)
  }
  if encodeErr:=json.NewEncoder(out).Encode(publicRegistration(j));encodeErr!=nil{return 1}

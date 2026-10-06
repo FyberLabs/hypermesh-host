@@ -151,6 +151,7 @@ func guidedCommand(name string)guidedRunner {
  panic("unknown guided operation")
 }
 func (g guidedFlow) execute(ctx context.Context,name string,args ...string)error {
+ if name=="register-agent"{ctx=context.WithValue(ctx,platformReviewPrompt{},g.ui.confirm)}
  var output bytes.Buffer
  code:=g.run(name)(ctx,args,&output,g.diagnostic)
  if name=="host-status"||name=="check-agent" {
@@ -246,7 +247,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
  var ap agentInstallPlan
  if err=guidedRead(agentPath,&ap,true);err!=nil{return err}
  if s.Stage==3 {
-  fmt.Fprintln(g.ui.out,"Connect this host to your account. Open the sign-in link on any device, then approve this host in your dashboard.")
+  fmt.Fprintln(g.ui.out,"Checking the saved installation and registration before sign-in…")
   args:=[]string{"--plan",agentPath,"--approve-plan",ap.SHA256,"--issuer",n.Issuer,"--dashboard-url",n.Dashboard,"--class-id",s.Class}
   var registration registrationJournal
   if guidedRead(registrationPath(defaultSetupState,ap.SHA256),&registration,true)==nil && registration.State=="denied" {
