@@ -137,3 +137,15 @@ The bridge remains internal, with inter-container communication and masquerading
 disabled. The endpoint must belong to the exact newly started, running container
 on that network only. Resolution failures retain failed evidence and still clean
 up the temporary container.
+
+
+### Continuing after baseline approval
+
+Rerun the same installer after the network admin publishes the reference. The
+saved device credential continues onboarding, certification, and initial paused
+activation without a second device-code login or owner browser approval. The
+completed owner-approved registration is durable; current owner membership,
+device binding, certification, model pins, holds and leases are still checked
+before a short-lived activation permit is issued. Selling remains disabled.
+Deploy the companion plane activation change before this installer release.
+Maintenance resume after an operational stop retains its separate owner check.
