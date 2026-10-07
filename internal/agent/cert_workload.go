@@ -117,6 +117,7 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 			return fail(err.Error())
 		}
 		runner.Endpoint = endpoint
+		runner.VerifiedContainerEndpoint = endpoint
 		// A host HTTP_PROXY must never receive model prompts or local probes.
 		transport := &http.Transport{Proxy: nil}
 		defer transport.CloseIdleConnections()

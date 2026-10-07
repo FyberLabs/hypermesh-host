@@ -3,6 +3,7 @@ package pathb
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -182,3 +183,54 @@ func TestAGXExactContextBoundary(t *testing.T) {
 		t.Fatal(fit, err)
 	}
 }
+
+func TestFullContextVerifiedBridgeEndpoint(t *testing.T) {
+	const verified = "http://172.18.0.2:8080/v1/chat/completions"
+	for _, tc := range []struct {
+		name, endpoint, trusted string
+		pass                    bool
+	}{
+		{"inspected", verified, verified, true},
+		{"unverified", verified, "", false},
+		{"different-host", "http://172.18.0.3:8080/v1/chat/completions", verified, false},
+		{"different-port", "http://172.18.0.2:9999/v1/chat/completions", verified, false},
+		{"public", "http://8.8.8.8:8080", "http://8.8.8.8:8080", false},
+		{"hostname", "http://workload:8080", "http://workload:8080", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			transport := contextBridgeTransport(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if req.URL.Host != "172.18.0.2:8080" {
+					t.Fatal("unexpected host")
+				}
+				body := ""
+				switch req.URL.Path {
+				case "/props":
+					body = `{"default_generation_settings":{"n_ctx":512},"total_slots":1}`
+				case "/tokenize":
+					body = `{"tokens":[123]}`
+				case "/completion":
+					time.Sleep(2 * time.Millisecond)
+					body = `{"tokens_evaluated":496,"tokens_predicted":16,"truncated":true,"stop":true,"stop_type":"limit"}`
+				default:
+					t.Fatal("unexpected path")
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})
+			runner := Runner{Endpoint: tc.endpoint, VerifiedContainerEndpoint: tc.trusted, Model: "fixture", HTTP: &http.Client{Transport: transport}}
+			fit, err := runner.CheckContextFit(context.Background(), 512)
+			if tc.pass {
+				if err != nil || fit == nil || !fit.ValidFor(512) || calls != 3 {
+					t.Fatalf("%+v %v calls=%d", fit, err, calls)
+				}
+			} else if err == nil || fit != nil || calls != 0 {
+				t.Fatalf("unauthorized endpoint reached: %v calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+type contextBridgeTransport func(*http.Request) (*http.Response, error)
+
+func (f contextBridgeTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

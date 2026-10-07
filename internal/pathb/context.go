@@ -42,7 +42,13 @@ func (r Runner) CheckContextFit(ctx context.Context, tokens int) (*ContextFit, e
 	}
 	base, err := url.Parse(r.endpoint())
 	if err != nil || base.Scheme != "http" || base.User != nil || base.RawQuery != "" ||
-		base.Fragment != "" || net.ParseIP(base.Hostname()) == nil || !net.ParseIP(base.Hostname()).IsLoopback() {
+		base.Fragment != "" || net.ParseIP(base.Hostname()) == nil {
+		return fail()
+	}
+	ip := net.ParseIP(base.Hostname())
+	verifiedBridge := r.VerifiedContainerEndpoint != "" &&
+		r.endpoint() == r.VerifiedContainerEndpoint && ip.To4() != nil && ip.IsPrivate()
+	if !ip.IsLoopback() && !verifiedBridge {
 		return fail()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
