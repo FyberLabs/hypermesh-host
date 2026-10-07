@@ -24,6 +24,7 @@ import (
 type Client struct {
 	BaseURL      string
 	TenantID     string
+	DeviceID string // Active enrollment; cross-checked before selecting machine credentials.
 	DeviceSecret string // Authorization: Bearer; never log
 	Credential func(context.Context)(string,error)
 	InvalidateCredential func(context.Context,string)error

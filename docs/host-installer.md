@@ -1964,3 +1964,13 @@ original launcher dispatches to that image. A failed preparation leaves the prev
 session and executable usable. Automated coverage includes pathname replacement,
 failed upgrade preparation, repeated upgrades and default noninteractive consent.
 Live AGX continuation across an installer upgrade remains to be verified.
+
+### Re-enrollment and machine signing identities
+
+Explicit re-enrollment stops old workload/tunnel activity and archives the local
+machine signing checkpoint and its AIuditor delegations before exchanging the new
+enrollment token. Private history remains on disk; the replacement enrollment does
+not reuse those keys or cached tokens. An unsafe checkpoint blocks the exchange.
+The API client also checks the signing checkpoint against its current device ID,
+so stale state cannot authenticate requests for a different device. Normal restarts
+reuse the active enrollment; server-side retirement/revocation remains authoritative.

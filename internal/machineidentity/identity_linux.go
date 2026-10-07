@@ -258,7 +258,7 @@ func (p Provider) Token(ctx context.Context, base, tenant, device, request, boot
 
 // ExistingToken is used by the running agent. Legacy enrollment remains valid
 // only when no signing identity has been installed at all.
-func (p Provider) ExistingToken(ctx context.Context, base, tenant, bootstrap string) (string, error) {
+func (p Provider) ExistingToken(ctx context.Context, base, tenant, device, bootstrap string) (string, error) {
 	if p.Path == "" {
 		p.Path = DefaultPath
 	}
@@ -269,7 +269,10 @@ func (p Provider) ExistingToken(ctx context.Context, base, tenant, bootstrap str
 	if e != nil {
 		return "", e
 	}
-	return p.Token(ctx, base, tenant, s.Device, s.Request, bootstrap)
+	if device == "" || s.Device != device {
+		return "", fmt.Errorf("saved machine identity does not match active enrollment")
+	}
+	return p.Token(ctx, base, tenant, device, s.Request, bootstrap)
 }
 
 func safeFile(path string) (*os.File, error) {
@@ -546,4 +549,63 @@ func (p Provider) ContractToken(ctx context.Context, base, tenant, device, reque
 		return "", fmt.Errorf("contract credential rejected or invalid")
 	}
 	return out.Token, nil
+}
+
+// Retire removes local credentials from active use before exchanging a fresh
+// enrollment token. Preserve private history and serialize with token renewal.
+// Peer delegations belong to the retired enrollment and must be retired too.
+func (p Provider) Retire(ctx context.Context) error {
+	if p.Path == "" {
+		p.Path = DefaultPath
+	}
+	entries, err := os.ReadDir(filepath.Dir(p.Path))
+	if err != nil {
+		return err
+	}
+	paths := []string{p.Path}
+	prefix := filepath.Base(p.Path) + ".peer-"
+	for _, entry := range entries {
+		suffix := strings.TrimPrefix(entry.Name(), prefix)
+		if suffix == entry.Name() || len(suffix) != 64 {
+			continue
+		}
+		if _, err := hex.DecodeString(suffix); err != nil {
+			continue
+		}
+		paths = append(paths, filepath.Join(filepath.Dir(p.Path), entry.Name()))
+	}
+	for _, path := range paths {
+		if err := retireCheckpoint(ctx, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func retireCheckpoint(ctx context.Context, path string) error {
+	unlock, err := lock(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	f, err := safeFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	f.Close()
+	nonce := make([]byte, 16)
+	if _, err = rand.Read(nonce); err != nil {
+		return err
+	}
+	if err = os.Rename(path, path+".retired-"+hex.EncodeToString(nonce)); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

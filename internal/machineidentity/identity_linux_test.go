@@ -261,3 +261,90 @@ func TestContractProofAndPeerIsolation(t *testing.T) {
 		t.Fatal("invalid authority accepted")
 	}
 }
+
+func TestExistingTokenRejectsDifferentActiveDevice(t *testing.T) {
+	p, _, calls, _ := identityFixture(t)
+	if _, err := get(t, p); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := origins.Load(p.Path)
+	before := *calls
+	for _, id := range []string{"", "replacement-device"} {
+		token, err := p.ExistingToken(context.Background(), base.(string), tenant, id, "new-bootstrap")
+		if err == nil || token != "" {
+			t.Fatal("returned retired enrollment credential", token, err)
+		}
+	}
+	if *calls != before {
+		t.Fatal("renewed wrong enrollment")
+	}
+}
+
+func TestRetirementArchivesPrimaryAndPeersAndPreparesFreshKey(t *testing.T) {
+	p, _, _, _ := identityFixture(t)
+	if _, err := get(t, p); err != nil {
+		t.Fatal(err)
+	}
+	old, err := read(p.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := p.Peer("other-aiuditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = save(peer.Path, old); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Retire(context.Background()); err != nil {
+		t.Fatal("retry failed", err)
+	}
+	for _, path := range []string{p.Path, peer.Path} {
+		if _, err = os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("old identity remains active", err)
+		}
+		files, err := filepath.Glob(path + ".retired-*")
+		if err != nil || len(files) != 1 {
+			t.Fatal(files, err)
+		}
+		archived, err := read(files[0])
+		if err != nil || archived.Key != old.Key {
+			t.Fatal("lost private history", err)
+		}
+	}
+	base, _ := origins.Load(p.Path)
+	token, err := p.ExistingToken(context.Background(), base.(string), tenant, "replacement-device", "new-bootstrap")
+	if err != nil || token != "new-bootstrap" {
+		t.Fatal(token, err)
+	}
+	// Even an attempt to bind the old registration creates a fresh key. The
+	// authority correctly refuses to replace its existing binding without a new
+	// enrollment; local retirement never grants that authority.
+	if _, err = get(t, p); err == nil || !strings.Contains(err.Error(), "409") {
+		t.Fatal("old remote binding was replaced", err)
+	}
+	fresh, err := read(p.Path)
+	if err != nil || fresh.Key == old.Key {
+		t.Fatal("reused signing key", err)
+	}
+}
+
+func TestRetirementRefusesUnsafeCheckpoint(t *testing.T) {
+	p, _, _, _ := identityFixture(t)
+	target := filepath.Join(filepath.Dir(p.Path), "other")
+	if err := os.WriteFile(target, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, p.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Retire(context.Background()); err == nil {
+		t.Fatal("accepted symlink")
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "private" {
+		t.Fatal("changed target", err)
+	}
+}

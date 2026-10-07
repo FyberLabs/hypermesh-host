@@ -21,9 +21,11 @@ type Provider struct {
 func (Provider) Token(context.Context, string, string, string, string, string) (string, error) {
 	return "", fmt.Errorf("machine identity requires Linux")
 }
-func (Provider) ExistingToken(context.Context, string, string, string) (string, error) {
+func (Provider) ExistingToken(context.Context, string, string, string, string) (string, error) {
 	return "", fmt.Errorf("machine identity requires Linux")
 }
 func (Provider) Invalidate(context.Context, string) error {
 	return fmt.Errorf("machine identity requires Linux")
 }
+
+func (Provider) Retire(context.Context) error { return nil }

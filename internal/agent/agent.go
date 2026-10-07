@@ -325,6 +325,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
         }
 		a.state = st
 		a.client.DeviceSecret = st.DeviceSecret
+		a.client.DeviceID = st.DeviceID
 		a.log.Info("using stored device", "device_id", st.DeviceID)
 		return nil
 	}
@@ -387,6 +388,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	}
 	a.state = st
 	a.client.DeviceSecret = st.DeviceSecret
+	a.client.DeviceID = st.DeviceID
 	a.log.Info("enrolled", "device_id", st.DeviceID, "credential_prefix", st.CredentialPrefix)
 	return nil
 }
@@ -1362,6 +1364,7 @@ func (a *Agent) resetEnrollmentWork(ctx context.Context) error {
             if err:=writeCacheIndex(dir,idx);err!=nil {return err}
         } else if !os.IsNotExist(err) {return err}
     }
+    if err:=retireMachineIdentity(ctx,a.cfg);err!=nil{return err}
     a.setLease(nil)
     a.applied="";a.peerPosted=false;a.postedPub=""
     return nil
