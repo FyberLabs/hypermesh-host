@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -100,9 +101,26 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	}()
 	runner := a.pathb
 	runner.Model = job.CatalogID
-	runner.Endpoint = "http://127.0.0.1:" + a.cfg.PublishPort() + "/v1/chat/completions"
+	// The internal bridge may suppress Docker host-port publishing.
+	// Resolve the exact started container, never a guessed or saved address.
+	resolver, canResolve := starter.(interface {
+		CertificationEndpoint(context.Context, *runtime.Handle) (string, error)
+	})
 	if a.certEndpoint != "" {
 		runner.Endpoint = a.certEndpoint
+	} else {
+		if !canResolve {
+			return fail("certification runtime cannot resolve its local endpoint")
+		}
+		endpoint, err := resolver.CertificationEndpoint(ctx, handle)
+		if err != nil {
+			return fail(err.Error())
+		}
+		runner.Endpoint = endpoint
+		// A host HTTP_PROXY must never receive model prompts or local probes.
+		transport := &http.Transport{Proxy: nil}
+		defer transport.CloseIdleConnections()
+		runner.HTTP = &http.Client{Transport: transport, Timeout: 45 * time.Second}
 	}
 	wait := a.certReadyWait
 	if wait <= 0 {

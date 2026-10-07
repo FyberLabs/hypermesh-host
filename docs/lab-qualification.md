@@ -125,3 +125,15 @@ throughput inclusively within 90–110% of the reference. Model/context fit and
 thermal checks still apply. The first reference for a new class continues to
 require network-admin review; retry permission is not baseline publication or
 permission to sell.
+
+### Local certification connectivity
+
+Certification resolves the temporary container's current IPv4 address on the
+isolated `hypermesh-workload` bridge and sends its local inference checks to
+port 8080 there. Docker can record a requested loopback port binding without
+actually publishing it on an internal network (`NetworkSettings.Ports` is null).
+Certification therefore does not depend on a listener at host port 18080.
+The bridge remains internal, with inter-container communication and masquerading
+disabled. The endpoint must belong to the exact newly started, running container
+on that network only. Resolution failures retain failed evidence and still clean
+up the temporary container.
