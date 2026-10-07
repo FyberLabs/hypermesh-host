@@ -149,3 +149,8 @@ device binding, certification, model pins, holds and leases are still checked
 before a short-lived activation permit is issued. Selling remains disabled.
 Deploy the companion plane activation change before this installer release.
 Maintenance resume after an operational stop retains its separate owner check.
+
+Activation and maintenance-resume HTTP 409 responses display specific guidance
+for known server gates (expired run, changed pins, incomplete evidence, workload
+conflict or missing enrollment approval). Unknown response bodies remain private.
+A 409 does not mean the host should be deleted or re-enrolled.
