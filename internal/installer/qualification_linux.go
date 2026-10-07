@@ -370,9 +370,9 @@ func guidedQualification(ctx context.Context, path string, ui guidedUI, diagnost
 		}
 	}
 	if next.Action == "attention" {
-		fmt.Fprintln(ui.out, "This plane has not offered a fresh qualification attempt. Update the plane to support host-requested retries, then rerun this installer. Your measurements and registration are retained; services remain inactive.")
+		fmt.Fprintln(ui.out, "This plane has not offered a fresh qualification attempt. The program operator must restore host-requested retries; continuation will check again. Your measurements and registration are retained; services remain inactive.")
 	} else {
-		fmt.Fprintln(ui.out, "Measurements await network-admin review. Setup is saved; rerun this installer after approval to continue certification.")
+		fmt.Fprintln(ui.out, "Measurements await network-admin review. Setup is saved; automatic continuation will check for approval.")
 	}
 	fmt.Fprintln(ui.out, "Admin review: "+identity.Dashboard+"/operator/benchmarks")
 	return false, nil

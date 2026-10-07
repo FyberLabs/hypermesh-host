@@ -93,3 +93,20 @@ Implemented shared installer/agent quota and reserve policy, on-demand lease and
 benchmark acquisition, protected LRU eviction, concurrent download reuse, and
 cache admission telemetry. See [model storage](model-cache.md) for host controls
 and remaining physical acceptance checks. Blob-cache serving remains future work.
+
+## Persistent onboarding continuation
+
+Implemented a boot-enabled onboarding timer and private verified installer copy.
+New guided setup completes owner enrollment before prerequisite changes/reboot,
+then transfers the same identity into the verified agent installation. Saved
+consent covers planned installation, reboot, model tests and paused activation.
+The worker resumes journals without stdin, waits for benchmark review, and backs
+off failed attempts. Unknown approval prompts remain blocked. Completion disables
+the timer only after live host status succeeds.
+
+Regression coverage includes enrollment-before-mutation ordering, reboot followed
+by review followed by activation without input, failed-stage retry without new
+authentication, bounded durable backoff, and systemd search-path/drop-in rejection.
+Actual reboot/service behavior on AGX remains physical acceptance work. Dashboard
+status delivery and remote signed continuation updates remain unfinished; the
+agent updater does not update the separate continuation executable.

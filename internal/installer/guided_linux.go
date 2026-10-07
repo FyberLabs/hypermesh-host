@@ -47,6 +47,9 @@ type guidedState struct {
  Class string `json:"class"`
  Stage int `json:"stage"`
  PlanDirectory string `json:"plan_directory,omitempty"`
+ Autonomous bool `json:"autonomous,omitempty"`
+ ContinuationSHA string `json:"continuation_sha256,omitempty"`
+ LauncherSHA string `json:"launcher_sha256,omitempty"`
 }
 type guidedNetwork struct { Plane, Issuer, Dashboard string }
 func installationNetwork(name string)(guidedNetwork,error) {
@@ -56,6 +59,10 @@ func installationNetwork(name string)(guidedNetwork,error) {
 }
 type guidedUI struct { in *bufio.Reader; out io.Writer; ctx context.Context }
 func (u guidedUI) ask(label,def string)(string,error) {
+ if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
+  if label=="Private Hugging Face token file for a gated model (Enter for public or cached models)" || label=="Private token file if required (Enter to retry without one)" {return "",nil}
+  return "",fmt.Errorf("onboarding requires additional configuration: %s",label)
+ }
  if def!="" {fmt.Fprintf(u.out,"%s [%s]: ",label,def)} else {fmt.Fprintf(u.out,"%s: ",label)}
  var line string;var err error
  if u.ctx==nil {line,err=u.in.ReadString('\n')} else {
@@ -74,6 +81,11 @@ func (u guidedUI) ask(label,def string)(string,error) {
  return answer,nil
 }
 func (u guidedUI) confirm(label string)error {
+ if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
+  if continuationPrompt(label){return nil}
+  return fmt.Errorf("onboarding needs review of a change outside saved consent: %s",label)
+ }
+
  answer,err:=u.ask(label+" (y/N)","");if err!=nil{return err}
  if !strings.EqualFold(answer,"y")&&!strings.EqualFold(answer,"yes"){return fmt.Errorf("setup paused; nothing further changed. Run the same installer again to resume")}
  return nil
@@ -123,6 +135,8 @@ func guidedDefaults(p hardware.Profile)(string,int64,string) {
 
 type guidedRunner func(context.Context,[]string,io.Writer,io.Writer)int
 type guidedFlow struct {
+ prepareContinuation func(context.Context, SetupPlan)error
+ adoptEnrollment func(context.Context,agentInstallPlan)(bool,error)
  dir string
  state *guidedState
  ui guidedUI
@@ -163,6 +177,7 @@ func (g guidedFlow) execute(ctx context.Context,name string,args ...string)error
    if report.PlaneSellState!=""{fmt.Fprintln(g.ui.out,"Dashboard selling state:",report.PlaneSellState)}
   }
  }
+ if code!=0 && g.state.Autonomous{return fmt.Errorf("%s has not completed; the continuation service will retry with saved identity and approvals",name)}
  if code!=0{return fmt.Errorf("%s could not finish; resolve the message above and run the same installer again",name)}
  return nil
 }
@@ -175,6 +190,7 @@ func (g guidedFlow) plan(ctx context.Context,name,file string,args ...string)(ma
   // Surface preflight blockers, never bury them in a JSON plan.
   var failed struct{Blockers []string `json:"blockers"`};_ = json.Unmarshal(raw.Bytes(),&failed)
   for _,reason:=range failed.Blockers {fmt.Fprintln(g.ui.out," -",reason)}
+  if g.state.Autonomous{return nil,fmt.Errorf("%s is blocked; the continuation service will retry after backoff",name)}
   return nil,fmt.Errorf("%s is blocked; fix the listed prerequisites and rerun the installer",name)
  }
  decoder:=json.NewDecoder(&raw);decoder.UseNumber()
@@ -214,6 +230,11 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintf(g.ui.out,"Model storage: %s\n",s.Directory)
   for _,change:=range p.Changes {fmt.Fprintf(g.ui.out," - %s: %s\n",change.Kind,strings.Join(change.Argv," "))}
   fmt.Fprintln(g.ui.out,"Existing vendor drivers and kernel are preserved.")
+  if g.prepareContinuation!=nil {
+   if err=g.prepareContinuation(ctx,p);err!=nil{return err}
+   ctx=withContinuationConsent(ctx);g.ui.ctx=ctx
+   ctx=context.WithValue(ctx,platformReviewPrompt{},g.ui.confirm)
+  }
   if err=g.apply(ctx,"apply-setup","setup.json","Apply these prerequisite and headless changes?");err!=nil{return err}
   if err=g.advance();err!=nil{return err}
  }
@@ -230,8 +251,8 @@ func (g guidedFlow) finish(ctx context.Context)error {
    if boot==rp.BootID {
     extra,prompt,e:=guidedRebootRetry(setupRebootPath(defaultSetupState,rp.SHA256),rp)
     if e!=nil{return e}
-    fmt.Fprintln(g.ui.out,"A reboot is required. This will disconnect all login sessions. Reconnect afterwards and run the same installer; it will continue here.")
-    if len(extra)>1{fmt.Fprintln(g.ui.out,"The previous reboot has not been observed. Retrying requires your approval and repeats the safety checks; shutdown inhibitors remain enforced.")}
+    if s.Autonomous {fmt.Fprintln(g.ui.out,"A reboot is required. This will disconnect login sessions. Onboarding will continue automatically after boot.")} else {fmt.Fprintln(g.ui.out,"A reboot is required. This will disconnect all login sessions. Reconnect afterwards and run the same installer; it will continue here.")}
+    if len(extra)>1{fmt.Fprintln(g.ui.out,"The previous reboot has not been observed. Retrying repeats the safety checks; shutdown inhibitors remain enforced.")}
     if err=g.apply(ctx,"reboot-setup","reboot.json",prompt,extra...);err!=nil{return err}
     return nil
    }
@@ -259,7 +280,9 @@ func (g guidedFlow) finish(ctx context.Context)error {
    if err=g.ui.confirm("The previous browser approval ended. Start a new approval with fresh keys?");err!=nil{return err}
    args=append(args,"--restart-approval")
   }
-  if err=g.execute(ctx,"register-agent",args...);err!=nil{return err}
+  adopted:=false
+  if g.adoptEnrollment!=nil {adopted,err=g.adoptEnrollment(ctx,ap);if err!=nil{return err}}
+  if !adopted {if err=g.execute(ctx,"register-agent",args...);err!=nil{return err}}
   if err=g.advance();err!=nil{return err}
  }
  if s.Stage==4 {
@@ -314,10 +337,14 @@ func (g guidedFlow) finish(ctx context.Context)error {
 }
 func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diagnostic io.Writer)int {
  flags:=flag.NewFlagSet("install",flag.ContinueOnError);flags.SetOutput(diagnostic)
+ background:=flags.Bool("continue",false,"resume saved onboarding consent without interactive input")
+ interactive:=flags.Bool("interactive",false,"explicitly review prompts and supply recovery input")
  cacheSettings:=flags.Bool("cache-settings",false,"review host model cache quota and reserve")
  receipt:=flags.String("receipt","","download receipt (normally found beside the executable)")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0{return 2}
+ if *background && (*interactive || *cacheSettings) {fmt.Fprintln(diagnostic,"--continue cannot be combined with interactive options");return 2}
+ if *interactive || *cacheSettings {ctx=context.WithValue(ctx,continuationInteractive{},true)}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
  if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
  ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx}
@@ -330,6 +357,10 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if _,e:=os.Lstat(statePath);e==nil{
   err=guidedRead(statePath,&s,true)
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
+  if err==nil && *background && s.ContinuationSHA!="" {
+   target,e:=continuationTarget(s);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
+   if target!="" {unlock();return runContinuation(ctx,target,input,out,diagnostic)}
+  }
   if err==nil && s.Stage==4 {
    err=func()error{
     unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
@@ -342,15 +373,16 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    err=func()error{
     unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
     if s.Stage>=3 && s.Stage<=6 {
-     return upgradeGuidedInstalled(ctx,dir,statePath,*receipt,&s,ui,func(p agentInstallPlan)error{return verifyRegistrationService(ctx,p)})
+     return upgradeGuidedInstalled(ctx,dir,statePath,*receipt,&s,ui,func(p agentInstallPlan)error{return verifyRegistrationService(ctx,p)},func(next *guidedState)error{return installContinuation(ctx,next)})
     }
     return upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
-     func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())})
+     func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())},func(next *guidedState)error{return installContinuation(ctx,next)})
    }()
   }
   if err==nil{err=validateGuidedDownload(s.Download)}
   if err==nil{fmt.Fprintf(out,"Resuming setup for %s on %s. Completed steps will be checked by the installation gates.\n",s.Host,s.Network)}
  }else if !os.IsNotExist(e){err=e}else{
+  if *background {fmt.Fprintln(diagnostic,"no saved onboarding session");return 1}
   // Do not treat an installation made outside this guide as a fresh machine:
   // prerequisite changes or a reboot could otherwise disrupt an existing host.
   if e:=guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource());e!=nil {
@@ -402,21 +434,53 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil{err=writeGuided(statePath,s)}
  }
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ if *background {
+  status,e:=readContinuation(dir);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
+  if status.Stage==s.Stage&&time.Now().Before(status.NextAttempt){return 0}
+ }
+ if *background&&!s.Autonomous {fmt.Fprintln(diagnostic,"no saved continuation consent");return 1}
+ if s.Autonomous {
+  if !*background {if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)};if err!=nil{fmt.Fprintln(diagnostic,err);return 1}}
+  ctx=withContinuationConsent(ctx);ui.ctx=ctx
+ }
  if err=guidedCachePolicy(s.Directory,ui,*cacheSettings);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ if !*background && s.Stage>=4 && !s.Autonomous {
+  if err=ui.confirm("Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests and paused startup?");err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+  s.Autonomous=true
+  if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)}
+  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+  ctx=withContinuationConsent(ctx);ui.ctx=ctx
+ }
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
-  qualification:func(ctx context.Context,path string)(bool,error){return guidedQualification(ctx,path,ui,diagnostic)},
+  prepareContinuation:func(ctx context.Context,p SetupPlan)error{
+   if !s.Autonomous {
+    if e:=ui.confirm("Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation and paused startup after admin approval?");e!=nil{return e}
+   }
+   if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
+   s.Autonomous=true
+   if e:=installContinuation(ctx,&s);e!=nil{return e}
+   return writeGuided(statePath,s)
+  },
+  adoptEnrollment:func(ctx context.Context,p agentInstallPlan)(bool,error){return adoptEarlyEnrollment(ctx,planDir,p,s)},
+  qualification:func(ctx context.Context,path string)(bool,error){u:=ui;u.ctx=ctx;return guidedQualification(ctx,path,u,diagnostic)},
   wireguardMode:func()(string,string,error){return detectGuidedWireguard(ctx,ui.confirm)},
   repairWireguard:func(ctx context.Context,dir string,p agentInstallPlan)(agentInstallPlan,error){
    unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return p,e};defer unlockState()
-   return repairGuidedWireguard(ctx,dir,p,ui)
+   u:=ui;u.ctx=ctx;return repairGuidedWireguard(ctx,dir,p,u)
   },
   rebootNeeded:func(p SetupPlan)(bool,error){
    needed,e:=liveRebootRequired("");if e!=nil{return false,e}
    headless,e:=headlessRebootNeeded(ctx,p,rebootSetupSource());return needed||headless,e
   },boot:func()(string,string,error){return rebootIdentity("")}}
- if err=flow.finish(ctx);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ err=flow.finish(ctx)
+ if s.Autonomous {
+  if e:=recordContinuation(dir,s,err);e!=nil{fmt.Fprintln(diagnostic,e);return 1}
+  if s.Stage==7&&err==nil {_,_=(setupSource{}).output(ctx,"systemctl","disable","--now","hypermesh-onboarding.timer")}
+ }
+ if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ if s.Autonomous&&s.Stage<7 {fmt.Fprintln(out,"Setup continues automatically in hypermesh-onboarding.service. You may disconnect; progress is saved across reboots.")}
  if s.Stage==7{fmt.Fprintf(out,"Setup completed. Review %s to manage your host. Selling is enabled separately in the dashboard.\n",s.Host)}
  return 0
 }
@@ -446,7 +510,7 @@ func guidedPlanDirectory(dir string,s guidedState)(string,error){
 // Before agent installation, a newer verified CLI can re-observe prerequisites.
 // Preserve every old plan/journal and atomically switch only the wizard cursor;
 // never rewrite an old approval to pretend it belongs to the new executable.
-func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,guard func()error)error{
+func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,guard func()error,prepare ...func(*guidedState)error)error{
  if s.Stage>1{return fmt.Errorf("an installed host must resume with its original installer; existing approvals were preserved")}
  var download guidedDownload
  if err:=guidedRead(receipt,&download,false);err!=nil{return fmt.Errorf("new installer needs its matching verifier receipt: %w",err)}
@@ -467,12 +531,13 @@ func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string
  if !matches{if err=writeAgentFile(keyPath,payload);err!=nil{return err}}
  next.Download.TrustedKey=keyPath
  if err=guard();err!=nil{return err}
+ if next.Autonomous {next.ContinuationSHA="";if len(prepare)==0{return fmt.Errorf("continuation upgrade preparation is required")};if err=prepare[0](&next);err!=nil{return err}}
  if err=writeGuided(statePath,next);err!=nil{return err}
  *s=next
  return nil
 }
 
-func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,verify func(agentInstallPlan)error)error{
+func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,verify func(agentInstallPlan)error,prepare ...func(*guidedState)error)error{
  if s.Stage<3 || s.Stage>6 {return fmt.Errorf("installed continuation requires inactive onboarding")}
  var download guidedDownload
  if err:=guidedRead(receipt,&download,false);err!=nil{return err}
@@ -495,6 +560,7 @@ func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *
  if err=ctx.Err();err!=nil{return err}
  if err=verify(p);err!=nil{return err}
  next:=*s;next.Download=download
+ if next.Autonomous {next.ContinuationSHA="";if len(prepare)==0{return fmt.Errorf("continuation upgrade preparation is required")};if err=prepare[0](&next);err!=nil{return err}}
  if err=writeGuided(statePath,next);err!=nil{return err}
  *s=next
  return nil

@@ -30,41 +30,61 @@ In that directory, run:
 sudo ./hypermesh-deploy
 ```
 
-Follow the prompts. The installer offers your machine's hostname, the existing
-`/var/lib/hypermesh/models` directory and a measured memory budget as defaults.
-Use the models directory on the disk intended for model storage; setup never
-formats disks or changes storage pools. Account network and software update
-channel are separate choices.
+Follow the prompts. The installer offers your machine's hostname and the existing
+`/var/lib/hypermesh/models` directory as defaults. Choose the model cache quota
+and free-space reserve for that filesystem. Setup never formats disks or changes
+storage pools. Account network and software update channel are separate choices.
 
-The guide checks hardware, memory and disk capacity; shows required software
-and headless changes for approval; installs the signed host service; opens a
-browser device sign-in and host approval; checks WireGuard and heartbeat; then
-guides model acquisition, certification and paused activation. You can sign in
-using a browser on a different computer or phone.
+The guide checks hardware, available memory and disk capacity and shows the
+required software and headless changes. Its combined approval covers those
+changes, any required reboot, signed host service installation, model tests and
+paused startup after network approval. Browser sign-in and host enrollment happen
+before machine changes or reboot. You can use a browser on another computer or
+phone.
 
-Required changes declined, unsupported hardware or unavailable platform
-configuration stop the process with an explanation. Existing vendor drivers
-and kernels are preserved. The guide currently completes registration and
-certification only for the supported measured AGX Orin 64 GiB and Orin NX
-classes; other hardware needs its platform admission/certification work first.
+After enrollment the installer installs a private copy of the verified CLI and
+enables `hypermesh-onboarding.timer`. That service resumes the saved setup after
+boot, disconnection or temporary failure. It uses the saved device credential;
+it does not need another browser login. The guide continues immediately while
+you are connected, with a lock preventing the background service from doing the
+same work concurrently.
 
-## Resume
+Existing vendor drivers and kernels are preserved. The guide currently completes
+registration and certification only for the supported measured AGX Orin 64 GiB
+and Orin NX classes; other hardware needs its platform admission/certification
+work first. Changes outside the saved consent remain blocked and visible in the
+service journal; they are never approved by a generic automatic “yes.”
 
-If interrupted or asked to reboot, reconnect and run the same command:
+## Automatic continuation
+
+Do not rerun the installer after reboot or while waiting for benchmark review.
+It runs the required tests, retains evidence while the network admin reviews it,
+and continues certification and paused activation after approval. API/network
+failures retry with durable exponential backoff from one minute to one hour.
+Waiting for review polls about once a minute, without repeating successful tests.
+After successful live status verification the onboarding timer disables itself;
+the installed agent remains responsible for normal operation and future boots.
+Selling remains a separate dashboard setting.
+
+Plans, credentials and progress are retained privately in
+`/var/lib/hypermesh/installer/guided`. Model files and the host identity survive
+retries. For troubleshooting only, inspect:
 
 ```sh
-sudo ./hypermesh-deploy
+sudo systemctl status hypermesh-onboarding.timer hypermesh-onboarding.service
+sudo journalctl -u hypermesh-onboarding.service --since '1 hour ago'
+sudo cat /var/lib/hypermesh/installer/guided/continuation-status.json
 ```
 
-Plans and progress are retained privately in
-`/var/lib/hypermesh/installer/guided`. The installer resumes the unfinished
-operation and uses the existing journals and checks. Do not delete these files
-or download a different executable midway through setup. Reboot requests are
-never repeated automatically.
+Existing registered installations made with an older release need one recovery
+invocation of the newer verified installer to enable this service. This does not
+repeat enrollment or discard approvals. An unfinished older session before
+registration still requires its owner enrollment; it is not silently adopted.
 
-Activation starts the host paused. Enable selling in the dashboard after
-checking readiness. A completed installation can be rerun to check its live
-status without repeating enrollment or creating another identity.
+Dashboard delivery of continuation status, remote approval of additional machine
+changes, and automatic updates to the continuation executable remain follow-up
+work. The normal agent's signed updater is separate. This service runs the
+verified installer build whose plans were approved.
 
 ## Advanced operations
 
@@ -76,13 +96,11 @@ or discard an existing identity.
 
 ### Recovering a prerequisite reboot
 
-If a reboot request fails, the guide now displays the local logind error. Running
-the installer again offers a fresh confirmation to retry on the same boot;
-after a reboot it verifies and continues automatically. No reboot is retried
-without confirmation.
+The continuation service retries an unconfirmed prerequisite reboot using the
+saved plan and the original reboot consent. It still enforces host inactivity,
+shutdown inhibitors and the original machine/boot binding. Once a new boot is
+observed it verifies prerequisites before proceeding; it does not reboot again.
 
-A newer verified installer can restart prerequisite checks before agent
-installation. It asks for approval, retains your selections and old evidence,
-and creates fresh plans instead of reusing approvals from the older executable.
-Keep the new executable and its verifier receipt together. Model files are
-preserved. See [reboot recovery](setup-reboot.md#guided-recovery-from-the-agx-reboot-failure).
+Unexpected platform drift or damaged state remains an error requiring recovery.
+Preserve the journals when diagnosing it. Advanced manual reboot commands retain
+their explicit approval behavior.
