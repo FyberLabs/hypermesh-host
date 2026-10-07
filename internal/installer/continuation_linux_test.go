@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -227,5 +228,71 @@ func TestEarlyEnrollmentCompletedCheckpointResumesWithoutLogin(t *testing.T) {
 				t.Fatal("wrong host binding accepted")
 			}
 		})
+	}
+}
+
+func TestDefaultContinuationRetainsConsentAndExplicitRecoveryReadsInput(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		ctx := context.Background()
+		if interactive {
+			ctx = context.WithValue(ctx, continuationInteractive{}, true)
+		}
+		ctx = withContinuationConsent(ctx)
+		ui := guidedUI{ctx: ctx, in: bufio.NewReader(strings.NewReader("/private/hf-token\n")), out: io.Discard}
+		value, err := ui.ask("Private Hugging Face token file", "")
+		if interactive {
+			if err != nil || value != "/private/hf-token" {
+				t.Fatal(value, err)
+			}
+		} else if err == nil {
+			t.Fatal("default continuation unexpectedly requested input")
+		}
+		if !interactive {
+			if err := ui.confirm("Activate the host service in paused mode?"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, args := range [][]string{{"--continue", "--interactive"}, {"--continue", "--cache-settings"}} {
+		if code := RunGuidedInstall(context.Background(), args, strings.NewReader(""), io.Discard, io.Discard); code != 2 {
+			t.Fatal("background accepted interactive option", code)
+		}
+	}
+}
+
+func TestContinuationReadsRunningInodeAfterExecutablePathReplaced(t *testing.T) {
+	if os.Getenv("HYPERMESH_TEST_RUNNING_INODE") == "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected, err := os.ReadFile(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Rename(exe, exe+".old"); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(exe, []byte("replacement"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		got, err := runningContinuation()
+		if err != nil || digestSetupBytes(got) != digestSetupBytes(expected) {
+			t.Fatal("read replaceable pathname instead of running inode", err)
+		}
+		return
+	}
+	binary, err := runningContinuation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "installer-test")
+	if err = os.WriteFile(path, binary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(path, "-test.run=^TestContinuationReadsRunningInodeAfterExecutablePathReplaced$")
+	cmd.Env = append(os.Environ(), "HYPERMESH_TEST_RUNNING_INODE=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
 	}
 }

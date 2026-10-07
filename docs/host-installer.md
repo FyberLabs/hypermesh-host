@@ -1948,3 +1948,19 @@ still approves the pinned workload; network admins review its samples at
 resumes normal certification on the next invocation after approval. Enrollment,
 keys and completed measurements are preserved. See [lab qualification](lab-qualification.md).
 Physical AGX validation and future automated multi-host review remain outstanding.
+
+### Continuation upgrade and explicit recovery
+
+Normal unflagged setup resumes saved onboarding consent without asking the owner
+again for model tests, reboot or paused activation. The timer does the same after
+interruptions and network-admin review. `install --interactive` explicitly enables
+recovery input (for example a gated-model token file); `--cache-settings` also opts
+into interaction. Neither interactive option can be combined with `--continue`.
+
+Continuation copies the running executable inode and verifies it against its signed
+release. Verified builds are retained in root-owned immutable directories. Upgrades
+prepare the new image before atomically selecting it in the saved session; the
+original launcher dispatches to that image. A failed preparation leaves the previous
+session and executable usable. Automated coverage includes pathname replacement,
+failed upgrade preparation, repeated upgrades and default noninteractive consent.
+Live AGX continuation across an installer upgrade remains to be verified.

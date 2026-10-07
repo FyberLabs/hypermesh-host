@@ -48,6 +48,8 @@ type guidedState struct {
  Stage int `json:"stage"`
  PlanDirectory string `json:"plan_directory,omitempty"`
  Autonomous bool `json:"autonomous,omitempty"`
+ ContinuationSHA string `json:"continuation_sha256,omitempty"`
+ LauncherSHA string `json:"launcher_sha256,omitempty"`
 }
 type guidedNetwork struct { Plane, Issuer, Dashboard string }
 func installationNetwork(name string)(guidedNetwork,error) {
@@ -230,7 +232,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintln(g.ui.out,"Existing vendor drivers and kernel are preserved.")
   if g.prepareContinuation!=nil {
    if err=g.prepareContinuation(ctx,p);err!=nil{return err}
-   ctx=context.WithValue(ctx,continuationConsent{},true);g.ui.ctx=ctx
+   ctx=withContinuationConsent(ctx);g.ui.ctx=ctx
    ctx=context.WithValue(ctx,platformReviewPrompt{},g.ui.confirm)
   }
   if err=g.apply(ctx,"apply-setup","setup.json","Apply these prerequisite and headless changes?");err!=nil{return err}
@@ -336,10 +338,13 @@ func (g guidedFlow) finish(ctx context.Context)error {
 func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diagnostic io.Writer)int {
  flags:=flag.NewFlagSet("install",flag.ContinueOnError);flags.SetOutput(diagnostic)
  background:=flags.Bool("continue",false,"resume saved onboarding consent without interactive input")
+ interactive:=flags.Bool("interactive",false,"explicitly review prompts and supply recovery input")
  cacheSettings:=flags.Bool("cache-settings",false,"review host model cache quota and reserve")
  receipt:=flags.String("receipt","","download receipt (normally found beside the executable)")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0{return 2}
+ if *background && (*interactive || *cacheSettings) {fmt.Fprintln(diagnostic,"--continue cannot be combined with interactive options");return 2}
+ if *interactive || *cacheSettings {ctx=context.WithValue(ctx,continuationInteractive{},true)}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
  if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
  ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx}
@@ -352,6 +357,10 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if _,e:=os.Lstat(statePath);e==nil{
   err=guidedRead(statePath,&s,true)
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
+  if err==nil && *background && s.ContinuationSHA!="" {
+   target,e:=continuationTarget(s);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
+   if target!="" {unlock();return runContinuation(ctx,target,input,out,diagnostic)}
+  }
   if err==nil && s.Stage==4 {
    err=func()error{
     unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
@@ -364,10 +373,10 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    err=func()error{
     unlockState,e:=lockSetupState(defaultSetupState);if e!=nil{return e};defer unlockState()
     if s.Stage>=3 && s.Stage<=6 {
-     return upgradeGuidedInstalled(ctx,dir,statePath,*receipt,&s,ui,func(p agentInstallPlan)error{return verifyRegistrationService(ctx,p)})
+     return upgradeGuidedInstalled(ctx,dir,statePath,*receipt,&s,ui,func(p agentInstallPlan)error{return verifyRegistrationService(ctx,p)},func(next *guidedState)error{return installContinuation(ctx,next)})
     }
     return upgradeGuidedPrerequisites(ctx,dir,statePath,*receipt,&s,ui,
-     func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())})
+     func()error{return guardRebootHost(ctx,"",defaultSetupState,rebootSetupSource())},func(next *guidedState)error{return installContinuation(ctx,next)})
    }()
   }
   if err==nil{err=validateGuidedDownload(s.Download)}
@@ -431,8 +440,8 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  }
  if *background&&!s.Autonomous {fmt.Fprintln(diagnostic,"no saved continuation consent");return 1}
  if s.Autonomous {
-  if !*background {if err=installContinuation(ctx);err!=nil{fmt.Fprintln(diagnostic,err);return 1}}
-  ctx=context.WithValue(ctx,continuationConsent{},true);ui.ctx=ctx
+  if !*background {if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)};if err!=nil{fmt.Fprintln(diagnostic,err);return 1}}
+  ctx=withContinuationConsent(ctx);ui.ctx=ctx
  }
  if err=guidedCachePolicy(s.Directory,ui,*cacheSettings);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  planDir,err:=guidedPlanDirectory(dir,s)
@@ -440,9 +449,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if !*background && s.Stage>=4 && !s.Autonomous {
   if err=ui.confirm("Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests and paused startup?");err!=nil{fmt.Fprintln(diagnostic,err);return 1}
   s.Autonomous=true
-  if err=writeGuided(statePath,s);err==nil{err=installContinuation(ctx)}
+  if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)}
   if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
-  ctx=context.WithValue(ctx,continuationConsent{},true);ui.ctx=ctx
+  ctx=withContinuationConsent(ctx);ui.ctx=ctx
  }
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
   prepareContinuation:func(ctx context.Context,p SetupPlan)error{
@@ -451,8 +460,8 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    }
    if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
    s.Autonomous=true
-   if e:=writeGuided(statePath,s);e!=nil{return e}
-   return installContinuation(ctx)
+   if e:=installContinuation(ctx,&s);e!=nil{return e}
+   return writeGuided(statePath,s)
   },
   adoptEnrollment:func(ctx context.Context,p agentInstallPlan)(bool,error){return adoptEarlyEnrollment(ctx,planDir,p,s)},
   qualification:func(ctx context.Context,path string)(bool,error){u:=ui;u.ctx=ctx;return guidedQualification(ctx,path,u,diagnostic)},
@@ -501,7 +510,7 @@ func guidedPlanDirectory(dir string,s guidedState)(string,error){
 // Before agent installation, a newer verified CLI can re-observe prerequisites.
 // Preserve every old plan/journal and atomically switch only the wizard cursor;
 // never rewrite an old approval to pretend it belongs to the new executable.
-func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,guard func()error)error{
+func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,guard func()error,prepare ...func(*guidedState)error)error{
  if s.Stage>1{return fmt.Errorf("an installed host must resume with its original installer; existing approvals were preserved")}
  var download guidedDownload
  if err:=guidedRead(receipt,&download,false);err!=nil{return fmt.Errorf("new installer needs its matching verifier receipt: %w",err)}
@@ -522,12 +531,13 @@ func upgradeGuidedPrerequisites(ctx context.Context,dir,statePath,receipt string
  if !matches{if err=writeAgentFile(keyPath,payload);err!=nil{return err}}
  next.Download.TrustedKey=keyPath
  if err=guard();err!=nil{return err}
+ if next.Autonomous {next.ContinuationSHA="";if len(prepare)==0{return fmt.Errorf("continuation upgrade preparation is required")};if err=prepare[0](&next);err!=nil{return err}}
  if err=writeGuided(statePath,next);err!=nil{return err}
  *s=next
  return nil
 }
 
-func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,verify func(agentInstallPlan)error)error{
+func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *guidedState,ui guidedUI,verify func(agentInstallPlan)error,prepare ...func(*guidedState)error)error{
  if s.Stage<3 || s.Stage>6 {return fmt.Errorf("installed continuation requires inactive onboarding")}
  var download guidedDownload
  if err:=guidedRead(receipt,&download,false);err!=nil{return err}
@@ -550,6 +560,7 @@ func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *
  if err=ctx.Err();err!=nil{return err}
  if err=verify(p);err!=nil{return err}
  next:=*s;next.Download=download
+ if next.Autonomous {next.ContinuationSHA="";if len(prepare)==0{return fmt.Errorf("continuation upgrade preparation is required")};if err=prepare[0](&next);err!=nil{return err}}
  if err=writeGuided(statePath,next);err!=nil{return err}
  *s=next
  return nil

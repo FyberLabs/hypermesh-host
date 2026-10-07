@@ -5,9 +5,12 @@ package installer
 import (
 	"context"
 	"fmt"
+	"github.com/FyberLabs/hypermesh-host/internal/update"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,6 +19,11 @@ import (
 )
 
 type continuationConsent struct{}
+type continuationInteractive struct{}
+
+func withContinuationConsent(ctx context.Context) context.Context {
+	return context.WithValue(ctx, continuationConsent{}, ctx.Value(continuationInteractive{}) != true)
+}
 
 const continuationBinary = "/var/lib/hypermesh/installer/continuation/hypermesh-deploy"
 
@@ -212,25 +220,132 @@ WantedBy=timers.target
 		makeFile("/etc/systemd/system/hypermesh-onboarding.timer", []byte(timer), 0644)}
 }
 
-func installContinuation(ctx context.Context) error {
-	exe, err := os.Executable()
+// Read the executing inode, never the replaceable path returned by os.Executable.
+func runningContinuation() ([]byte, error) {
+	f, err := os.Open("/proc/self/exe")
 	if err != nil {
-		return err
-	}
-	f, err := os.Open(exe)
-	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() || st.Size() > 256<<20 {
-		return fmt.Errorf("invalid continuation executable")
+		return nil, fmt.Errorf("invalid continuation executable")
 	}
 	binary, err := io.ReadAll(io.LimitReader(f, (256<<20)+1))
 	if err != nil {
+		return nil, err
+	}
+	if len(binary) > 256<<20 {
+		return nil, fmt.Errorf("continuation executable exceeds limit")
+	}
+	return binary, nil
+}
+func continuationImage(sha string) (string, error) {
+	if !setupDigestRE.MatchString(sha) {
+		return "", fmt.Errorf("invalid continuation digest")
+	}
+	return filepath.Join(filepath.Dir(continuationBinary), "images", sha, "hypermesh-deploy"), nil
+}
+func continuationTarget(s guidedState) (string, error) {
+	binary, err := runningContinuation()
+	if err != nil {
+		return "", err
+	}
+	if digestSetupBytes(binary) == s.ContinuationSHA {
+		return "", nil
+	}
+	path, err := continuationImage(s.ContinuationSHA)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, (256<<20)+1))
+	if err != nil {
+		return "", err
+	}
+	payload := agentPayload{agentFile{path, s.ContinuationSHA, 0700}, data}
+	if digestSetupBytes(data) != s.ContinuationSHA {
+		return "", fmt.Errorf("continuation image checksum differs")
+	}
+	if ok, err := agentFileMatches(path, payload); err != nil || !ok {
+		return "", fmt.Errorf("invalid continuation image: %v", err)
+	}
+	return path, nil
+}
+func runContinuation(ctx context.Context, path string, input io.Reader, out, diagnostic io.Writer) int {
+	cmd := exec.CommandContext(ctx, path, "install", "--continue")
+	cmd.Stdin = input
+	cmd.Stdout = out
+	cmd.Stderr = diagnostic
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(diagnostic, "continuation failed:", err)
+		return 1
+	}
+	return 0
+}
+func installContinuation(ctx context.Context, s *guidedState) error {
+	binary, err := runningContinuation()
+	if err != nil {
 		return err
 	}
-	files := continuationFiles(binary)
+	sha := digestSetupBytes(binary)
+	// A saved digest is root-owned verification evidence. A new build must match
+	// the signed release artifact before it becomes eligible for the timer.
+	if s.ContinuationSHA != sha {
+		key, err := readSetupRegular(s.Download.TrustedKey, false)
+		if err != nil {
+			return err
+		}
+		fps, err := update.ParseFingerprints(s.Download.Fingerprint)
+		if err != nil {
+			return err
+		}
+		metadata, verified, err := fetchInstallerUpdate(ctx, installerUpdatePlan{ReleaseURL: s.Download.ReleaseURL, Channel: s.Download.Channel, Arch: runtime.GOARCH, PublicKey: string(key), Fingerprints: fps, Release: releaseMetadata{Build: int64(s.Download.Build)}})
+		if err != nil {
+			return err
+		}
+		if metadata.Build != int64(s.Download.Build) || metadata.Commit != s.Download.Commit || metadata.Channel != s.Download.Channel || digestSetupBytes(verified) != sha {
+			return fmt.Errorf("running continuation does not match signed release")
+		}
+	}
+	image, err := continuationImage(sha)
+	if err != nil {
+		return err
+	}
+	payload := agentPayload{agentFile{image, sha, 0700}, binary}
+	if exists, e := agentFileMatches(image, payload); e != nil {
+		return e
+	} else if !exists {
+		if e = writeAgentFile(image, payload); e != nil {
+			return e
+		}
+	}
+	// The first verified binary remains a stable dispatcher. Only session.json
+	// selects the active immutable image, so failed upgrades retain the old one.
+	launcher := binary
+	if s.LauncherSHA != "" {
+		if !setupDigestRE.MatchString(s.LauncherSHA) {
+			return fmt.Errorf("invalid launcher digest")
+		}
+		f, e := os.Open(continuationBinary)
+		if e != nil {
+			return e
+		}
+		launcher, e = io.ReadAll(io.LimitReader(f, (256<<20)+1))
+		f.Close()
+		if e != nil {
+			return e
+		}
+		if digestSetupBytes(launcher) != s.LauncherSHA {
+			return fmt.Errorf("continuation launcher checksum differs")
+		}
+	}
+
+	files := continuationFiles(launcher)
 	defaults, err := (setupSource{}).output(ctx, "systemd-analyze", "--system", "unit-paths")
 	if err != nil {
 		return err
@@ -257,6 +372,10 @@ func installContinuation(ctx context.Context) error {
 		return err
 	}
 	_, err = (setupSource{}).output(ctx, "systemctl", "enable", "--now", "hypermesh-onboarding.timer")
+	if err == nil {
+		s.ContinuationSHA = sha
+		s.LauncherSHA = digestSetupBytes(launcher)
+	}
 	return err
 }
 

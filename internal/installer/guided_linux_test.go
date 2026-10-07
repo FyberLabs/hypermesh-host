@@ -188,7 +188,7 @@ func TestGuidedSetupDoesNotPassLegacyMemoryBudget(t *testing.T) {
 }
 
 func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
- for _,kind:=range []string{"pass","connectivity","certification","activation","decline","payload","stage","network","downgrade"} {
+ for _,kind:=range []string{"pass","autonomous","prepare-failure","connectivity","certification","activation","decline","payload","stage","network","downgrade"} {
   t.Run(kind,func(t *testing.T){
    p:=agentInstallFixture(t)
    network,_:=installationNetwork("test");p.ControlPlane=network.Plane;p.SHA256=agentPlanDigest(p)
@@ -198,6 +198,7 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
    before,_:=os.ReadFile(planPath)
    state:=guidedState{Schema:1,Stage:3,PlanDirectory:filepath.Base(planDir),Network:"test",Host:p.HostName,Tenant:p.TenantID,Directory:p.Setup.Preflight.Resources.ModelDirectory,
     Download:guidedDownload{Build:21,Commit:p.Setup.InstallerCommit,Channel:"test"}}
+   if kind=="autonomous"||kind=="prepare-failure"{state.Autonomous=true;state.ContinuationSHA=strings.Repeat("a",64);state.LauncherSHA=state.ContinuationSHA}
    if kind=="stage"{state.Stage=7}
    expectedStage:=3;if kind=="connectivity"{state.Stage=4;expectedStage=4};if kind=="certification"{state.Stage=5;expectedStage=5};if kind=="activation"{state.Stage=6;expectedStage=6}
    if kind=="network"{state.Network="production"}
@@ -211,9 +212,14 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
    ui:=guidedUI{in:bufio.NewReader(strings.NewReader(answer)),out:io.Discard}
    checks:=0
    err:=upgradeGuidedInstalled(context.Background(),dir,session,receipt,&state,ui,func(agentInstallPlan)error{
-    checks++;if kind=="payload"{return fmt.Errorf("payload mismatch")};return nil})
+    checks++;if kind=="payload"{return fmt.Errorf("payload mismatch")};return nil},func(next *guidedState)error{
+    current,_:=os.ReadFile(session);if string(current)!=string(prior){t.Fatal("session advanced before executable prepared")}
+    if next.ContinuationSHA!=""{t.Fatal("reused old verification for new build")}
+    if kind=="prepare-failure"{return fmt.Errorf("download unavailable")}
+    next.ContinuationSHA=strings.Repeat("b",64);return nil
+   })
    after,_:=os.ReadFile(planPath);if string(before)!=string(after){t.Fatal("approval changed")}
-   if kind=="pass"||kind=="connectivity"||kind=="certification"||kind=="activation" {
+   if kind=="pass"||kind=="autonomous"||kind=="connectivity"||kind=="certification"||kind=="activation" {
     if err!=nil||checks!=2||state.Stage!=expectedStage||state.Download.Build!=22{t.Fatal(err,checks,state.Stage)}
     var reopened guidedState
     if err:=guidedRead(session,&reopened,true);err!=nil{t.Fatal(err)}
@@ -222,7 +228,7 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
     download.Build=23;download.Commit=buildinfo.Commit
     if err:=writeGuided(receipt,download);err!=nil{t.Fatal(err)}
     ui.in=bufio.NewReader(strings.NewReader("y\n"))
-    if err:=upgradeGuidedInstalled(context.Background(),dir,session,receipt,&reopened,ui,func(agentInstallPlan)error{return nil});err!=nil{t.Fatal("second installer upgrade",err)}
+    if err:=upgradeGuidedInstalled(context.Background(),dir,session,receipt,&reopened,ui,func(agentInstallPlan)error{return nil},func(next *guidedState)error{next.ContinuationSHA=strings.Repeat("c",64);return nil});err!=nil{t.Fatal("second installer upgrade",err)}
    }else{
     now,_:=os.ReadFile(session)
     if err==nil||string(now)!=string(prior){t.Fatal("unsafe continuation",err)}
