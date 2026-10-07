@@ -36,6 +36,7 @@ type Provider struct {
 }
 type state struct {
 	Schema    int    `json:"schema"`
+	Renewal   string `json:"renewal_url"`
 	Authority string `json:"authority_id"`
 	Plane     string `json:"control_plane_id"`
 	Base      string `json:"base"`
@@ -116,11 +117,18 @@ func (p Provider) exchange(ctx context.Context, s state, key, next, bootstrap st
 		return out, e
 	}
 	raw, _ := json.Marshal(q)
-	path := "/api/v1/hypermesh/agent/identity/token"
-	if bind {
-		path = "/api/v1/hypermesh/agent/identity/bind"
+	endpoint := s.Renewal
+	if endpoint == "" {
+		endpoint = s.Base + "/api/v1/aiuditor/machine/renew"
 	}
-	req, e := http.NewRequestWithContext(ctx, "POST", s.Base+path, bytes.NewReader(raw))
+	if bind {
+		endpoint = s.Base + "/api/v1/hypermesh/agent/identity/bind"
+	}
+	u, e := url.Parse(endpoint)
+	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return out, fmt.Errorf("invalid machine identity endpoint")
+	}
+	req, e := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(raw))
 	if e != nil {
 		return out, fmt.Errorf("invalid machine identity endpoint")
 	}
@@ -183,11 +191,11 @@ func (p Provider) Token(ctx context.Context, base, tenant, device, request, boot
 		if err != nil {
 			return "", err
 		}
-		authority, plane, err := p.discover(ctx, base, tenant)
+		authority, plane, renewal, err := p.discover(ctx, base, tenant)
 		if err != nil {
 			return "", err
 		}
-		s = state{Authority: authority, Plane: plane, Schema: 1, Base: base, Tenant: tenant, Device: device, Request: request, Key: key}
+		s = state{Renewal: renewal, Authority: authority, Plane: plane, Schema: 1, Base: base, Tenant: tenant, Device: device, Request: request, Key: key}
 		if e = save(p.Path, s); e != nil {
 			return "", e
 		}
@@ -401,10 +409,10 @@ func (p Provider) Invalidate(ctx context.Context, token string) error {
 	return save(p.Path, s)
 }
 
-func (p Provider) discover(ctx context.Context, base, tenant string) (string, string, error) {
+func (p Provider) discover(ctx context.Context, base, tenant string) (string, string, string, error) {
 	req, e := http.NewRequestWithContext(ctx, "GET", base+"/api/v1/hypermesh/agent/identity/configuration?authority_id="+url.QueryEscape(p.Authority), nil)
 	if e != nil {
-		return "", "", e
+		return "", "", "", e
 	}
 	req.Header.Set("X-Tenant-ID", tenant)
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -416,17 +424,29 @@ func (p Provider) discover(ctx context.Context, base, tenant string) (string, st
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, e := client.Do(req)
 	if e != nil {
-		return "", "", fmt.Errorf("machine authority discovery unavailable")
+		return "", "", "", fmt.Errorf("machine authority discovery unavailable")
 	}
 	defer resp.Body.Close()
 	var result struct {
 		Authority string `json:"authority_id"`
 		Plane     string `json:"control_plane_id"`
+		Renewal   string `json:"renewal_url"`
 	}
 	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result) != nil || !validAuthority(result.Authority) || !validAuthority(result.Plane) {
-		return "", "", fmt.Errorf("invalid machine authority configuration")
+		return "", "", "", fmt.Errorf("invalid machine authority configuration")
 	}
-	return result.Authority, result.Plane, nil
+	renewal := result.Renewal
+	if renewal == "" {
+		renewal = "/api/v1/aiuditor/machine/renew"
+	}
+	if strings.HasPrefix(renewal, "/") && !strings.HasPrefix(renewal, "//") {
+		renewal = base + renewal
+	}
+	u, e := url.Parse(renewal)
+	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", "", "", fmt.Errorf("invalid AIuditor renewal endpoint")
+	}
+	return result.Authority, result.Plane, renewal, nil
 }
 func validAuthority(value string) bool {
 	if len(value) == 0 || len(value) > 128 {

@@ -41,7 +41,7 @@ and remote updates of the continuation executable remain separate roadmap work.
 
 
 AIuditor owns credential issuance. The HTTPS control-plane route relays
-owner-approved enrollment and signed renewals to its configured authority; it
+owner-approved enrollment to its configured authority; it
 does not hold issuer keys or token hashes. Discovery pins authority and control
 plane IDs into each signed proof. `Provider.Peer` creates a separate private
 checkpoint for another authorized AIuditor delegation, preserving the host's
@@ -50,6 +50,6 @@ credential without replacing the management token. Arbitrary endpoints from
 jobs are never accepted.
 
 The existing workload dispatcher has not yet switched to these contract tokens;
-multi-authority fanout and direct AIuditor renewal during a control-plane outage
-remain integration work. This implementation must not be represented as that
+multi-authority workload fanout remains integration work. Renewal itself now
+goes directly to the saved AIuditor HTTPS endpoint, without the enrollment service. This implementation must not be represented as that
 complete network topology.
