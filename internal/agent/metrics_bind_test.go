@@ -221,12 +221,12 @@ func TestMetricsLoopbackFailureBacksOff(t *testing.T) {
 	a.metricsWG = func() string { return "" }
 	a.metricsEvery = 10 * time.Millisecond
 	a.metricsFailEvery = 80 * time.Millisecond
-	var mu sync.Mutex
-	var calls int
-	a.metricsServe = func(context.Context, string, string) (string, error) {
-		mu.Lock()
-		calls++
-		mu.Unlock()
+	attempts := make(chan time.Time, 3)
+	a.metricsServe = func(ctx context.Context, _ string, _ string) (string, error) {
+		select {
+		case attempts <- time.Now():
+		case <-ctx.Done():
+		}
 		return "", errors.New("bind: cannot assign requested address")
 	}
 
@@ -234,19 +234,22 @@ func TestMetricsLoopbackFailureBacksOff(t *testing.T) {
 	defer cancel()
 	a.StartMetrics(ctx)
 
-	time.Sleep(40 * time.Millisecond)
-	mu.Lock()
-	n := calls
-	mu.Unlock()
-	if n != 1 {
-		t.Fatalf("after 40ms calls %d want 1", n)
-	}
-	time.Sleep(300 * time.Millisecond)
-	mu.Lock()
-	n = calls
-	mu.Unlock()
-	if n < 2 || n > 5 {
-		t.Fatalf("after another 300ms calls %d want 2..5", n)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	var previous time.Time
+	for i := 0; i < 3; i++ {
+		select {
+		case at := <-attempts:
+			if i > 0 {
+				minimum := a.metricsFailEvery * time.Duration(1<<(i-1))
+				if elapsed := at.Sub(previous); elapsed < minimum {
+					t.Fatalf("retry %d after %s, want at least %s", i, elapsed, minimum)
+				}
+			}
+			previous = at
+		case <-deadline.C:
+			t.Fatal("metrics retries did not arrive")
+		}
 	}
 }
 

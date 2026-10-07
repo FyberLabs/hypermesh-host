@@ -195,3 +195,22 @@ func TestCertEmptySuiteUsesThinV1Identity(t *testing.T) {
 	got:=a.runJob(context.Background(),job)
 	if !got.Passed||got.Reason!="thin-v1"||certSuite(job.SuiteID)!="thin-v1"{t.Fatalf("%+v",got)}
 }
+
+func TestCertEndpointResolutionFailureStillCleansTemporaryContainer(t *testing.T) {
+	a, job, calls := certFixture(t, 200)
+	a.certEndpoint = ""
+	// The fixture returns invalid inspection JSON; no address may be guessed.
+	got := a.runJob(context.Background(), job)
+	if got.Passed || !strings.Contains(got.Reason, "container is not running") {
+		t.Fatalf("%+v", got)
+	}
+	joined := ""
+	for _, args := range *calls {
+		joined += strings.Join(args, " ") + "\n"
+	}
+	for _, part := range []string{"inspect --format {{json .}} cert-container", "stop cert-container", "rm hypermesh-cert-bench-"} {
+		if !strings.Contains(joined, part) {
+			t.Fatalf("missing %q in %s", part, joined)
+		}
+	}
+}
