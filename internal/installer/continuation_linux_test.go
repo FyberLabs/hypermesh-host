@@ -212,7 +212,7 @@ func TestEarlyEnrollmentCompletedCheckpointResumesWithoutLogin(t *testing.T) {
 			}
 			s := guidedState{Network: "test", Tenant: p.TenantID, Host: p.HostName, Class: j.Request.ClassID}
 			ctx := context.WithValue(context.Background(), continuationConsent{}, true)
-			if err := earlyEnrollment(ctx, dir, &s, p.Setup, io.Discard); err != nil {
+			if err := completeEarlyEnrollment(ctx, dir, &s, p.Setup, io.Discard); err != nil {
 				t.Fatal(err)
 			}
 			var restored registrationJournal
@@ -224,7 +224,7 @@ func TestEarlyEnrollmentCompletedCheckpointResumesWithoutLogin(t *testing.T) {
 			}
 			// A saved enrollment from a different host must not be reused.
 			s.Host = "another-host"
-			if err := earlyEnrollment(ctx, dir, &s, p.Setup, io.Discard); err == nil {
+			if err := completeEarlyEnrollment(ctx, dir, &s, p.Setup, io.Discard); err == nil {
 				t.Fatal("wrong host binding accepted")
 			}
 		})

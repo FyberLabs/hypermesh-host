@@ -234,7 +234,7 @@ func RunCheckAgent(ctx context.Context,args []string,out,diagnostic io.Writer)in
  if err!=nil||registration.State!="registered-inactive"{
   fmt.Fprintln(diagnostic,"complete register-agent first; registration must match the installed plan and remain inactive");return 1
  }
- client,err:=hostregistration.New(p.ControlPlane,p.TenantID)
+ client,err:=newRegistrationClient(p.ControlPlane,p.TenantID)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  j:=onboardingJournal{Schema:1,PlanSHA256:p.SHA256,RequestID:registration.Request.RequestID,DeviceID:registration.DeviceID,HostName:p.HostName}
  deps:=onboardingDeps{

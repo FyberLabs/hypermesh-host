@@ -16,6 +16,7 @@ import (
  "regexp"
  "strings"
  "time"
+ "github.com/FyberLabs/hypermesh-host/internal/machineidentity"
 )
 
 var UUID = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -57,6 +58,7 @@ type Client struct {
  base, tenant, bearer string
  http *http.Client
  reauthenticate func(context.Context)error
+ machinePath string
  timeout time.Duration
 }
 var ErrSessionExpired = errors.New("setup authentication expired or invalid")
@@ -87,7 +89,23 @@ func New(base,tenant string)(*Client,error) {
  if !BaseURL(base) || !UUID.MatchString(tenant) {return nil,fmt.Errorf("registration requires an HTTPS base URL and tenant UUID")}
  return &Client{base:strings.TrimRight(base,"/"),tenant:tenant,http:&http.Client{},timeout:15*time.Second},nil
 }
+func (c *Client) SetMachineIdentity(path string) {c.machinePath=path}
+var errMachineTokenRejected=errors.New("machine token rejected")
 func (c *Client) request(ctx context.Context,method,path,token string,body,dest any) error {
+ if c.machinePath==""||!strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/"){return c.requestRaw(ctx,method,path,token,body,dest)}
+ raw,e:=json.Marshal(body);if e!=nil{return e}
+ var binding struct{Device string `json:"device_id"`;Request string `json:"request_id"`}
+ if json.Unmarshal(raw,&binding)!=nil||!UUID.MatchString(binding.Device)||!UUID.MatchString(binding.Request){return fmt.Errorf("missing machine identity binding")}
+ provider:=machineidentity.Provider{Path:c.machinePath,HTTP:c.http}
+ for attempt:=0;attempt<2;attempt++{
+  access,e:=provider.Token(ctx,c.base,c.tenant,binding.Device,binding.Request,token);if e!=nil{return e}
+  e=c.requestRaw(ctx,method,path,access,body,dest)
+  if !errors.Is(e,errMachineTokenRejected)||attempt==1{return e}
+  if e=provider.Invalidate(ctx,access);e!=nil{return e}
+ }
+ return errMachineTokenRejected
+}
+func (c *Client) requestRaw(ctx context.Context,method,path,token string,body,dest any) error {
  ctx,cancel:=context.WithTimeout(ctx,c.timeout);defer cancel()
  var raw []byte
  var err error
@@ -120,6 +138,7 @@ func (c *Client) request(ctx context.Context,method,path,token string,body,dest 
    action="saved device credential rejected; verify registration in the dashboard and preserve local identity"
   }
   failure:=fmt.Errorf("registration API %s %s returned HTTP %d: %s; request and keys retained",method,path,resp.StatusCode,action)
+  if resp.StatusCode==401&&strings.HasPrefix(token,"hm_msi_"){return fmt.Errorf("%w: %v",errMachineTokenRejected,failure)}
   if resp.StatusCode==401&&!strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/"){return fmt.Errorf("%w: %v",ErrSessionExpired,failure)}
   return failure
  }

@@ -185,7 +185,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	}
 	return &Agent{
 		cfg:    cfg,
-		client: api.NewClient(cfg.ControlPlaneURL, cfg.TenantID),
+		client: machineAPIClient(cfg),
 		telem:  src,
 		pathb: pathb.Runner{
 			Collector: src,

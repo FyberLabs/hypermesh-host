@@ -77,7 +77,7 @@ func readCertificationIdentity(p certificationPlan)(registrationJournal,*hostreg
  return j,nil,fmt.Errorf("certification plan does not match saved registration")
  }
  if err=checkRegistrationIdentity("",j,true);err!=nil{return j,nil,err}
- c,err:=hostregistration.New(p.Agent.ControlPlane,p.Agent.TenantID);return j,c,err
+ c,err:=newRegistrationClient(p.Agent.ControlPlane,p.Agent.TenantID);return j,c,err
 }
 func certPreflight(ctx context.Context,p certificationPlan,j registrationJournal)error{
  if err:=verifyRegistrationService(ctx,p.Agent);err!=nil{return err}
@@ -110,7 +110,7 @@ func RunPlanCertification(ctx context.Context,args []string,out,diagnostic io.Wr
  if err==nil&&j.State!="registered-inactive"{err=fmt.Errorf("complete inactive registration first")}
  if err==nil{err=certPreflight(ctx,p,j)}
  var c *hostregistration.Client
- if err==nil{c,err=hostregistration.New(p.Agent.ControlPlane,p.Agent.TenantID)}
+ if err==nil{c,err=newRegistrationClient(p.Agent.ControlPlane,p.Agent.TenantID)}
  var id string
  if err==nil{id,err=hostregistration.NewRunID()}
  if err==nil{p.Run,err=c.PlanCertification(ctx,j.Request,j.DeviceID,j.DeviceSecret,id)}

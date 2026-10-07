@@ -168,7 +168,7 @@ func liveIdentity(root,state string,p certificationPlan)(registrationJournal,*ho
   return j,nil,fmt.Errorf("saved registration does not match the selected plan")
  }
  if err=checkRegistrationIdentity(root,j,true);err!=nil{return j,nil,err}
- c,err:=hostregistration.New(p.Agent.ControlPlane,p.Agent.TenantID)
+ c,err:=newRegistrationClient(p.Agent.ControlPlane,p.Agent.TenantID)
  return j,c,err
 }
 func RunHostStatus(ctx context.Context,args []string,out,diagnostic io.Writer) int {

@@ -25,6 +25,8 @@ type Client struct {
 	BaseURL      string
 	TenantID     string
 	DeviceSecret string // Authorization: Bearer; never log
+	Credential func(context.Context)(string,error)
+	InvalidateCredential func(context.Context,string)error
 	HTTP         *http.Client
 }
 
@@ -153,6 +155,9 @@ func (c *Client) IssueEnrollToken(ctx context.Context, deviceID string) (EnrollT
 var errNoContent = fmt.Errorf("no content")
 
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, body any, want int, dest any, bearer bool) error {
+ return c.doJSONAttempt(ctx,method,path,query,body,want,dest,bearer,true)
+}
+func (c *Client) doJSONAttempt(ctx context.Context, method, path string, query url.Values, body any, want int, dest any, bearer, retry bool) error {
 	if strings.TrimSpace(c.TenantID) == "" {
 		return ErrMissingTenant
 	}
@@ -186,20 +191,32 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if bearer {
-		req.Header.Set(HeaderAuthorization, "Bearer "+c.DeviceSecret)
-	}
+ token:=c.DeviceSecret
+ if bearer {
+  if c.Credential!=nil{token,err=c.Credential(ctx);if err!=nil{return err}}
+  req.Header.Set(HeaderAuthorization,"Bearer "+token)
+ }
 
 	httpClient := c.HTTP
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	resp, err := httpClient.Do(req)
+ if bearer {
+  scoped:=*httpClient
+  scoped.CheckRedirect=func(*http.Request,[]*http.Request)error{return http.ErrUseLastResponse}
+  httpClient=&scoped
+ }
+ resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ defer resp.Body.Close()
+ if resp.StatusCode==http.StatusUnauthorized&&retry&&strings.HasPrefix(token,"hm_msi_")&&c.InvalidateCredential!=nil{
+  resp.Body.Close()
+  if err=c.InvalidateCredential(ctx,token);err!=nil{return err}
+  return c.doJSONAttempt(ctx,method,path,query,body,want,dest,bearer,false)
+ }
+ payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode == http.StatusNoContent {
 		return errNoContent
