@@ -158,3 +158,14 @@ func TestQualificationPersistsSafeWorkloadDiagnostic(t *testing.T) {
 		t.Fatal("failure replayed or promoted")
 	}
 }
+
+func TestReportedQualificationFailureOffersHostRetryWithoutRepeatingWork(t *testing.T) {
+	j := qualificationJournal{State: "reported", Report: hostregistration.QualificationReport{FailureCode: "workload"}}
+	err := performQualification(context.Background(), &j, qualificationDeps{})
+	if err == nil || !strings.Contains(err.Error(), "rerun hypermesh-deploy") || !strings.Contains(err.Error(), "for manual qualify-host, ask the operator to authorize a new run") || !strings.Contains(err.Error(), "same --agent-plan and the new --run-id") {
+		t.Fatalf("expected host retry guidance, got %v", err)
+	}
+	if j.State != "reported" || j.Report.FailureCode != "workload" {
+		t.Fatal("changed retained evidence")
+	}
+}

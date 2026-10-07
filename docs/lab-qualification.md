@@ -23,8 +23,8 @@ reporting; it cannot authorize its own lab run or publish an AIuditor envelope.
 
 Evidence is kept in `/var/lib/hypermesh/installer/qualification-RUN_UUID.json`.
 Interrupted tests remain failed attempts. Rerunning the command retries a pending
-report without repeating measurements. An operator creates a fresh run for a
-new attempt. Three successful samples go to operator review; the program operator
+report without repeating measurements. For automatic qualification, rerunning
+guided setup requests a fresh attempt without operator intervention. Three successful samples go to operator review; the program operator
 publishes the measured baseline in AIuditor before ordinary certification resumes.
 No service is activated and selling remains disabled by this command.
 
@@ -62,8 +62,9 @@ review is pending does not repeat workloads or registration. Once the admin
 publishes a baseline, the same command continues ordinary certification. Services
 remain inactive until the separate owner activation flow completes.
 
-Network admins can reject evidence or authorize a fresh attempt after failure or
-expiry; earlier journals and measurements remain intact. An unavailable AIuditor
+Network admins can reject evidence and still authorize retries. Hosts can also
+request fresh attempts after failure or expiry; earlier journals and measurements
+remain intact. An unavailable AIuditor
 or invalid configuration is not treated as an absent reference. Physical AGX
 execution remains pending deployment of both the plane and signed host build.
 
@@ -96,13 +97,31 @@ qualification journal and displayed on failure/resume. Raw subprocess output and
 model response content are not added to the report. Historical journals containing
 only `failure_code` cannot reconstruct the discarded details.
 
-For an already-reported failed attempt, open the network-admin benchmark review
-at `/operator/benchmarks` and select **Authorize a new measurement attempt**.
-After the fixed signed installer is available, rerun guided setup and approve the
-new measurements. This uses the existing registration and cached model, retains
+For an already-reported failed automatic attempt, rerun guided setup and approve
+the new measurements after the companion plane update is deployed. This uses the existing registration and cached model, retains
 the failed attempt, and does not enable selling or auto-approve a baseline.
 
 Implementation verification includes the AGX 16,368+16 token response, malformed
 or mismatched runtime metadata, incomplete boundary responses, and durable
 failure/replay behavior. Physical qualification on AGX remains to be rerun after
 deployment; the manual context response is not a submitted qualification result.
+
+## Host-requested rebenchmarking
+
+Rerun `sudo ./hypermesh-deploy` after resolving a failed measurement. With the
+companion plane update, failed or expired qualification attempts receive a fresh
+run on the authenticated host's next request. No administrator action is needed
+to retry. The installer asks before downloading or running the workload; one
+invocation does not loop over failed benchmarks. Previous run evidence and local
+journals remain available.
+
+Guided certification archives a failed plan and offers a fresh plan for every
+failure category. Unconfirmed evidence uploads keep the original evidence and
+retry its delivery. Enrollment, device keys, model cache, scheduling holds,
+intake and activation checks remain in effect.
+
+For an established class reference, the plane initially accepts measured decode
+throughput inclusively within 90–110% of the reference. Model/context fit and
+thermal checks still apply. The first reference for a new class continues to
+require network-admin review; retry permission is not baseline publication or
+permission to sell.

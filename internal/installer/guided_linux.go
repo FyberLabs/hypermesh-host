@@ -282,11 +282,11 @@ func (g guidedFlow) finish(ctx context.Context)error {
    if !validCertificationJournal(journal)||journal.PlanSHA256!=p.SHA256{return fmt.Errorf("certification history is inconsistent; preserve it for recovery")}
    // Submitted evidence and completed runs must reconcile their original run.
    if journal.State=="evidence-ready"||journal.State=="passed"||journal.State=="activating"||journal.State=="active"{expired=false}
-   retryTerminal=journal.State=="failed"&&journal.FailureCode=="class_band"
+   retryTerminal=journal.State=="failed"
   }else if !os.IsNotExist(e){return e}
   if expired||retryTerminal {
    if err=validateCertificationPlan(p,p.SHA256);err!=nil{return err}
-   if err=g.ui.confirm("The previous model test plan expired or failed its class target. Obtain a new plan for review?");err!=nil{return err}
+   if err=g.ui.confirm("The previous model test expired or failed. Keep its history and obtain a fresh plan to rebenchmark?");err!=nil{return err}
    archive:=filepath.Join(g.dir,"certification-history-"+p.SHA256+".json")
    if _,e:=os.Lstat(archive);!os.IsNotExist(e){return fmt.Errorf("certification plan archive already exists or is unavailable; preserve history")}
    if err=os.Rename(certPath,archive);err!=nil{return err}

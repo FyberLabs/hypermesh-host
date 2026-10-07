@@ -176,3 +176,23 @@ use certification-status guidance and the controlled activation flow. Do not
 start the agent by creating its activation marker manually.
 
 The installation integrity check compares configuration and units with the original approved payloads. A changed agent binary is accepted only with matching signed update evidence, original trust, channel, architecture and minimum build. Reviewed maintenance resume remains paused and uses fresh owner authority. See [lifecycle completion](host-lifecycle-completion.md) and [AGX acceptance](agx-acceptance.md).
+
+## Host-requested rebenchmarking
+
+Rerun `sudo ./hypermesh-deploy` after resolving a failed measurement. With the
+companion plane update, failed or expired qualification attempts receive a fresh
+run on the authenticated host's next request. No administrator action is needed
+to retry. The installer asks before downloading or running the workload; one
+invocation does not loop over failed benchmarks. Previous run evidence and local
+journals remain available.
+
+Guided certification archives a failed plan and offers a fresh plan for every
+failure category. Unconfirmed evidence uploads keep the original evidence and
+retry its delivery. Enrollment, device keys, model cache, scheduling holds,
+intake and activation checks remain in effect.
+
+For an established class reference, the plane initially accepts measured decode
+throughput inclusively within 90–110% of the reference. Model/context fit and
+thermal checks still apply. The first reference for a new class continues to
+require network-admin review; retry permission is not baseline publication or
+permission to sell.
