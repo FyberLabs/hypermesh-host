@@ -169,7 +169,7 @@ func runCertificationCommand(ctx context.Context,args []string,out,diagnostic io
  path:=f.String("plan","","reviewed certification plan")
  approved:=f.String("approve-plan","","exact certification plan_sha256")
  run:=f.Bool("run",false,"approve model acquisition and pinned certification")
- start:=f.Bool("start",false,"approve original-owner login and paused service startup")
+ start:=f.Bool("start",false,"approve paused service startup using the registered device")
  tokenPath:=f.String("model-token-file","","optional private Hugging Face access token file")
  if err:=f.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if f.NArg()!=0||*path==""||!setupDigestRE.MatchString(*approved)||(!activate&&!*run)||(activate&&!*start){
@@ -328,16 +328,17 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
  }
  if err=inactiveMemoryServices(ctx,setupSource{});err!=nil{return err}
  if err=certTunnel(ctx,p,identity,c);err!=nil{return err}
- token,err:=deviceauth.Authorize(ctx,identity.Issuer,diagnostic);if err!=nil{return err}
- if err=c.Login(ctx,token.Bearer(),func(sub string)error{
-  if sub!=identity.Owner{return fmt.Errorf("original registration owner required")};return nil
- });err!=nil{return err}
  var permit hostregistration.CertificationRun
  if resume{
+  // Maintenance resume is distinct from completing the original enrollment.
+  token,e:=deviceauth.Authorize(ctx,identity.Issuer,diagnostic);if e!=nil{return e}
+  if err=c.Login(ctx,token.Bearer(),func(sub string)error{
+   if sub!=identity.Owner{return fmt.Errorf("original registration owner required")};return nil
+  });err!=nil{return err}
   if err=c.ApproveResume(ctx,p.Run);err!=nil{return err}
   permit,err=c.ResumePermit(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret,p.Run)
  }else{
-  if err=c.ApproveActivation(ctx,p.Run);err!=nil{return err}
+  // Completed owner-approved enrollment is durable; no browser session is needed.
   permit,err=c.ActivationPermit(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret,p.Run)
  }
  if err!=nil{return err}

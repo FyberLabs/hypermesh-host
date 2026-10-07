@@ -304,7 +304,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   if err=g.advance();err!=nil{return err}
  }
  if s.Stage==6 {
-  fmt.Fprintln(g.ui.out,"Certification passed. Confirm ownership in your browser to start the service paused; selling remains off.")
+  fmt.Fprintln(g.ui.out,"Certification passed. Using this host’s saved registration to start the service paused; selling remains off.")
   if err=g.apply(ctx,"activate-agent","certification.json","Activate the host service in paused mode?","--start");err!=nil{return err}
   if err=g.advance();err!=nil{return err}
  }
