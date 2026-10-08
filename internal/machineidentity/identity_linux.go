@@ -610,6 +610,14 @@ func (p Provider) ContractToken(ctx context.Context, base, tenant, device, reque
 // enrollment token. Preserve private history and serialize with token renewal.
 // Peer delegations belong to the retired enrollment and must be retired too.
 func (p Provider) Retire(ctx context.Context) error {
+	return p.RetireEnrollment(ctx, "", false)
+}
+
+// RetireEnrollment archives the signing checkpoints before re-enrollment.
+// With signing set, a host that never created a checkpoint still records the
+// retired device, so the replacement binds a signing key instead of keeping
+// its bootstrap secret.
+func (p Provider) RetireEnrollment(ctx context.Context, device string, signing bool) error {
 	if p.Path == "" {
 		p.Path = DefaultPath
 	}
@@ -653,6 +661,16 @@ func (p Provider) Retire(ctx context.Context) error {
 		}
 		f.Close()
 		present = append(present, path)
+	}
+	if signing && (len(present) == 0 || present[0] != p.Path) {
+		nonce := make([]byte, 16)
+		if _, err = rand.Read(nonce); err != nil {
+			return err
+		}
+		// Archived checkpoints record the retired device; so does this marker.
+		if err = save(p.Path+".retired-"+hex.EncodeToString(nonce), state{Schema: 1, Device: device}); err != nil {
+			return err
+		}
 	}
 	var moved [][2]string
 	for _, path := range present {

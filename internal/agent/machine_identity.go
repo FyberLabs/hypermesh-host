@@ -17,6 +17,9 @@ func machineAPIClient(cfg Config) *api.Client {
 	return c
 }
 
-func retireMachineIdentity(ctx context.Context, cfg Config) error {
-	return (machineidentity.Provider{Path: filepath.Join(cfg.StateDir, "machine-identity.json")}).Retire(ctx)
+// Model hosts always bind a signing key after re-enrollment, including legacy
+// hosts that never created a checkpoint. Supervisors keep enrollment secrets.
+func retireMachineIdentity(ctx context.Context, cfg Config, device string) error {
+	p := machineidentity.Provider{Path: filepath.Join(cfg.StateDir, "machine-identity.json")}
+	return p.RetireEnrollment(ctx, device, !cfg.SupervisorHost())
 }

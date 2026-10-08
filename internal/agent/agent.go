@@ -337,7 +337,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	}
 
     if st.DeviceID != "" && a.cfg.Reenroll {
-        if err := a.resetEnrollmentWork(ctx); err != nil {
+        if err := a.resetEnrollmentWork(ctx, st.DeviceID); err != nil {
             return fmt.Errorf("hypermesh: retire local enrollment work: %w", err)
         }
     }
@@ -1345,7 +1345,7 @@ func firstNonEmpty(vs ...string) string {
 
 // resetEnrollmentWork runs before exchanging a fresh enrollment token.
 // Old work must stop successfully before a replacement identity is issued.
-func (a *Agent) resetEnrollmentWork(ctx context.Context) error {
+func (a *Agent) resetEnrollmentWork(ctx context.Context, device string) error {
     leasePath:=filepath.Join(a.cfg.StateDir,leaseFile)
     if raw,err:=os.ReadFile(leasePath);err==nil {
         var handle runtime.Handle
@@ -1364,7 +1364,7 @@ func (a *Agent) resetEnrollmentWork(ctx context.Context) error {
             if err:=writeCacheIndex(dir,idx);err!=nil {return err}
         } else if !os.IsNotExist(err) {return err}
     }
-    if err:=retireMachineIdentity(ctx,a.cfg);err!=nil{return err}
+    if err:=retireMachineIdentity(ctx,a.cfg,device);err!=nil{return err}
     a.setLease(nil)
     a.applied="";a.peerPosted=false;a.postedPub=""
     return nil

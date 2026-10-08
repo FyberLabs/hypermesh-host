@@ -441,3 +441,31 @@ func TestRetiredEnrollmentIsNotRecreated(t *testing.T) {
 		t.Fatal("recreated a checkpoint retired after it was chosen")
 	}
 }
+
+func TestLegacyReenrollmentBindsASigningKey(t *testing.T) {
+	newDevice := "12345678-1234-4234-8234-123456789bbb"
+	p, _, calls, _ := identityFixtureFor(t, newDevice, newDevice)
+	base, _ := origins.Load(p.Path)
+	oldDevice := "12345678-1234-4234-8234-123456789ccc"
+	supervisor := Provider{Path: p.Path}
+	if err := supervisor.RetireEnrollment(context.Background(), oldDevice, false); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := p.ExistingToken(context.Background(), base.(string), tenant, newDevice, "hm_dev_fixture"); err != nil || token != "hm_dev_fixture" {
+		t.Fatal("non-signing host lost its enrollment secret", token, err)
+	}
+	if err := p.RetireEnrollment(context.Background(), oldDevice, true); err != nil {
+		t.Fatal(err)
+	}
+	before := *calls
+	if token, err := p.ExistingToken(context.Background(), base.(string), tenant, oldDevice, "old-bootstrap"); err == nil || token != "" {
+		t.Fatal("retired legacy enrollment bound a key", token, err)
+	}
+	if *calls != before {
+		t.Fatal("contacted the authority for the retired enrollment")
+	}
+	token, err := p.ExistingToken(context.Background(), base.(string), tenant, newDevice, "hm_dev_fixture")
+	if err != nil || !strings.HasPrefix(token, "hm_msi_"+newDevice+".") {
+		t.Fatal("legacy replacement kept its bootstrap secret", token, err)
+	}
+}

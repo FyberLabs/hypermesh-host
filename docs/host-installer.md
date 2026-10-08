@@ -1988,6 +1988,8 @@ first authenticated agent operation. The archived checkpoint marks this as a
 required signing transition: authority failure retries without silently reverting
 to bootstrap authentication. Retirement checks every checkpoint before archiving
 any of them, and runs under the same lock as credential use, so a process still
-holding the retired enrollment cannot recreate its identity. Binding/renewal keeps a 15-second maximum HTTP timeout
+holding the retired enrollment cannot recreate its identity. A model host that
+never created a checkpoint (an older enroll-token install) also binds a signing
+key after re-enrollment; supervisor hosts keep their enrollment secret. Binding/renewal keeps a 15-second maximum HTTP timeout
 even when the installer injects a zero-timeout client, and preserves shorter client
 timeouts. The matching Panopticon/AIuditor support must deploy before this build.

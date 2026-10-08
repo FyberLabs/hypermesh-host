@@ -29,3 +29,5 @@ func (Provider) Invalidate(context.Context, string) error {
 }
 
 func (Provider) Retire(context.Context) error { return nil }
+
+func (Provider) RetireEnrollment(context.Context, string, bool) error { return nil }
