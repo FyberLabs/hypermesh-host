@@ -44,8 +44,8 @@ func TestActivationSellGuard(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sell.json")
 	// A fresh activation writes the guard.
-	if err := prepareActivationSell(path, now); err != nil {
-		t.Fatal(err)
+	if wrote, err := prepareActivationSell(path, now); err != nil || wrote != true {
+		t.Fatal(wrote, err)
 	}
 	if raw, _ := os.ReadFile(path); string(raw) != string(activationSellGuard) {
 		t.Fatalf("guard %s", raw)
@@ -57,7 +57,7 @@ func TestActivationSellGuard(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"sell_state":"selling"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := prepareActivationSell(path, now); err != nil {
+	if wrote, err := prepareActivationSell(path, now); err != nil || wrote != true {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(path); string(raw) != string(activationSellGuard) {
@@ -71,7 +71,7 @@ func TestActivationSellGuard(t *testing.T) {
 	if err := os.WriteFile(path, []byte(owner), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := prepareActivationSell(path, now); err != nil {
+	if wrote, err := prepareActivationSell(path, now); err != nil || wrote != false {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(path); string(raw) != owner {
@@ -223,5 +223,20 @@ func TestActivationReleaseReportsUnreleasedGuard(t *testing.T) {
 	})
 	if err := releaseActivationSellAt(context.Background(), dir, 0, time.Minute, io.Discard); err == nil {
 		t.Fatal("unreleased guard reported as released")
+	}
+}
+
+func TestActivationReleaseFailsWhenAgentStopsAnsweringAfterMissingRoute(t *testing.T) {
+	var calls atomic.Int32
+	dir := fakeOwnerSocket(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	var diag bytes.Buffer
+	if err := releaseActivationSellAt(context.Background(), dir, 0, 1500*time.Millisecond, &diag); err == nil {
+		t.Fatalf("agent failure reported as a missing route: %q", diag.String())
 	}
 }

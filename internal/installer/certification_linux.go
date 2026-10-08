@@ -231,7 +231,13 @@ func runCertificationCommand(ctx context.Context,args []string,out,diagnostic io
   }
  }
  // The private evidence journal has no credentials; report only stage identity.
- _=json.NewEncoder(out).Encode(map[string]any{"plan_sha256":p.SHA256,"run_id":p.Run.RunID,"state":j.State,"failure_code":j.FailureCode,"selling_allowed":false})
+ report:=map[string]any{"plan_sha256":p.SHA256,"run_id":p.Run.RunID,"state":j.State,"failure_code":j.FailureCode,"selling_allowed":false}
+ if activate&&err==nil&&j.State=="active"{
+  sell:=maintenanceSellAfter(ctx)
+  report["sell_state"]=sell
+  report["selling_allowed"]=sell=="selling"
+ }
+ _=json.NewEncoder(out).Encode(report)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1};return 0
 }
 
@@ -353,7 +359,7 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
  if err=inactiveMemoryServices(ctx,setupSource{});err!=nil{return err}
  // The guard keeps the plane's paused state until startup is verified, so a
  // rollback or crash can retry with a fresh permit. It is released below.
- if err=prepareActivationSell(activationSellPath,time.Now());err!=nil{return err}
+ guarded,err:=prepareActivationSell(activationSellPath,time.Now());if err!=nil{return err}
  d:=activationDeps{Save:save,Publish:func()error{if own{return nil};return writeAgentFile(marker.Path,marker)},
   Start:func(ctx context.Context)error{
    if _,err:=(setupSource{}).output(ctx,"systemctl","daemon-reload");err!=nil{return err}
@@ -373,8 +379,11 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
    dir,err:=os.Open(filepath.Dir(marker.Path));if err!=nil{return err};defer dir.Close();return dir.Sync()
   },
  }
- if err=startCertified(ctx,j,*permit.PermitExpiresAt,d);err!=nil||resume{return err}
- // A certified host sells as soon as its service is verified.
+ if err=startCertified(ctx,j,*permit.PermitExpiresAt,d);err!=nil{return err}
+ // A certified host sells as soon as its service is verified. A maintenance
+ // resume releases only a guard it wrote itself, for example on a retry after
+ // the hold was already removed.
+ if resume&&!guarded{return nil}
  return releaseActivationSell(ctx,diagnostic)
 }
 
@@ -400,17 +409,18 @@ func activationKeepsSell(raw []byte,now time.Time)(bool,error){
  }
  return false,fmt.Errorf("existing sell posture conflicts; inspect locally")
 }
-func prepareActivationSell(path string,now time.Time)error{
+// prepareActivationSell reports whether it wrote the guard.
+func prepareActivationSell(path string,now time.Time)(bool,error){
  guard:=agentPayload{agentFile{path,digestSetupBytes(activationSellGuard),0600},activationSellGuard}
  _,e:=os.Lstat(path)
- if os.IsNotExist(e){return writeAgentFile(path,guard)}
- if e!=nil{return fmt.Errorf("cannot inspect sell posture")}
+ if os.IsNotExist(e){return true,writeAgentFile(path,guard)}
+ if e!=nil{return false,fmt.Errorf("cannot inspect sell posture")}
  raw,e:=readSetupRegular(path,true)
- if e!=nil{return fmt.Errorf("existing sell posture conflicts; inspect locally")}
- keep,err:=activationKeepsSell(raw,now);if err!=nil||keep{return err}
+ if e!=nil{return false,fmt.Errorf("existing sell posture conflicts; inspect locally")}
+ keep,err:=activationKeepsSell(raw,now);if err!=nil||keep{return false,err}
  // The service is stopped here, so replacing the file cannot race the agent.
- if err=os.Remove(path);err!=nil{return fmt.Errorf("cannot replace sell posture")}
- return writeAgentFile(path,guard)
+ if err=os.Remove(path);err!=nil{return false,fmt.Errorf("cannot replace sell posture")}
+ return true,writeAgentFile(path,guard)
 }
 
 // releaseActivationSell asks the running agent to clear the activation guard.
@@ -426,16 +436,18 @@ func releaseActivationSell(ctx context.Context,diagnostic io.Writer)error{
 // to start selling.
 func releaseActivationSellAt(ctx context.Context,stateDir string,limit,updateWait time.Duration,diagnostic io.Writer)error{
  deadline:=time.Now().Add(limit)
- routeMissing:=false
+ routeMissing,extended:=false,false
  for{
   var reply struct{SellState string `json:"sell_state"`;PauseSource string `json:"pause_source"`}
   err:=ownerSocketRequest(ctx,stateDir,"POST","/v0/activation_release",map[string]string{},&reply)
   if err==nil&&reply.PauseSource!=agent.SellSourceActivation&&reply.SellState!=""{return nil}
-  if errors.Is(err,errOwnerRouteMissing)&&!routeMissing{
-   routeMissing=true
+  // Only the latest answer counts: an agent that stops answering during its
+  // update is a failure, not a missing route.
+  routeMissing=errors.Is(err,errOwnerRouteMissing)
+  if routeMissing&&!extended{
+   extended=true
    if wait:=time.Now().Add(updateWait);wait.After(deadline){deadline=wait}
   }
-  if err==nil{routeMissing=false}
   if !time.Now().Before(deadline){
    if routeMissing{
     fmt.Fprintln(diagnostic,"The service is running, but its agent has not yet updated to a version that can end the activation pause, so this host stays paused. Once the agent has updated, start selling with: sudo hypermesh-deploy sell resume")
