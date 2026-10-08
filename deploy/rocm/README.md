@@ -1,6 +1,6 @@
 # AMD ROCm host image (scaffold)
 
-This is **not** the AGX overlay and **not** Path A/B. Path A (AGX Orin) and Path B (Seeed Super J4012) stay Jetson-first.
+This is **not** the AGX overlay and **not** a certified host class. The certified Jetson classes (AGX Orin and Seeed Super J4012) stay first.
 
 The default `hypermesh-agent` binary is the AGX / Jetson image. On that image `backend=hip-rocm` POST `passed=false` with the locked string:
 
@@ -40,4 +40,4 @@ Cert still means **Fyber-published hashes**. `image_digest` stays `repo@digest`.
 
 ## Out of scope here
 
-NVIDIA Jetson Path A/B, public Thor, GHCR pull, fake tok/s, marketing TOPS as tokens/sec, `HSA_OVERRIDE`, invented gfx names.
+NVIDIA Jetson certified classes, public Thor, GHCR pull, fake tok/s, marketing TOPS as tokens/sec, `HSA_OVERRIDE`, invented gfx names.

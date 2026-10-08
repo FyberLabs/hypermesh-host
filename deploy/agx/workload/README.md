@@ -85,8 +85,8 @@ sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:ll
 | Field | Who sets it | Invent? |
 |---|---|---|
 | job `image_digest` | control plane (`repo@digest`) | no — empty stays `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. |
-| result `image_hash` | this box: Path B is telem/host; `lease_start` is sha256 of `HYPERMESH_GGUF_PATH` | no — do not echo the OCI pin. Do not invent a hash. |
-| Path B suite telem hash | this box (`HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, else hash of `/etc/nv_tegra_release` or `/etc/os-release`) | no — this is **not** the catalog `file_hash`. |
+| result `image_hash` | this box: certification uses the telem/host hash; `lease_start` is sha256 of `HYPERMESH_GGUF_PATH` | no — do not echo the OCI pin. Do not invent a hash. |
+| Certification suite telem hash | this box (`HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, else hash of `/etc/nv_tegra_release` or `/etc/os-release`) | no — this is **not** the catalog `file_hash`. |
 
 `lease_start` still needs `repo@digest` from the control plane. Empty digest stays `passed=false`. Catalog id stays `llama-3.1-8b-q4`.
 

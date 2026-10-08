@@ -1,4 +1,4 @@
-// Package bench is the certification pack. The host runs it inside path_b.
+// Package bench is the certification pack. The host runs it inside the lab soak job (path_b).
 // A repo digest is read from the local image. It is never invented.
 package bench
 
