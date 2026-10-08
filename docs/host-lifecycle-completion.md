@@ -142,3 +142,12 @@ healthy replacement was stopped during activation and its build was subsequently
 marked rolled back. Existing rollback exclusions, registration keys and owner
 approvals are preserved; a newer signed release can advance normally. Physical
 acceptance of this correction remains pending deployment to AGX.
+
+
+A stage-7 cursor from an older installer is not proof that activation release
+succeeded. With saved autonomous selling consent, continuation reconciles the
+existing activation plan before its live status check. The active-service path
+preserves the process and an explicit owner pause; failures retain automatic
+backoff. A newer verified installer can adopt this stage without requiring the
+running service to be stopped, while verifying signed installed files and unit
+configuration.

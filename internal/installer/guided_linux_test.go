@@ -287,3 +287,25 @@ func TestGuidedQualificationUnavailableDoesNotContinue(t *testing.T){
  if g.state.Stage!=5{t.Fatal(g.state.Stage)}
  for _,call:=range *calls{if call=="certify-agent"||call=="activate-agent"{t.Fatal("advanced while unavailable")}}
 }
+
+func TestGuidedCompletedCursorRetriesActivationWithSavedConsent(t *testing.T) {
+ for _, consent:=range []bool{false,true} {
+  t.Run(fmt.Sprint(consent),func(t *testing.T){
+   g,calls,failure:=fixtureGuided(t,"y\ny\ny\ny\n")
+   if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
+   *calls=nil
+   g.state.Stage=7;g.state.Autonomous=true;g.state.SellConsent=consent
+   g.ui.ctx=withContinuationConsent(context.Background())
+   if err:=writeGuided(filepath.Join(g.dir,"certification.json"),certificationPlan{SHA256:strings.Repeat("a",64)});err!=nil{t.Fatal(err)}
+   *failure="activate-agent"
+   err:=g.finish(context.Background())
+   if consent {
+    if err==nil||!reflect.DeepEqual(*calls,[]string{"activate-agent"}){t.Fatalf("lost pending activation: %v %v",*calls,err)}
+    *failure="";*calls=nil
+    if err=g.finish(context.Background());err!=nil{t.Fatal(err)}
+    if !reflect.DeepEqual(*calls,[]string{"activate-agent","host-status"}){t.Fatal(*calls)}
+   }else if err!=nil||!reflect.DeepEqual(*calls,[]string{"host-status"}){t.Fatalf("changed posture without consent: %v %v",*calls,err)}
+   if g.state.Stage!=7{t.Fatal("rewound installation")}
+  })
+ }
+}
