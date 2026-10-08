@@ -34,7 +34,7 @@ Catalog id stays `llama-3.1-8b-q4`. Suite stays `thin-v1`.
 
 ## Field ownership
 
-| Field | Who sets it | Host-generated? |
+| Field | Who sets it | Synthesized? |
 |---|---|---|
 | job `image_digest` | control plane (`repo@digest`) | no |
 | result `image_hash` | this box (telem/host, or started handle `ImageDigest`) | no — host-certification pass needs it non-empty |
