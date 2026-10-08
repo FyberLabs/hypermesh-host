@@ -790,7 +790,7 @@ func (a *Agent) attachEgressObservation(ctx context.Context, res *jobOutcome) {
 
 func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
  a.maintenanceMu.Lock();defer a.maintenanceMu.Unlock()
- if a.maintenanceHeld()&&job.Kind!=api.KindLeaseStop&&job.Kind!=api.KindLeaseCancel&&job.Kind!=api.KindLeaseExpiry&&job.Kind!=api.KindSellPause{
+ if a.maintenanceHeld()&&job.Kind!=api.KindLeaseStop&&job.Kind!=api.KindLeaseCancel&&job.Kind!=api.KindLeaseExpiry&&job.Kind!=api.KindSellPause&&job.Kind!=api.KindSellResume{
   return jobOutcome{Result:pathb.Result{Passed:false,Reason:"host maintenance hold"}}
  }
 	_ = a.effectiveSell()
@@ -822,6 +822,8 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 		return jobOutcome{Result: a.leaseRelease(ctx, job, "lease_expiry")}
 	case api.KindSellPause:
 		return a.sellPause(job)
+	case api.KindSellResume:
+		return a.sellResume(job)
 	case "":
 		return jobOutcome{Result: pathb.Result{Passed: false, Reason: "empty job kind"}}
 	default:

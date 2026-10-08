@@ -169,7 +169,7 @@ func runCertificationCommand(ctx context.Context,args []string,out,diagnostic io
  path:=f.String("plan","","reviewed certification plan")
  approved:=f.String("approve-plan","","exact certification plan_sha256")
  run:=f.Bool("run",false,"approve model acquisition and pinned certification")
- start:=f.Bool("start",false,"approve paused service startup using the registered device")
+ start:=f.Bool("start",false,"approve service startup using the registered device; selling starts once startup is verified")
  tokenPath:=f.String("model-token-file","","optional private Hugging Face access token file")
  if err:=f.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if f.NArg()!=0||*path==""||!setupDigestRE.MatchString(*approved)||(!activate&&!*run)||(activate&&!*start){
@@ -317,7 +317,10 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
  // A repeat command must not restart an already active installation.
  if own&&j.State=="active"{
   raw,e:=(setupSource{}).output(ctx,"systemctl","is-active","hypermesh-agent.service")
-  if e==nil&&strings.TrimSpace(string(raw))=="active"{return verifyAgentStartup(ctx)}
+  if e==nil&&strings.TrimSpace(string(raw))=="active"{
+   if err=verifyAgentStartup(ctx);err!=nil||resume{return err}
+   return releaseActivationSell(ctx)
+  }
  }
  // Retry after a crash first returns our previously started service to inactive.
  if own {
@@ -347,14 +350,9 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
  if err=checkRegistrationIdentity("",identity,true);err!=nil{return err}
  if err=checkAgentUnitPaths(ctx,setupSource{},"",agentPayloads(p.Agent,nil));err!=nil{return err}
  if err=inactiveMemoryServices(ctx,setupSource{});err!=nil{return err}
- paused:=[]byte("{\"sell_state\":\"paused\"}")
- sell:=agentPayload{agentFile{"/var/lib/hypermesh/sell.json",digestSetupBytes(paused),0600},paused}
- // Agent default is selling, so durable indefinite pause must precede start.
- if _,e:=os.Lstat(sell.Path);e==nil{
-  raw,e:=readSetupRegular(sell.Path,true)
-  var posture agent.SellPosture
-  if e!=nil||decodeSetupJSON(raw,&posture)!=nil||posture.SellState!="paused"||posture.Until!=""{return fmt.Errorf("existing sell posture conflicts; inspect locally")}
- }else if os.IsNotExist(e){if err=writeAgentFile(sell.Path,sell);err!=nil{return err}}else{return fmt.Errorf("cannot inspect sell posture")}
+ // The guard keeps the plane's paused state until startup is verified, so a
+ // rollback or crash can retry with a fresh permit. It is released below.
+ if err=prepareActivationSell(activationSellPath,time.Now());err!=nil{return err}
  d:=activationDeps{Save:save,Publish:func()error{if own{return nil};return writeAgentFile(marker.Path,marker)},
   Start:func(ctx context.Context)error{
    if _,err:=(setupSource{}).output(ctx,"systemctl","daemon-reload");err!=nil{return err}
@@ -374,5 +372,56 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
    dir,err:=os.Open(filepath.Dir(marker.Path));if err!=nil{return err};defer dir.Close();return dir.Sync()
   },
  }
- return startCertified(ctx,j,*permit.PermitExpiresAt,d)
+ if err=startCertified(ctx,j,*permit.PermitExpiresAt,d);err!=nil||resume{return err}
+ // A certified host sells as soon as its service is verified.
+ return releaseActivationSell(ctx)
+}
+
+const activationSellPath="/var/lib/hypermesh/sell.json"
+var activationSellGuard=[]byte("{\"sell_state\":\"paused\",\"source\":\""+agent.SellSourceActivation+"\"}")
+
+// activationKeepsSell reports whether an existing sell.json is kept as is.
+// A current pause (owner, maintenance or an earlier guard) is kept; selling,
+// an empty state or an expired timed pause is replaced by the guard.
+func activationKeepsSell(raw []byte,now time.Time)(bool,error){
+ var posture agent.SellPosture
+ if decodeSetupJSON(raw,&posture)!=nil{return false,fmt.Errorf("existing sell posture conflicts; inspect locally")}
+ switch posture.SellState{
+ case "selling","":return false,nil
+ case "paused":
+  if posture.Until==""{return true,nil}
+  until,err:=time.Parse(time.RFC3339Nano,posture.Until)
+  if err!=nil{return false,fmt.Errorf("existing sell posture conflicts; inspect locally")}
+  return until.After(now),nil
+ }
+ return false,fmt.Errorf("existing sell posture conflicts; inspect locally")
+}
+func prepareActivationSell(path string,now time.Time)error{
+ guard:=agentPayload{agentFile{path,digestSetupBytes(activationSellGuard),0600},activationSellGuard}
+ _,e:=os.Lstat(path)
+ if os.IsNotExist(e){return writeAgentFile(path,guard)}
+ if e!=nil{return fmt.Errorf("cannot inspect sell posture")}
+ raw,e:=readSetupRegular(path,true)
+ if e!=nil{return fmt.Errorf("existing sell posture conflicts; inspect locally")}
+ keep,err:=activationKeepsSell(raw,now);if err!=nil||keep{return err}
+ // The service is stopped here, so replacing the file cannot race the agent.
+ if err=os.Remove(path);err!=nil{return fmt.Errorf("cannot replace sell posture")}
+ return writeAgentFile(path,guard)
+}
+
+// releaseActivationSell asks the running agent to clear the activation guard.
+// An owner pause is left in place.
+func releaseActivationSell(ctx context.Context)error{
+ release,cancel:=context.WithTimeout(ctx,45*time.Second);defer cancel()
+ for{
+  var reply struct{SellState string `json:"sell_state"`;PauseSource string `json:"pause_source"`}
+  err:=maintenanceOwner(release,"POST","/v0/activation_release",map[string]string{},&reply)
+  if err==nil&&reply.PauseSource!=agent.SellSourceActivation&&reply.SellState!=""{return nil}
+  timer:=time.NewTimer(time.Second)
+  select{
+  case <-release.Done():timer.Stop()
+   return fmt.Errorf("service is active but its activation sell pause was not released; run the same command again")
+  case <-timer.C:
+  }
+ }
 }

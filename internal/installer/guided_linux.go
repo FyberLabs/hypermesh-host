@@ -327,8 +327,9 @@ func (g guidedFlow) finish(ctx context.Context)error {
   if err=g.advance();err!=nil{return err}
  }
  if s.Stage==6 {
-  fmt.Fprintln(g.ui.out,"Certification passed. Using this host’s saved registration to start the service paused; selling remains off.")
-  if err=g.apply(ctx,"activate-agent","certification.json","Activate the host service in paused mode?","--start");err!=nil{return err}
+  fmt.Fprintln(g.ui.out,"Certification passed. Using this host’s saved registration to start the service; selling starts once startup is verified.")
+  fmt.Fprintln(g.ui.out,"Pause or resume selling at any time with: sudo hypermesh-deploy sell pause | sell resume")
+  if err=g.apply(ctx,"activate-agent","certification.json","Activate the host service and start selling?","--start");err!=nil{return err}
   if err=g.advance();err!=nil{return err}
  }
  fmt.Fprintln(g.ui.out,"Checking the host's current status…")
@@ -447,7 +448,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  if !*background && s.Stage>=4 && !s.Autonomous {
-  if err=ui.confirm("Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests and paused startup?");err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+  if err=ui.confirm("Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests, service startup and selling once certified?");err!=nil{fmt.Fprintln(diagnostic,err);return 1}
   s.Autonomous=true
   if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)}
   if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
@@ -456,7 +457,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
   prepareContinuation:func(ctx context.Context,p SetupPlan)error{
    if !s.Autonomous {
-    if e:=ui.confirm("Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation and paused startup after admin approval?");e!=nil{return e}
+    if e:=ui.confirm("Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation, and service startup and selling after admin approval?");e!=nil{return e}
    }
    if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
    s.Autonomous=true

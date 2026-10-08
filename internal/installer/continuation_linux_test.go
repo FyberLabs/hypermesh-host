@@ -110,7 +110,7 @@ func TestContinuationRetriesFailedStageWithoutAuthentication(t *testing.T) {
 
 func TestContinuationConsentDoesNotApproveUnrelatedChanges(t *testing.T) {
 	ui := guidedUI{ctx: context.WithValue(context.Background(), continuationConsent{}, true), out: io.Discard, in: bufio.NewReader(strings.NewReader("y\n"))}
-	for _, prompt := range []string{"Activate the host service in paused mode?", "Request the reboot again now?"} {
+	for _, prompt := range []string{"Activate the host service and start selling?", "Request the reboot again now?"} {
 		if err := ui.confirm(prompt); err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +248,7 @@ func TestDefaultContinuationRetainsConsentAndExplicitRecoveryReadsInput(t *testi
 			t.Fatal("default continuation unexpectedly requested input")
 		}
 		if !interactive {
-			if err := ui.confirm("Activate the host service in paused mode?"); err != nil {
+			if err := ui.confirm("Activate the host service and start selling?"); err != nil {
 				t.Fatal(err)
 			}
 		}

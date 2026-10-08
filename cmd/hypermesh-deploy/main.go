@@ -41,6 +41,7 @@ func main() {
  name := os.Args[1]
  if name=="plan-installer-update"||name=="update-installer"||name=="rollback-installer"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanInstallerUpdate;if name=="update-installer"{run=installer.RunUpdateInstaller};if name=="rollback-installer"{run=installer.RunRollbackInstaller};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-maintenance"||name=="maintain-agent"||name=="resume-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanMaintenance;if name=="maintain-agent"{run=installer.RunMaintainAgent};if name=="resume-agent"{run=installer.RunResumeAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
+ if name=="sell"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);code:=installer.RunSell(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-recovery"||name=="recover-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanRecovery;if name=="recover-agent"{run=installer.RunRecoverAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-reboot"||name=="reboot-setup"||name=="resume-setup"||name=="reboot-status" {
   ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM)
@@ -200,7 +201,8 @@ Commands:
   rollback-installer  explicitly restore that backup; --plan FILE --approve-plan SHA256 --apply
   plan-maintenance  review enrolled-host stop/reboot; --plan CERTIFICATION_PLAN --operation stop|reboot
   maintain-agent  drain and stop; --plan FILE --approve-plan SHA256 --apply [--reboot]
-  resume-agent  verify and resume paused; --plan FILE --approve-plan SHA256 --start
+  resume-agent  verify and resume; selling restarts unless the owner paused it; --plan FILE --approve-plan SHA256 --start
+  sell  owner selling control; pause [--until=RFC3339] | resume | status
   plan-recovery  review inactive host repair/uninstall; --agent-plan FILE --operation repair|uninstall
   recover-agent  apply recovery while preserving identity/models; --plan FILE --approve-plan SHA256 --apply
   plan-reboot  review a pre-enrollment prerequisite reboot; --setup-plan FILE
@@ -213,7 +215,7 @@ Commands:
   qualify-host      run an operator-authorized initial lab baseline; --run-id UUID
   plan-certification  obtain an authenticated frozen model/runtime plan; --agent-plan FILE
   certify-agent  acquire and certify while inactive; --plan FILE --approve-plan SHA256 --run
-  activate-agent  original-owner approval and paused startup; --plan FILE --approve-plan SHA256 --start
+  activate-agent  start the certified service; selling starts once startup is verified; --plan FILE --approve-plan SHA256 --start
   plan-workload  review explicit local model/runtime pins; use --help.
   check-workload  run approved inference with host services inactive.
                   --plan FILE --approve-plan SHA256 --run
@@ -285,6 +287,10 @@ Keep the download receipt and signing key beside the verified executable.
 If interrupted or rebooted, run the same command again.
 
   install --help    Guided setup options
+  sell pause [--until=RFC3339]
+                    Pause selling (indefinitely, or until the given time)
+  sell resume       Resume selling
+  sell status       Show the current selling state
   advanced-help     Individual operations for automation and recovery
 `)
 }

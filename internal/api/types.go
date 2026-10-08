@@ -171,6 +171,7 @@ const (
 	KindLeaseCancel   JobKind = "lease_cancel"
 	KindLeaseExpiry   JobKind = "lease_expiry"
 	KindSellPause     JobKind = "sell_pause"
+	KindSellResume    JobKind = "sell_resume"
 )
 
 // Job is GET /agent/jobs. One pending job or 204. No suite payload.
