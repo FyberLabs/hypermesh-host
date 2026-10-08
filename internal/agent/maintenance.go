@@ -45,15 +45,15 @@ func (a *Agent) handleOwnerMaintenance(w http.ResponseWriter,r *http.Request){
 }
 
 // holdSellForMaintenance writes the hold's indefinite pause to sell.json in
-// the shape earlier installers expect. An owner pause is kept beside it first
-// so releasing the hold restores the owner's choice instead of selling.
+// the shape earlier installers expect. The posture to restore afterwards is
+// kept beside it first: the owner's pause, or selling when there is none.
 // Caller must hold sellMu.
 func (a *Agent) holdSellForMaintenance()error{
- current:=a.loadSell()
  if !a.maintenanceHeld(){
-  if owner,ok:=a.ownerPauseIntent(current);ok&&!untilReached(owner.Until,a.clock()){
-   if err:=writeJSON0600(a.sellOwnerPath(),owner);err!=nil{return err}
-  }else if err:=os.Remove(a.sellOwnerPath());err!=nil&&!os.IsNotExist(err){return err}
+  raw,_:=os.ReadFile(a.sellPath())
+  kept:=SellPosture{SellState:api.SellSelling}
+  if owner,ok:=ownerPauseIntent(a.loadSell(),raw);ok&&!untilReached(owner.Until,a.clock()){kept=owner}
+  if err:=writeJSON0600(a.sellOwnerPath(),kept);err!=nil{return err}
  }
  return a.saveSell(SellPosture{SellState:api.SellPaused})
 }

@@ -1,9 +1,7 @@
 package agent
 
 import (
-	"bufio"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -16,8 +14,8 @@ import (
 
 const (
 	sellFile = "sell.json"
-	// sellOwnerFile keeps an owner pause while a maintenance hold owns
-	// sell.json, so the pause is restored when the hold is released.
+	// sellOwnerFile keeps the posture to restore after a maintenance hold:
+	// the owner's pause, or selling when there was none.
 	sellOwnerFile = "sell-owner.json"
 )
 
@@ -34,15 +32,21 @@ const (
 
 // SellPosture is the host-local sell actuator state. Not Path B.
 //
-// A paused posture with no source and no until is the shape installers wrote
-// before sources existed (activation and maintenance). It is treated as an
-// installer pause and is cleared once no maintenance hold is present, unless
-// the owner effects log shows the owner set an indefinite pause.
+// A paused posture with no source and no until predates sources. Earlier
+// installers wrote it at activation as the exact compact bytes in
+// activationLegacyPause, which the agent itself never produces; that pause is
+// cleared. Any other sourceless indefinite pause was written by the agent for
+// an owner, a control-plane job or a maintenance hold and is kept as an owner
+// pause, since its origin cannot be told apart.
 type SellPosture struct {
 	SellState api.SellState `json:"sell_state"`
 	Until     string        `json:"until,omitempty"`
 	Source    string        `json:"source,omitempty"`
 }
+
+// activationLegacyPause is the file earlier installers wrote at activation.
+// The agent writes indented JSON, so these bytes only come from an installer.
+const activationLegacyPause = `{"sell_state":"paused"}`
 
 func (p SellPosture) installerShaped() bool {
 	return p.SellState == api.SellPaused && strings.TrimSpace(p.Until) == "" && p.Source == ""
@@ -81,91 +85,65 @@ func (a *Agent) sellLog() *slog.Logger {
 	return slog.Default()
 }
 
-// loadOwnerPause reads the owner pause kept during a maintenance hold.
-func (a *Agent) loadOwnerPause() (SellPosture, bool) {
+// loadKeptSell reads the posture kept beside a maintenance hold: an owner
+// pause, or selling when no owner pause was in effect.
+func (a *Agent) loadKeptSell() (SellPosture, bool) {
 	b, err := os.ReadFile(a.sellOwnerPath())
 	if err != nil {
 		return SellPosture{}, false
 	}
 	var p SellPosture
-	if json.Unmarshal(b, &p) != nil || p.SellState != api.SellPaused {
+	if json.Unmarshal(b, &p) != nil {
 		return SellPosture{}, false
 	}
-	p.Source = SellSourceOwner
-	return p, true
+	switch p.SellState {
+	case api.SellSelling:
+		return SellPosture{SellState: api.SellSelling}, true
+	case api.SellPaused:
+		p.Source = SellSourceOwner
+		return p, true
+	}
+	return SellPosture{}, false
 }
 
-// ownerEffectsShowIndefinitePause reports whether the newest successful
-// owner sell action in owner-effects.jsonl is a pause with no end time.
-func (a *Agent) ownerEffectsShowIndefinitePause() bool {
-	f, err := os.Open(ownerEffectsPath(a.cfg.StateDir))
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	const window = 1 << 20
-	if info, err := f.Stat(); err == nil && info.Size() > window {
-		if _, err := f.Seek(info.Size()-window, io.SeekStart); err != nil {
-			return false
-		}
-	}
-	last := ""
-	scan := bufio.NewScanner(f)
-	scan.Buffer(make([]byte, 64<<10), 64<<10)
-	for scan.Scan() {
-		var e ownerEffect
-		if json.Unmarshal(scan.Bytes(), &e) != nil || !e.Passed {
-			continue
-		}
-		switch e.Tool {
-		case toolSellPause:
-			if strings.TrimSpace(e.Until) == "" {
-				last = "indefinite"
-			} else {
-				last = "timed"
-			}
-		case toolSellResume:
-			last = "resume"
-		}
-	}
-	return last == "indefinite"
-}
-
-// ownerPauseIntent returns the owner pause represented by p, if any.
-// Caller must hold sellMu.
-func (a *Agent) ownerPauseIntent(p SellPosture) (SellPosture, bool) {
+// ownerPauseIntent returns the owner pause represented by the stored posture,
+// if any. raw is the stored file.
+func ownerPauseIntent(p SellPosture, raw []byte) (SellPosture, bool) {
 	if p.SellState != api.SellPaused {
 		return SellPosture{}, false
 	}
 	switch {
 	case p.Source == SellSourceOwner:
 		return p, true
-	case p.Source == "" && strings.TrimSpace(p.Until) != "":
+	case p.Source != "":
+		return SellPosture{}, false
+	case strings.TrimSpace(p.Until) != "":
 		// Only an explicit pause request ever stored an end time.
 		return SellPosture{SellState: api.SellPaused, Until: p.Until, Source: SellSourceOwner}, true
-	case p.installerShaped() && a.ownerEffectsShowIndefinitePause():
-		return SellPosture{SellState: api.SellPaused, Source: SellSourceOwner}, true
+	case strings.TrimSpace(string(raw)) == activationLegacyPause:
+		return SellPosture{}, false
 	}
-	return SellPosture{}, false
+	return SellPosture{SellState: api.SellPaused, Source: SellSourceOwner}, true
 }
 
-// settleInstallerPause replaces an installer-shaped pause once no maintenance
-// hold is present: an owner pause kept during maintenance is restored, an
-// owner pause shown by the effects log is kept and labeled, and anything else
-// returns to selling. Caller must hold sellMu.
-func (a *Agent) settleInstallerPause() SellPosture {
-	next, ok := a.loadOwnerPause()
+// settleSourcelessPause runs outside a maintenance hold on a paused posture
+// with no source and no until. A posture kept beside a released hold is
+// restored; the pause earlier installers wrote at activation returns to
+// selling; anything else is kept and labeled as an owner pause.
+// Caller must hold sellMu.
+func (a *Agent) settleSourcelessPause(raw []byte) SellPosture {
+	next, ok := a.loadKeptSell()
 	if !ok {
-		next, ok = a.ownerPauseIntent(SellPosture{SellState: api.SellPaused})
+		next, ok = ownerPauseIntent(SellPosture{SellState: api.SellPaused}, raw)
 	}
 	if !ok {
 		next = SellPosture{SellState: api.SellSelling}
 	}
 	if err := a.saveSell(next); err != nil {
-		a.sellLog().Warn("installer sell pause not settled", "err", err)
+		a.sellLog().Warn("sell pause not settled", "err", err)
 		return SellPosture{SellState: api.SellPaused}
 	}
-	a.sellLog().Info("installer sell pause settled", "sell_state", next.SellState, "until", next.Until, "source", next.Source)
+	a.sellLog().Info("sell pause settled", "sell_state", next.SellState, "until", next.Until, "source", next.Source)
 	_ = os.Remove(a.sellOwnerPath())
 	return next
 }
@@ -201,9 +179,10 @@ func (a *Agent) effectiveSell() SellPosture {
 
 func (a *Agent) effectiveSellLocked() SellPosture {
  if a.maintenanceHeld(){return SellPosture{SellState:api.SellPaused}}
+	raw, _ := os.ReadFile(a.sellPath())
 	p := a.loadSell()
 	if p.installerShaped() {
-		p = a.settleInstallerPause()
+		p = a.settleSourcelessPause(raw)
 	} else if _, err := os.Lstat(a.sellOwnerPath()); err == nil {
 		// A kept owner pause only applies while sell.json is the hold's pause.
 		_ = os.Remove(a.sellOwnerPath())

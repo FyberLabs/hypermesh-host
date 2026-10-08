@@ -76,6 +76,14 @@ func maintenanceSellAfter(ctx context.Context)string{
   select{case <-wait.Done():timer.Stop();return "unknown";case <-timer.C:}
  }
 }
+// maintenanceHoldReleased decides whether resume may proceed without the
+// matching hold. Only a missing marker on a resume that already reached the
+// resuming checkpoint counts as released; any other hold problem stops.
+func maintenanceHoldReleased(holdErr error,markerMissing bool,state string)(bool,error){
+ if holdErr==nil{return false,nil}
+ if markerMissing&&supportOneOf(state,"resuming","complete"){return true,nil}
+ return false,holdErr
+}
 func maintenanceMarkerMatches(sha string)error{
  raw,err:=readSetupRegular("/var/lib/hypermesh/maintenance.json",true)
  var v struct{Schema int `json:"schema"`;PlanSHA256 string `json:"plan_sha256"`;RequestedAt time.Time `json:"requested_at"`}
@@ -179,13 +187,16 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   return noMaintenanceContainers(ctx)
  }
  sellAfter:=""
+ // A retry after the hold was released skips the paused-hold checks: the
+ // marker is only removed after they passed, and the agent may since have
+ // restored selling or the owner's pause.
+ released:=false
  if resume{
   if !supportOneOf(j.State,"stopped","reboot-requested","resuming","complete"){err=fmt.Errorf("drain/stop must complete before resume")}
   if err==nil{
    holdErr:=maintenanceMarkerMatches(p.SHA256)
-   if holdErr!=nil{
-    if _,e:=os.Lstat("/var/lib/hypermesh/maintenance.json");!os.IsNotExist(e)||!supportOneOf(j.State,"resuming","complete"){err=holdErr}
-   }
+   _,e:=os.Lstat("/var/lib/hypermesh/maintenance.json")
+   released,err=maintenanceHoldReleased(holdErr,os.IsNotExist(e),j.State)
   }
   if err==nil{err=installed(ctx)}
   if err==nil{err=noMaintenanceContainers(ctx)}
@@ -200,17 +211,17 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
    if err==nil&&(!validCertificationJournal(cert)||cert.PlanSHA256!=p.Certification.SHA256||cert.RunID!=p.Certification.Run.RunID){err=fmt.Errorf("invalid certification checkpoint")}
    if err==nil{err=activateCertifiedMode(ctx,p.Certification,identity,client,&cert,func(v certificationJournal)error{return saveCertification(certificationStatePath(defaultSetupState,p.Certification.SHA256),v)},diagnostic,true)}
   }
-  if err==nil{
+  if err==nil&&!released{
    var local struct{DeviceID string `json:"device_id"`;SellState string `json:"sell_state"`;Until string `json:"until"`}
    err=maintenanceOwner(ctx,"GET","/v0/status",nil,&local)
    if err==nil&&(local.DeviceID!=identity.DeviceID||local.SellState!="paused"||local.Until!=""){err=fmt.Errorf("resume must retain an indefinite pause")}
   }
-  if err==nil{
+  if err==nil&&!released{
    var posture struct{SellState string `json:"sell_state"`;Until string `json:"until,omitempty"`}
    raw,err=readSetupRegular("/var/lib/hypermesh/sell.json",true)
    if err==nil&&(decodeSetupJSON(raw,&posture)!=nil||posture.SellState!="paused"||posture.Until!=""){err=fmt.Errorf("persistent indefinite pause required")}
   }
-  if err==nil{
+  if err==nil&&!released{
    remote,e:=client.CheckDevice(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret)
    if e!=nil||remote.PathAState!="accepted"||remote.PathBState!="green"||remote.ScheduleHold==nil||*remote.ScheduleHold||remote.SellState!="paused"||remote.LastHeartbeatAt==nil||time.Since(*remote.LastHeartbeatAt)<0||time.Since(*remote.LastHeartbeatAt)>120*time.Second||remote.CheckedAt.Before(time.Now().Add(-30*time.Second))||remote.CheckedAt.After(time.Now().Add(30*time.Second)){err=fmt.Errorf("fresh plane readiness required before releasing maintenance hold")}
   }

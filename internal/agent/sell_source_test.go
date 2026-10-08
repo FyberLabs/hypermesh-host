@@ -84,7 +84,7 @@ func TestOwnerPauseOverActivationGuardIsOwnerPause(t *testing.T) {
 
 func TestUpgradeClearsActivationShapedPause(t *testing.T) {
 	a := newOwnerTestAgent(t)
-	// Written by earlier installers at activation and by maintenance.
+	// The exact bytes earlier installers wrote at activation.
 	writeRawSell(t, a, `{"sell_state":"paused"}`)
 	if got := a.effectiveSell(); got.SellState != api.SellSelling {
 		t.Fatalf("activation pause kept after upgrade: %+v", got)
@@ -99,39 +99,38 @@ func TestUpgradeKeepsOwnerPauses(t *testing.T) {
 	t.Run("timed", func(t *testing.T) {
 		a := newOwnerTestAgent(t)
 		a.now = func() time.Time { return now }
-		writeRawSell(t, a, `{"sell_state":"paused","until":"2026-10-08T00:00:00Z"}`)
+		writeRawSell(t, a, "{\n  \"sell_state\": \"paused\",\n  \"until\": \"2026-10-08T00:00:00Z\"\n}\n")
 		got := a.effectiveSell()
 		if got.SellState != api.SellPaused || got.Until != "2026-10-08T00:00:00Z" {
 			t.Fatalf("timed owner pause lost: %+v", got)
 		}
 	})
-	t.Run("indefinite from owner command", func(t *testing.T) {
+	t.Run("indefinite written by the agent", func(t *testing.T) {
+		// An owner command, a control-plane sell_pause job and the old
+		// maintenance hold all wrote this indented shape; keep it.
 		a := newOwnerTestAgent(t)
 		a.now = func() time.Time { return now }
-		if err := a.appendOwnerEffect(ownerEffect{Tool: toolSellPause, Passed: true, SellState: api.SellPaused, Until: "2026-09-01T00:00:00Z"}); err != nil {
-			t.Fatal(err)
-		}
-		if err := a.appendOwnerEffect(ownerEffect{Tool: toolSellPause, Passed: true, SellState: api.SellPaused}); err != nil {
-			t.Fatal(err)
-		}
-		writeRawSell(t, a, `{"sell_state":"paused"}`)
+		writeRawSell(t, a, "{\n  \"sell_state\": \"paused\"\n}\n")
 		got := a.effectiveSell()
 		if got.SellState != api.SellPaused || got.Source != SellSourceOwner {
-			t.Fatalf("indefinite owner pause lost: %+v", got)
+			t.Fatalf("indefinite agent-written pause lost: %+v", got)
 		}
 		if storedSell(t, a).Source != SellSourceOwner {
 			t.Fatal("owner source not persisted")
 		}
+		if got := a.effectiveSell(); got.SellState != api.SellPaused {
+			t.Fatal("labeled pause not stable")
+		}
 	})
-	t.Run("older timed owner pause does not keep an activation pause", func(t *testing.T) {
+	t.Run("pause from a plane job before upgrade", func(t *testing.T) {
 		a := newOwnerTestAgent(t)
-		a.now = func() time.Time { return now }
-		if err := a.appendOwnerEffect(ownerEffect{Tool: toolSellPause, Passed: true, SellState: api.SellPaused, Until: "2026-09-01T00:00:00Z"}); err != nil {
+		if err := writeJSON0600(a.sellPath(), struct {
+			SellState api.SellState `json:"sell_state"`
+		}{api.SellPaused}); err != nil {
 			t.Fatal(err)
 		}
-		writeRawSell(t, a, `{"sell_state":"paused"}`)
-		if got := a.effectiveSell(); got.SellState != api.SellSelling {
-			t.Fatalf("activation pause kept: %+v", got)
+		if got := a.effectiveSell(); got.SellState != api.SellPaused {
+			t.Fatalf("plane pause cleared: %+v", got)
 		}
 	})
 }
@@ -171,11 +170,6 @@ func TestOwnerCLIPauseThenResume(t *testing.T) {
 	}
 	if err := runOwnerCLI(a.cfg.StateDir, []string{"sell-resume", "extra"}, &out); err == nil {
 		t.Fatal("extra argument accepted")
-	}
-	// After an owner resume, a later activation-shaped pause is not an owner pause.
-	writeRawSell(t, a, `{"sell_state":"paused"}`)
-	if a.effectiveSell().SellState != api.SellSelling {
-		t.Fatal("installer pause kept after owner resume")
 	}
 }
 
