@@ -188,7 +188,7 @@ func TestGuidedSetupDoesNotPassLegacyMemoryBudget(t *testing.T) {
 }
 
 func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
- for _,kind:=range []string{"pass","autonomous","prepare-failure","connectivity","certification","activation","decline","payload","stage","network","downgrade"} {
+ for _,kind:=range []string{"pass","autonomous","prepare-failure","connectivity","certification","activation","completed","decline","payload","stage","network","downgrade"} {
   t.Run(kind,func(t *testing.T){
    p:=agentInstallFixture(t)
    network,_:=installationNetwork("test");p.ControlPlane=network.Plane;p.SHA256=agentPlanDigest(p)
@@ -199,8 +199,8 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
    state:=guidedState{Schema:1,Stage:3,PlanDirectory:filepath.Base(planDir),Network:"test",Host:p.HostName,Tenant:p.TenantID,Directory:p.Setup.Preflight.Resources.ModelDirectory,
     Download:guidedDownload{Build:21,Commit:p.Setup.InstallerCommit,Channel:"test"}}
    if kind=="autonomous"||kind=="prepare-failure"{state.Autonomous=true;state.ContinuationSHA=strings.Repeat("a",64);state.LauncherSHA=state.ContinuationSHA}
-   if kind=="stage"{state.Stage=7}
-   expectedStage:=3;if kind=="connectivity"{state.Stage=4;expectedStage=4};if kind=="certification"{state.Stage=5;expectedStage=5};if kind=="activation"{state.Stage=6;expectedStage=6}
+   if kind=="stage"{state.Stage=8}
+   expectedStage:=3;if kind=="completed"{state.Stage=7;expectedStage=7};if kind=="connectivity"{state.Stage=4;expectedStage=4};if kind=="certification"{state.Stage=5;expectedStage=5};if kind=="activation"{state.Stage=6;expectedStage=6}
    if kind=="network"{state.Network="production"}
    buildinfo.Build="22";buildinfo.Commit=strings.Repeat("b",40)
    download:=guidedDownload{Schema:1,Build:22,Commit:buildinfo.Commit,Channel:"test",ReleaseURL:"https://example.test/test/22",TrustedKey:filepath.Join(dir,"public.asc")}
@@ -219,7 +219,7 @@ func TestGuidedInstalledContinuationPreservesApprovals(t *testing.T){
     next.ContinuationSHA=strings.Repeat("b",64);return nil
    })
    after,_:=os.ReadFile(planPath);if string(before)!=string(after){t.Fatal("approval changed")}
-   if kind=="pass"||kind=="autonomous"||kind=="connectivity"||kind=="certification"||kind=="activation" {
+   if kind=="pass"||kind=="autonomous"||kind=="connectivity"||kind=="certification"||kind=="activation"||kind=="completed" {
     if err!=nil||checks!=2||state.Stage!=expectedStage||state.Download.Build!=22{t.Fatal(err,checks,state.Stage)}
     var reopened guidedState
     if err:=guidedRead(session,&reopened,true);err!=nil{t.Fatal(err)}
@@ -286,4 +286,26 @@ func TestGuidedQualificationUnavailableDoesNotContinue(t *testing.T){
  if err:=g.finish(context.Background());err==nil{t.Fatal("unavailable program accepted")}
  if g.state.Stage!=5{t.Fatal(g.state.Stage)}
  for _,call:=range *calls{if call=="certify-agent"||call=="activate-agent"{t.Fatal("advanced while unavailable")}}
+}
+
+func TestGuidedCompletedCursorRetriesActivationWithSavedConsent(t *testing.T) {
+ for _, consent:=range []bool{false,true} {
+  t.Run(fmt.Sprint(consent),func(t *testing.T){
+   g,calls,failure:=fixtureGuided(t,"y\ny\ny\ny\n")
+   if err:=g.finish(context.Background());err!=nil{t.Fatal(err)}
+   *calls=nil
+   g.state.Stage=7;g.state.Autonomous=true;g.state.SellConsent=consent
+   g.ui.ctx=withContinuationConsent(context.Background())
+   if err:=writeGuided(filepath.Join(g.dir,"certification.json"),certificationPlan{SHA256:strings.Repeat("a",64)});err!=nil{t.Fatal(err)}
+   *failure="activate-agent"
+   err:=g.finish(context.Background())
+   if consent {
+    if err==nil||!reflect.DeepEqual(*calls,[]string{"activate-agent"}){t.Fatalf("lost pending activation: %v %v",*calls,err)}
+    *failure="";*calls=nil
+    if err=g.finish(context.Background());err!=nil{t.Fatal(err)}
+    if !reflect.DeepEqual(*calls,[]string{"activate-agent","host-status"}){t.Fatal(*calls)}
+   }else if err!=nil||!reflect.DeepEqual(*calls,[]string{"host-status"}){t.Fatalf("changed posture without consent: %v %v",*calls,err)}
+   if g.state.Stage!=7{t.Fatal("rewound installation")}
+  })
+ }
 }
