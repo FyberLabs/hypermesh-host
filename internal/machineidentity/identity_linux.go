@@ -183,8 +183,55 @@ func (p Provider) Token(ctx context.Context, base, tenant, device, request, boot
 	if e != nil {
 		return "", e
 	}
+	if primary := primaryPath(p.Path); primary != "" {
+		if _, err := os.Lstat(p.Path); os.IsNotExist(err) {
+			// Creating a peer checkpoint takes the primary lock first, in the
+			// same order as retirement, so it cannot race RetireEnrollment.
+			unlock()
+			release, err := lock(ctx, primary)
+			if err != nil {
+				return "", err
+			}
+			defer release()
+			if unlock, e = lock(ctx, p.Path); e != nil {
+				return "", e
+			}
+		}
+	}
 	defer unlock()
 	return p.tokenLocked(ctx, base, tenant, device, request, bootstrap, true)
+}
+
+// primaryPath returns the primary checkpoint of a peer checkpoint path, or ""
+// when path is not a peer checkpoint.
+func primaryPath(path string) string {
+	i := strings.LastIndex(path, ".peer-")
+	if i < 0 || len(path)-i-6 != 64 {
+		return ""
+	}
+	if _, err := hex.DecodeString(path[i+6:]); err != nil {
+		return ""
+	}
+	return path[:i]
+}
+
+// retiredDevice reports whether an archived checkpoint or retirement marker
+// for path records device.
+func retiredDevice(path, device string) (bool, error) {
+	retired, err := filepath.Glob(path + ".retired-*")
+	if err != nil {
+		return false, err
+	}
+	for _, file := range retired {
+		old, err := read(file)
+		if err != nil {
+			return false, err
+		}
+		if old.Device == device {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func identityBase(base string) (string, error) {
@@ -205,6 +252,20 @@ func (p Provider) tokenLocked(ctx context.Context, base, tenant, device, request
 		}
 		if request == "" {
 			return "", fmt.Errorf("machine identity has not been installed")
+		}
+		// Never recreate a checkpoint for an enrollment that was retired,
+		// whether this checkpoint or the primary records the retirement.
+		for _, path := range []string{p.Path, primaryPath(p.Path)} {
+			if path == "" {
+				continue
+			}
+			retired, err := retiredDevice(path, device)
+			if err != nil {
+				return "", err
+			}
+			if retired {
+				return "", fmt.Errorf("machine identity for this enrollment was retired; complete re-enrollment")
+			}
 		}
 		key, err := newKey()
 		if err != nil {

@@ -442,6 +442,52 @@ func TestRetiredEnrollmentIsNotRecreated(t *testing.T) {
 	}
 }
 
+func TestRetiredPeerIsNotRecreated(t *testing.T) {
+	p, _, calls, _ := identityFixture(t)
+	if _, err := get(t, p); err != nil {
+		t.Fatal(err)
+	}
+	old, err := read(p.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := p.Peer("other-aiuditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = save(peer.Path, old); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := *calls
+	// A process that still holds the retired enrollment asks for a contract.
+	if _, err = peer.ContractToken(context.Background(), old.Base, tenant, old.Device, old.Request, "old-bootstrap", "contract-1"); err == nil {
+		t.Fatal("recreated a retired peer checkpoint")
+	}
+	if _, err = os.Stat(peer.Path); !os.IsNotExist(err) {
+		t.Fatal("wrote a peer checkpoint for the retired enrollment", err)
+	}
+	// A peer that never had a checkpoint is covered by the primary retirement.
+	fresh, err := p.Peer("third-aiuditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fresh.Token(context.Background(), old.Base, tenant, old.Device, old.Request, "old-bootstrap"); err == nil {
+		t.Fatal("created a peer checkpoint for the retired enrollment")
+	}
+	if _, err = os.Stat(fresh.Path); !os.IsNotExist(err) {
+		t.Fatal("wrote a peer checkpoint for the retired enrollment", err)
+	}
+	if *calls != before {
+		t.Fatal("contacted the authority for a retired enrollment")
+	}
+	if primaryPath(peer.Path) != p.Path || primaryPath(p.Path) != "" {
+		t.Fatal("peer path does not map to its primary")
+	}
+}
+
 func TestLegacyReenrollmentBindsASigningKey(t *testing.T) {
 	newDevice := "12345678-1234-4234-8234-123456789bbb"
 	p, _, calls, _ := identityFixtureFor(t, newDevice, newDevice)
