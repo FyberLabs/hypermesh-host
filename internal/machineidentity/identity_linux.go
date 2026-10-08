@@ -175,18 +175,34 @@ func (p Provider) Token(ctx context.Context, base, tenant, device, request, boot
 	if p.Path == "" {
 		p.Path = DefaultPath
 	}
-	u, e := url.Parse(base)
-	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("machine identity requires HTTPS")
+	base, e := identityBase(base)
+	if e != nil {
+		return "", e
 	}
-	base = strings.TrimRight(base, "/")
 	unlock, e := lock(ctx, p.Path)
 	if e != nil {
 		return "", e
 	}
 	defer unlock()
+	return p.tokenLocked(ctx, base, tenant, device, request, bootstrap, true)
+}
+
+func identityBase(base string) (string, error) {
+	u, e := url.Parse(base)
+	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("machine identity requires HTTPS")
+	}
+	return strings.TrimRight(base, "/"), nil
+}
+
+// tokenLocked requires the checkpoint lock. Without create, a missing
+// checkpoint means it was retired after the caller chose it; never recreate it.
+func (p Provider) tokenLocked(ctx context.Context, base, tenant, device, request, bootstrap string, create bool) (string, error) {
 	s, e := read(p.Path)
 	if os.IsNotExist(e) {
+		if !create {
+			return "", fmt.Errorf("machine identity was retired; complete re-enrollment")
+		}
 		if request == "" {
 			return "", fmt.Errorf("machine identity has not been installed")
 		}
@@ -265,6 +281,13 @@ func (p Provider) ExistingToken(ctx context.Context, base, tenant, device, boots
 	if p.Path == "" {
 		p.Path = DefaultPath
 	}
+	// Inspect and use the checkpoint under one lock so retirement cannot slip
+	// between the two.
+	unlock, e := lock(ctx, p.Path)
+	if e != nil {
+		return "", e
+	}
+	defer unlock()
 	s, e := read(p.Path)
 	if os.IsNotExist(e) {
 		retired, err := filepath.Glob(p.Path + ".retired-*")
@@ -275,9 +298,23 @@ func (p Provider) ExistingToken(ctx context.Context, base, tenant, device, boots
 			if device == "" {
 				return "", fmt.Errorf("active enrollment is required for signing identity replacement")
 			}
+			// A process still holding a retired enrollment must not recreate
+			// its identity while re-enrollment is in progress.
+			for _, path := range retired {
+				old, err := read(path)
+				if err != nil {
+					return "", err
+				}
+				if old.Device == device {
+					return "", fmt.Errorf("machine identity for this enrollment was retired; complete re-enrollment")
+				}
+			}
+			if base, err = identityBase(base); err != nil {
+				return "", err
+			}
 			// Enroll-token replacements use their immutable device ID as the
 			// authority context. The plane verifies the fresh bootstrap secret.
-			return p.Token(ctx, base, tenant, device, device, bootstrap)
+			return p.tokenLocked(ctx, base, tenant, device, device, bootstrap, true)
 		}
 		return bootstrap, nil
 	}
@@ -287,7 +324,10 @@ func (p Provider) ExistingToken(ctx context.Context, base, tenant, device, boots
 	if device == "" || s.Device != device {
 		return "", fmt.Errorf("saved machine identity does not match active enrollment")
 	}
-	return p.Token(ctx, base, tenant, device, s.Request, bootstrap)
+	if base, e = identityBase(base); e != nil {
+		return "", e
+	}
+	return p.tokenLocked(ctx, base, tenant, device, s.Request, bootstrap, false)
 }
 
 func safeFile(path string) (*os.File, error) {
@@ -573,6 +613,11 @@ func (p Provider) Retire(ctx context.Context) error {
 	if p.Path == "" {
 		p.Path = DefaultPath
 	}
+	unlock, err := lock(ctx, p.Path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	entries, err := os.ReadDir(filepath.Dir(p.Path))
 	if err != nil {
 		return err
@@ -587,37 +632,44 @@ func (p Provider) Retire(ctx context.Context) error {
 		if _, err := hex.DecodeString(suffix); err != nil {
 			continue
 		}
-		paths = append(paths, filepath.Join(filepath.Dir(p.Path), entry.Name()))
-	}
-	for _, path := range paths {
-		if err := retireCheckpoint(ctx, path); err != nil {
+		path := filepath.Join(filepath.Dir(p.Path), entry.Name())
+		release, err := lock(ctx, path)
+		if err != nil {
 			return err
 		}
+		defer release()
+		paths = append(paths, path)
 	}
-	return nil
-}
-func retireCheckpoint(ctx context.Context, path string) error {
-	unlock, err := lock(ctx, path)
-	if err != nil {
+	// Check every checkpoint before archiving any, so a bad peer leaves the
+	// active enrollment untouched.
+	var present []string
+	for _, path := range paths {
+		f, err := safeFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		f.Close()
+		present = append(present, path)
+	}
+	var moved [][2]string
+	for _, path := range present {
+		nonce := make([]byte, 16)
+		if _, err = rand.Read(nonce); err == nil {
+			target := path + ".retired-" + hex.EncodeToString(nonce)
+			if err = os.Rename(path, target); err == nil {
+				moved = append(moved, [2]string{path, target})
+				continue
+			}
+		}
+		for i := len(moved) - 1; i >= 0; i-- {
+			os.Rename(moved[i][1], moved[i][0])
+		}
 		return err
 	}
-	defer unlock()
-	f, err := safeFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	f.Close()
-	nonce := make([]byte, 16)
-	if _, err = rand.Read(nonce); err != nil {
-		return err
-	}
-	if err = os.Rename(path, path+".retired-"+hex.EncodeToString(nonce)); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
+	dir, err := os.Open(filepath.Dir(p.Path))
 	if err != nil {
 		return err
 	}

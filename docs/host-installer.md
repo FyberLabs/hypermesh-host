@@ -1986,6 +1986,8 @@ install stays active. A name enrolled by another owner is refused with 409.
 A replacement enrollment now automatically binds a fresh signing key before its
 first authenticated agent operation. The archived checkpoint marks this as a
 required signing transition: authority failure retries without silently reverting
-to bootstrap authentication. Binding/renewal keeps a 15-second maximum HTTP timeout
+to bootstrap authentication. Retirement checks every checkpoint before archiving
+any of them, and runs under the same lock as credential use, so a process still
+holding the retired enrollment cannot recreate its identity. Binding/renewal keeps a 15-second maximum HTTP timeout
 even when the installer injects a zero-timeout client, and preserves shorter client
 timeouts. The matching Panopticon/AIuditor support must deploy before this build.

@@ -384,3 +384,60 @@ func TestExchangeBoundsInjectedClientTimeout(t *testing.T) {
 		}
 	}
 }
+
+func TestRetirementChecksEveryCheckpointBeforeArchiving(t *testing.T) {
+	p, _, _, _ := identityFixture(t)
+	if _, err := get(t, p); err != nil {
+		t.Fatal(err)
+	}
+	peer, err := p.Peer("other-aiuditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(filepath.Dir(p.Path), "other")
+	if err = os.WriteFile(target, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(target, peer.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Retire(context.Background()); err == nil {
+		t.Fatal("accepted unsafe peer checkpoint")
+	}
+	if _, err = read(p.Path); err != nil {
+		t.Fatal("active identity archived before every checkpoint was checked", err)
+	}
+	if files, _ := filepath.Glob(p.Path + ".retired-*"); len(files) != 0 {
+		t.Fatal("partial retirement", files)
+	}
+}
+
+func TestRetiredEnrollmentIsNotRecreated(t *testing.T) {
+	p, _, calls, _ := identityFixture(t)
+	if _, err := get(t, p); err != nil {
+		t.Fatal(err)
+	}
+	old, err := read(p.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = p.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := origins.Load(p.Path)
+	before := *calls
+	// A process that still holds the retired enrollment races re-enrollment.
+	token, err := p.ExistingToken(context.Background(), base.(string), tenant, old.Device, "old-bootstrap")
+	if err == nil || token != "" {
+		t.Fatal("recreated retired enrollment", token, err)
+	}
+	if _, err = os.Stat(p.Path); !os.IsNotExist(err) {
+		t.Fatal("wrote a checkpoint for the retired enrollment", err)
+	}
+	if *calls != before {
+		t.Fatal("contacted the authority for a retired enrollment")
+	}
+	if _, err = p.tokenLocked(context.Background(), old.Base, tenant, old.Device, old.Request, "old-bootstrap", false); err == nil {
+		t.Fatal("recreated a checkpoint retired after it was chosen")
+	}
+}
