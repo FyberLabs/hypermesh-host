@@ -1061,8 +1061,9 @@ requests cannot be reset this way. If interrupted after the new journal was
 saved, rerun without that flag to resume it. Prior requests remain in private
 `registration-history-REQUEST_ID.json` files.
 
-Intentional retirement/reinstallation needs the separate fresh-key reinstall
-workflow still on the roadmap. Do not delete journals as a recovery shortcut.
+A fresh-key reinstall under the same host name and owner retires the previous
+install automatically when it completes (see "Re-enrollment and machine signing
+identities"). Do not delete journals as a recovery shortcut.
 Preserve private journals locally and never upload them as support logs.
 
 Success is `registered-inactive`: the dashboard device is paused and
@@ -1973,7 +1974,14 @@ enrollment token. Private history remains on disk; the replacement enrollment do
 not reuse those keys or cached tokens. An unsafe checkpoint blocks the exchange.
 The API client also checks the signing checkpoint against its current device ID,
 so stale state cannot authenticate requests for a different device. Normal restarts
-reuse the active enrollment; server-side retirement/revocation remains authoritative.
+reuse the active enrollment.
+
+On the plane, re-enrolling (enroll token or guided registration) under the same
+host name for the same owner retires the old install automatically: it is archived,
+its leases and tunnels end, and every configured AIuditor authority revokes its
+signing key, management and contract credentials and host connection. If an
+authority cannot be reached the enrollment fails with a retryable error and the old
+install stays active. A name enrolled by another owner is refused with 409.
 
 A replacement enrollment now automatically binds a fresh signing key before its
 first authenticated agent operation. The archived checkpoint marks this as a

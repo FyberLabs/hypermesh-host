@@ -272,11 +272,15 @@ use its operating-system hostname. Names support discovery; they are not
 credentials. The agent submits its locally generated WireGuard public key at
 enrollment. The private key stays in its protected state directory.
 
-Retire a box from the host dashboard before replacing its identity. Register it
-again, set the new `HYPERMESH_ENROLL_TOKEN` and `HYPERMESH_REENROLL=1`, then restart
-the agent. Each new token gets a fresh key and server-issued device ID. Restarts
-with that same token reuse the persisted identity and key. The old identity stays
-archived in the plane. Upgrade the plane to the enrollment-name/key API first.
+To replace a box's identity, register it again, set the new
+`HYPERMESH_ENROLL_TOKEN` and `HYPERMESH_REENROLL=1`, then restart the agent. Each
+new token gets a fresh key and server-issued device ID. Restarts with that same
+token reuse the persisted identity and key. Re-enrolling under the same host name
+for the same owner retires the old install automatically: the plane archives it,
+ends its leases and tunnels, and AIuditor revokes its signing key, credentials and
+host connection. A name enrolled by another owner is still refused; retire that
+box from its owner's dashboard first. Upgrade the plane to the enrollment-name/key
+API first.
 
 ## Hardware preflight and generic benchmarks
 
