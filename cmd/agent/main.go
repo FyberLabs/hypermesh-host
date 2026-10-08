@@ -1,6 +1,6 @@
 // Command agent is the Hypermesh host agent (AGX Orin first).
 //
-// It is not the control plane. It speaks the locked Panopticon agent
+// It is not the control plane. It speaks the fixed Panopticon agent
 // routes under /api/v1/hypermesh (enroll, heartbeat, jobs, tunnel get/ack).
 package main
 

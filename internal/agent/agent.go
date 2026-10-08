@@ -1177,8 +1177,9 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	}
 	if h == nil {
 		// Soft no-op: already stopped / no local handle. Do not fail.
-		// Prefer an existing hash; do not invent one. A pin for a lease
-		// that never started is still released.
+		// Prefer an existing hash. Otherwise compute a measured hash from
+		// /etc/nv_tegra_release or /etc/os-release; never make one up. A pin
+		// for a lease that never started is still released.
 		a.clearPendingForLease(job, nil)
 		a.log.Info("lease_stop", "lease_id", job.LeaseID, "reason", "no local handle")
 		snap, _ := a.telem.Collect(ctx)
@@ -1308,9 +1309,9 @@ func (a *Agent) leaseImageDigest() string {
 	return strings.TrimSpace(h.ImageDigest)
 }
 
-// requireImageHash enforces the Product lock: path_b / instance_check
+// requireImageHash enforces the rule that path_b / instance_check
 // passed=true must POST a non-empty image_hash. Use telem/host hash, else
-// the running lease ImageDigest. Do not invent a hash.
+// the running lease ImageDigest. No hash is generated.
 func (a *Agent) requireImageHash(kind api.JobKind, res pathb.Result) pathb.Result {
 	if !res.Passed {
 		return res

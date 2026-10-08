@@ -11,7 +11,7 @@ import (
 
 var (
 	// ErrNoMetalBin means this darwin image has no llama-server on PATH.
-	// Honest fail; do not invent CUDA or a completion.
+	// Fails without faking CUDA or a completion.
 	ErrNoMetalBin = errors.New("hypermesh: llama-cpp-cpu metal scaffold: llama-server not on PATH")
 )
 

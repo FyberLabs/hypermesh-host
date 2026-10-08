@@ -28,13 +28,13 @@ sudo docker build --runtime=nvidia -t ghcr.io/fyberlabs/hypermesh-test .
 sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test
 ```
 
-`lease_start` still needs `repo@digest` from the control plane. **Empty digest fails lease_start only** (`passed=false`, no running instance). Bare `sha256:hex` fails. Do not invent a registry digest.
+`lease_start` still needs `repo@digest` from the control plane. **Empty digest fails lease_start only** (`passed=false`, no running instance). Bare `sha256:hex` fails. The host never generates a registry digest.
 
 Catalog id stays `llama-3.1-8b-q4`. Suite stays `thin-v1`.
 
-## Field lock
+## Field ownership
 
-| Field | Who sets it | Invent? |
+| Field | Who sets it | Synthesized? |
 |---|---|---|
 | job `image_digest` | control plane (`repo@digest`) | no |
 | result `image_hash` | this box (telem/host, or started handle `ImageDigest`) | no — host-certification pass needs it non-empty |

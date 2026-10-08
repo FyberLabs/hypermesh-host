@@ -46,9 +46,9 @@ This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L
 
 **Do not keep or dual-pin a JP6 image for this box.** `ubuntu:22.04` / `l4t-jetpack` / JetPack 6.2.3 / L4T 36.5.2 is not the AGX default (`l4t-jetpack` is gone in 7.x). If a leftover JP6 image will not run here: **stop**.
 
-### FROM (Hardware Research default)
+### FROM (default)
 
-NVIDIA does not publish `l4t-jetpack` for JP7.x / L4T r39.2.1 (NGC catalog latest remains `r36.4.0`). Do **not** invent `l4t-jetpack:r39.2.1`. Do **not** use `r36.*` / `ubuntu:22.04` / JP6. Do **not** use `whitesscott/l4t-jetpack` unless Product explicitly asks.
+NVIDIA does not publish `l4t-jetpack` for JP7.x / L4T r39.2.1 (NGC catalog latest remains `r36.4.0`). There is no `l4t-jetpack:r39.2.1` image. Do **not** use `r36.*` / `ubuntu:22.04` / JP6. Do **not** use `whitesscott/l4t-jetpack`.
 
 This recipe compiles llama.cpp in-image, so the default is **devel**:
 
@@ -58,7 +58,7 @@ nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04
 
 Runtime alternative if a later recipe only copies a prebuilt binary: `nvcr.io/nvidia/cuda:13.2.1-runtime-ubuntu24.04`. Not this recipe.
 
-That matches JetPack 7.2 host CUDA **13.2.1**, SBSA / aarch64, Ubuntu 24.04. The tag was **registry-listed** (linux/amd64 + linux/arm64) when this recipe was drafted. It is **not** an on-box pull. Treat the FROM as **unverified-until-AGX-build**. Do not invent a digest. Do not quote a Hub listing as `ghcr.io/fyberlabs/hypermesh-test` `repo@digest`. Pin a digest in CI only after a good on-box build.
+That matches JetPack 7.2 host CUDA **13.2.1**, SBSA / aarch64, Ubuntu 24.04. The tag was **registry-listed** (linux/amd64 + linux/arm64) when this recipe was drafted. It is **not** an on-box pull. Treat the FROM as **unverified-until-AGX-build**. No digest is assumed. Do not quote a Hub listing as `ghcr.io/fyberlabs/hypermesh-test` `repo@digest`. Pin a digest in CI only after a good on-box build.
 
 **L4T major MUST match the host (r39).** Orin is **sm_87** (`CMAKE_CUDA_ARCHITECTURES=87`).
 
@@ -80,12 +80,12 @@ sudo docker build --platform linux/arm64 \
 sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0
 ```
 
-## Field lock
+## Field ownership
 
-| Field | Who sets it | Invent? |
+| Field | Who sets it | Synthesized? |
 |---|---|---|
 | job `image_digest` | control plane (`repo@digest`) | no — empty stays `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. |
-| result `image_hash` | this box: certification uses the telem/host hash; `lease_start` is sha256 of `HYPERMESH_GGUF_PATH` | no — do not echo the OCI pin. Do not invent a hash. |
+| result `image_hash` | this box: certification uses the telem/host hash; `lease_start` is sha256 of `HYPERMESH_GGUF_PATH` | no — the host computes it from data on the box; the OCI pin is not echoed. |
 | Certification suite telem hash | this box (`HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, else hash of `/etc/nv_tegra_release` or `/etc/os-release`) | no — this is **not** the catalog `file_hash`. |
 
 `lease_start` still needs `repo@digest` from the control plane. Empty digest stays `passed=false`. Catalog id stays `llama-3.1-8b-q4`.
@@ -102,7 +102,7 @@ sudo docker run --runtime=nvidia --platform linux/arm64 \
   --network hypermesh-workload \
   --read-only --tmpfs /tmp \
   --cap-drop ALL --security-opt no-new-privileges:true \
-  -v /home/chris/hypermesh/workload/model.gguf:/models/model.gguf:ro \
+  -v "$HOME"/hypermesh/workload/model.gguf:/models/model.gguf:ro \
   ghcr.io/fyberlabs/hypermesh-test
 ```
 

@@ -19,7 +19,7 @@ var (
 )
 
 // RequireGGUFFile fails closed unless path is a regular file.
-// Do not invent a model. Do not let docker create a directory mount.
+// No model is substituted, and docker never creates a directory mount.
 func RequireGGUFFile(path string) error {
 	p := strings.TrimSpace(path)
 	if p == "" {

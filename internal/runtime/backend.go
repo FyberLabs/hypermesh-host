@@ -3,7 +3,7 @@ package runtime
 import "strings"
 
 // lease_start backend enum (host-runtimes.md). runtime stays "nvidia"
-// for oci cuda-jetson. Do not overload that locked field. Loaders stay
+// for oci cuda-jetson. That fixed field is not overloaded. Loaders stay
 // oci|gguf. disk-io is not in this enum (unknown → fail).
 // llama-cpp-metal is not in this enum (unknown → FailReason).
 const (

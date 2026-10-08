@@ -18,7 +18,7 @@ import (
 // matrixDigest is a fake repo@digest. Not GHCR. Not invented at POST time.
 const matrixDigest = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// TestJobKindFailPassMatrix is the locked README fail/pass table for
+// TestJobKindFailPassMatrix is the README fail/pass table for
 // path_b (lab soak), instance_check, lease_start, lease_stop, and sell_pause.
 // Existing *_test.go coverage stays; this file is the single matrix.
 func TestJobKindFailPassMatrix(t *testing.T) {
@@ -338,7 +338,7 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			job:        api.Job{JobID: "m-stop-none", Kind: api.KindLeaseStop, DeviceID: testDevice, LeaseID: "lease-anything"},
 			wantPass:   true,
 			wantReason: "lease_stop",
-			wantHash:   "sha256:fixture", // host hash; do not invent
+			wantHash:   "sha256:fixture", // host hash; never generated
 			noDocker:   true,
 		},
 		{

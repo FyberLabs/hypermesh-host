@@ -1,12 +1,11 @@
 # hypermesh-test — GGUF + OpenAI-shaped /v1/chat/completions on :8080
 #
 # JP7 / L4T R39 host — Ubuntu 24.04 + CUDA 13 SBSA (aarch64)
-# Pin a digest in CI after a good on-box build. Do not invent repo@digest here.
+# Pin a digest in CI after a good on-box build. No repo@digest is set here.
 # Do not use JP6 / ubuntu:22.04 / r36.* / l4t-jetpack (gone in 7.x).
-# Do not invent l4t-jetpack:r39.2.1. No whitesscott/l4t-jetpack unless
-# Product explicitly asks.
+# There is no l4t-jetpack:r39.2.1 image. Do not use whitesscott/l4t-jetpack.
 #
-# Hardware Research / Product lock default (compile llama.cpp in-image):
+# Default base image (compile llama.cpp in-image):
 #   nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04
 # Runtime alternative (copy a prebuilt binary only; not this recipe):
 #   nvcr.io/nvidia/cuda:13.2.1-runtime-ubuntu24.04
@@ -22,7 +21,7 @@
 # stubs (see cmake below). Build does not need weights. Do not COPY
 # model.gguf (eMMC cannot bake 4.9G).
 # Runtime: docker run --runtime=nvidia \
-#   -v /home/chris/hypermesh/workload/model.gguf:/models/model.gguf:ro ...
+#   -v "$HOME"/hypermesh/workload/model.gguf:/models/model.gguf:ro ...
 # (not x86 --gpus). Host driver supplies the real libcuda.so.1.
 # Arch: sm_87, cmake -DCMAKE_CUDA_ARCHITECTURES=87
 #
