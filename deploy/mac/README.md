@@ -4,7 +4,7 @@ This is **not** a certified Path A/B box. Path A (AGX Orin) and Path B (Seeed Su
 
 Host-local experimental. Cert still means **Fyber-published hashes**. Do not market TOPS as tokens/sec. TOPS is not tok/s.
 
-## Backend names (locked)
+## Backend names (fixed)
 
 The CP enum is unchanged: `cuda-jetson` | `cuda-sm87` | `llama-cpp-cpu` | `llama-cpp-vulkan` | `hip-rocm`.
 

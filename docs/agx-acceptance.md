@@ -16,7 +16,7 @@ retain the exact signed installer, and use the actual model filesystem.
 Before changing prerequisites, confirm SSH access from a second session and a
 physical/serial recovery path. Record the OS/vendor stack and selected UMA
 allocation locally. Required memory, disk and GPU checks must pass as measured.
-Do not invent an AIuditor baseline or use placeholder model/catalog pins.
+Use a real AIuditor baseline and real model/catalog pins, not placeholders.
 
 Install the verified CLI at a root-owned absolute path, preserving its bytes:
 

@@ -4,7 +4,7 @@
 //
 // After enroll, device routes send Authorization: Bearer <device_secret>
 // and X-Tenant-ID, with device_id in the body or query as a cross-check.
-// This package does not invent endpoints beyond the locked agent shapes
+// This package does not invent endpoints beyond the fixed agent shapes
 // plus the optional platform enroll-token helper.
 package api
 
@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// Client talks to the locked agent routes.
+// Client talks to the fixed agent routes.
 type Client struct {
 	BaseURL      string
 	TenantID     string

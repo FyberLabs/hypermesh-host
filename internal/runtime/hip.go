@@ -16,7 +16,7 @@ const HIPMinVRAMGB = 16
 
 var (
 	// ErrNoROCm means this -tags rocm image has no AMD KFD node.
-	// Honest fail; do not invent a gfx target or set HSA_OVERRIDE.
+	// Fails without guessing a gfx target or setting HSA_OVERRIDE.
 	ErrNoROCm = errors.New("hypermesh: hip-rocm scaffold: no /dev/kfd (16GB+ AMD class first)")
 )
 
@@ -30,8 +30,8 @@ const (
 // -tags rocm. Structure only on the default AGX image (ResolveBackend
 // still stub-fails hip-rocm there).
 //
-// Do not set HSA_OVERRIDE / HSA_OVERRIDE_GFX_VERSION. Do not invent a
-// gfx target. repo@digest is the cert pin; this slice does not pull GHCR.
+// HSA_OVERRIDE / HSA_OVERRIDE_GFX_VERSION are never set and the gfx
+// target is never guessed. repo@digest is the cert pin; this slice does not pull GHCR.
 type HIP struct {
 	Docker string
 	Run    func(ctx context.Context, name string, args ...string) ([]byte, error)

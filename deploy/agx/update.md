@@ -2,7 +2,7 @@
 
 The agent checks for a new binary on a channel set in `/etc/hypermesh/agent.env` (mode 0600). An empty `HYPERMESH_UPDATE_CHANNEL` does not check. The check does not restart `hypermesh-wg` and does not reboot. The host has no GitHub token.
 
-`design/test-reliability.md` (hypermesh-docs pull request 54, locked 2026-09-26) says the test channel tracks `main` and the prod channel tracks tagged releases. Hosts do not download those bytes from GitHub. The release workflow puts them in a private Azure Blob container. The control plane mints a short-lived read URL. The agent asks the plane with the same device credential it already uses.
+`design/test-reliability.md` (hypermesh-docs pull request 54, adopted 2026-09-26) says the test channel tracks `main` and the prod channel tracks tagged releases. Hosts do not download those bytes from GitHub. The release workflow puts them in a private Azure Blob container. The control plane mints a short-lived read URL. The agent asks the plane with the same device credential it already uses.
 
 ## Channels
 
@@ -151,7 +151,7 @@ Checks run at most once an hour (`HYPERMESH_UPDATE_EVERY`), including while a re
 
 ## Before the first release
 
-Chris generates the signing key offline and stores it in Key Vault `kv-fyber-hmhost` (`rg-fyber`) as `hypermesh-host-release-gpg-private-key` and `hypermesh-host-release-gpg-passphrase`. This repo does not create the vault, the storage account, the container, the app registration, or the role. This private repository is on GitHub Free, so there is no Environment `release` and no environment secrets to create.
+The release maintainer generates the signing key offline and stores it in Key Vault `kv-fyber-hmhost` (`rg-fyber`) as `hypermesh-host-release-gpg-private-key` and `hypermesh-host-release-gpg-passphrase`. This repo does not create the vault, the storage account, the container, the app registration, or the role. This private repository is on GitHub Free, so there is no Environment `release` and no environment secrets to create.
 
 The publish script exits before uploading when the Key Vault name or secret names are empty, when the key secret is empty, or when the storage account and container variables are empty.
 

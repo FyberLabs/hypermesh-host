@@ -44,7 +44,7 @@ const DefaultGGUFPath = "/home/chris/hypermesh/workload/model.gguf"
 const ContainerGGUFPath = "/models/model.gguf"
 
 // Spec is a leased workload from a lease_start job.
-// ImageDigest must be repo@digest (the locked job field). No extra CP fields.
+// ImageDigest must be repo@digest (the fixed job field). No extra CP fields.
 type Spec struct {
 	// SingleSlot reserves the approved context for one preflight sequence.
 	SingleSlot bool
@@ -96,7 +96,7 @@ func NewNVIDIA() *NVIDIA {
 	return &NVIDIA{Docker: "docker"}
 }
 
-// ImageRef accepts the locked image_digest field. It must be repo@digest.
+// ImageRef accepts the fixed image_digest field. It must be repo@digest.
 // Bare sha256:hex fails; we will not invent a registry or repository.
 func ImageRef(imageDigest string) (string, error) {
 	s := strings.TrimSpace(imageDigest)
@@ -187,7 +187,7 @@ func StartArgs(spec Spec, ref string) []string {
 
 // Start pulls repo@digest then runs it with the NVIDIA runtime.
 // A failed pull is not fatal when that exact pin is already local
-// (private GHCR unauthorized, image present). Do not invent a digest.
+// (private GHCR unauthorized, image present). No digest is generated.
 // A failed run removes a leftover Status=Created container so a
 // same-lease retry is not blocked on --name.
 func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
