@@ -21,7 +21,7 @@ import (
 // synthDigest is a fake repo@digest used only in httptest. Not GHCR.
 const synthDigest = "example.invalid/hypermesh/workload@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-// TestSyntheticAgentLoop is the hermetic enroll → heartbeat → path_b →
+// TestSyntheticAgentLoop is the hermetic enroll → heartbeat → lab soak →
 // lease_start → lease_stop loop against an httptest control plane.
 // Fake NVIDIA{Run} records docker-like argv. No real docker, no AGX,
 // no nvidia-smi, no GHCR pull.
@@ -150,7 +150,7 @@ func TestSyntheticAgentLoop(t *testing.T) {
 		mu.Unlock()
 		return []byte("cid-synth\n"), nil
 	}}
-	// Stub egress observation so path_b does not share the lease docker Run hook.
+	// Stub egress observation so the lab soak does not share the lease docker Run hook.
 	a.dockerRun = func(_ context.Context, _ ...string) ([]byte, error) {
 		return []byte(`[{"Internal":true,"Options":{"com.docker.network.bridge.enable_icc":"false","com.docker.network.bridge.enable_ip_masquerade":"false"},"Containers":{}}]`), nil
 	}

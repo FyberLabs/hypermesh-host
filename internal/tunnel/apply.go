@@ -20,7 +20,7 @@ import (
 const (
 	appliedFile  = "hypermesh.applied"
 	defaultIface = "hypermesh"
-	// persistentKeepaliveSec keeps NAT mappings warm on Path B cottage hosts.
+	// persistentKeepaliveSec keeps NAT mappings warm on hosts that join from behind NAT.
 	persistentKeepaliveSec = 25
 )
 

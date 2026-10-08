@@ -15,7 +15,7 @@ const (
 )
 
 // NVIDIALogLabel is the log-only name on this AGX image (omitted = cuda-jetson).
-// Heartbeat and Path B telem may print this. No tok/s. TOPS is not tok/s.
+// Heartbeat and certification telem may print this. No tok/s. TOPS is not tok/s.
 const NVIDIALogLabel = BackendCUDAJetson
 
 // MetalLogLabel is the CP enum name used when the darwin Metal runner
