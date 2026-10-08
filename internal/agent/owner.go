@@ -34,6 +34,7 @@ const (
 	ownerEffectsFile = "owner-effects.jsonl"
 	ownerTokenBytes  = 32
 	toolSellPause    = "hypermesh.sell_pause"
+	toolSellResume   = "hypermesh.sell_resume"
 	toolLeaseStop    = "hypermesh.lease_stop"
 )
 
@@ -62,6 +63,18 @@ type ownerSellPauseResponse struct {
 	DeviceID  string        `json:"device_id,omitempty"`
 }
 
+type ownerSellResumeRequest struct {
+	DeviceID string `json:"device_id"`
+}
+
+type ownerSellResumeResponse struct {
+	Passed    bool          `json:"passed"`
+	SellState api.SellState `json:"sell_state"`
+	Until     string        `json:"until,omitempty"`
+	DeviceID  string        `json:"device_id,omitempty"`
+	Reason    string        `json:"reason,omitempty"`
+}
+
 type ownerLeaseStopRequest struct {
 	LeaseID string `json:"lease_id"`
 }
@@ -78,6 +91,8 @@ type ownerStatusResponse struct {
 	DeviceID  string            `json:"device_id"`
 	SellState api.SellState     `json:"sell_state"`
 	Until     string            `json:"until,omitempty"`
+	// PauseSource is "owner" or "activation" while paused; empty otherwise.
+	PauseSource string            `json:"pause_source,omitempty"`
 	Lease     *ownerLeaseStatus `json:"lease"`
 	PathB     ownerPathBStatus  `json:"path_b"`
 	Backend   string            `json:"backend"`
@@ -180,6 +195,8 @@ func (a *Agent) ownerHandler() http.Handler {
 	mux.HandleFunc("/v0/console", a.handleOwnerConsole)
 	mux.HandleFunc("/", a.handleOwnerConsole)
 	mux.HandleFunc("/v0/sell_pause", a.handleOwnerSellPause)
+	mux.HandleFunc("/v0/sell_resume", a.handleOwnerSellResume)
+	mux.HandleFunc("/v0/activation_release", a.handleActivationRelease)
 	mux.HandleFunc("/v0/lease_stop", a.handleOwnerLeaseStop)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.ownerAuthorized(r) {
@@ -242,6 +259,9 @@ func (a *Agent) ownerStatus(ctx context.Context) ownerStatusResponse {
 		Until:     sell.Until,
 		Backend:   runtime.NVIDIALogLabel,
 		PathB:     a.ownerPathB(ctx),
+	}
+	if sell.SellState == api.SellPaused && !out.Maintenance {
+		out.PauseSource = sell.Source
 	}
 	if h := a.localLease(); h != nil && strings.TrimSpace(h.LeaseID) != "" {
 		out.Lease = &ownerLeaseStatus{
@@ -343,6 +363,70 @@ func (a *Agent) handleOwnerSellPause(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *Agent) handleOwnerSellResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req ownerSellResumeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	deviceID := strings.TrimSpace(req.DeviceID)
+	if deviceID == "" {
+		deviceID = strings.TrimSpace(a.state.DeviceID)
+	}
+	out := a.sellResume(deviceID)
+	args := map[string]any{}
+	if id := strings.TrimSpace(req.DeviceID); id != "" {
+		args["device_id"] = id
+	}
+	_ = a.appendOwnerEffect(ownerEffect{
+		TS:        a.clock().UTC().Format(time.RFC3339),
+		Tool:      toolSellResume,
+		Args:      args,
+		Passed:    out.Passed,
+		SellState: out.SellState,
+		DeviceID:  out.DeviceID,
+	})
+	resp := ownerSellResumeResponse{
+		Passed:    out.Passed,
+		SellState: out.SellState,
+		Until:     out.Until,
+		DeviceID:  out.DeviceID,
+	}
+	if !out.Passed {
+		resp.Reason = out.Reason
+	}
+	encodeJSON(w, http.StatusOK, resp)
+}
+
+// handleActivationRelease is called by the installer after it has verified
+// the activated service. It only clears the activation guard.
+func (a *Agent) handleActivationRelease(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 4096))
+	p, err := a.releaseActivationPause()
+	if err != nil {
+		http.Error(w, "activation release not saved", http.StatusInternalServerError)
+		return
+	}
+	resp := ownerStatusResponse{
+		Maintenance: a.maintenanceHeld(),
+		DeviceID:    strings.TrimSpace(a.state.DeviceID),
+		SellState:   p.SellState,
+		Until:       p.Until,
+	}
+	if p.SellState == api.SellPaused && !resp.Maintenance {
+		resp.PauseSource = p.Source
+	}
+	encodeJSON(w, http.StatusOK, resp)
+}
+
 func (a *Agent) handleOwnerLeaseStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -414,7 +498,7 @@ func runOwnerCLI(stateDir string, args []string, out io.Writer) error {
 		return fmt.Errorf("hypermesh: state dir is required")
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("hypermesh: usage: hypermesh-agent owner status | console | sell-pause [--until=RFC3339] | lease-stop --lease-id=ID")
+		return fmt.Errorf("hypermesh: usage: hypermesh-agent owner status | console | sell-pause [--until=RFC3339] | sell-resume | lease-stop --lease-id=ID")
 	}
 	switch args[0] {
 	case "status":
@@ -429,6 +513,11 @@ func runOwnerCLI(stateDir string, args []string, out io.Writer) error {
 		}
 		body := ownerSellPauseRequest{Until: strings.TrimSpace(*until)}
 		return ownerCLIDo(stateDir, http.MethodPost, "/v0/sell_pause", body, out)
+	case "sell-resume":
+		if len(args) > 1 {
+			return fmt.Errorf("hypermesh: sell-resume takes no arguments")
+		}
+		return ownerCLIDo(stateDir, http.MethodPost, "/v0/sell_resume", ownerSellResumeRequest{}, out)
 	case "lease-stop":
 		fs := flag.NewFlagSet("lease-stop", flag.ContinueOnError)
 		leaseID := fs.String("lease-id", "", "lease id to stop")

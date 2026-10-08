@@ -131,7 +131,7 @@ func (c *Client) requestRaw(ctx context.Context,method,path,token string,body,de
   case 429:action="rate limited; wait before retrying the same command"
   case 503:action="plane temporarily unavailable; retry the same command"
   }
-  if resp.StatusCode==409&&(path=="/api/v1/hypermesh/agent/onboarding/certification/plan"||path=="/api/v1/hypermesh/agent/onboarding/qualification/next") {
+  if resp.StatusCode==409&&(path=="/api/v1/hypermesh/agent/onboarding/certification/plan"||path=="/api/v1/hypermesh/agent/onboarding/certification/activation"||path=="/api/v1/hypermesh/agent/onboarding/certification/resume"||path=="/api/v1/hypermesh/agent/onboarding/qualification/next") {
    action=certificationPlanConflict(resp.Body)
   }
   if resp.StatusCode==401&&strings.HasPrefix(path,"/api/v1/hypermesh/agent/onboarding/") {
@@ -209,12 +209,24 @@ func (c *Client) Complete(ctx context.Context,r Request)(Status,error){return c.
 // Never print arbitrary response bodies: only exact known protocol messages
 // select local guidance. The request timeout also bounds this error-body read.
 func certificationPlanConflict(body io.Reader) string {
- fallback := "certification planning prerequisites are not satisfied; the platform operator must inspect the host state and certification program; no new registration is needed"
+ fallback := "certification prerequisites are not satisfied; the platform operator must inspect the host state and certification program; no new registration is needed"
  raw,err:=io.ReadAll(io.LimitReader(body,4097))
  if err!=nil||len(raw)>4096{return fallback}
  var response struct{Detail string `json:"detail"`}
  if json.Unmarshal(raw,&response)!=nil{return fallback}
  switch response.Detail {
+ case "Passed certification and original owner approval required":
+  return "the plane still requires the former second owner approval; verify that the durable-enrollment activation update is deployed to hypermesh-service, then retry this installer with the same identity"
+ case "Passed certification and completed owner-approved registration required":
+  return "the plane could not confirm passed certification and completed owner-approved enrollment for this device; inspect the saved registration and certification result in the dashboard; do not re-enroll"
+ case "Program or model pins changed; certify a fresh reviewed run":
+  return "the current certification program or model pins differ from the passed run; obtain and review a fresh certification plan while retaining this host identity"
+ case "Certification evidence is incomplete":
+  return "the plane rejected incomplete certification evidence; review the recorded run and repeat certification without re-enrolling"
+ case "Fresh original-owner resume approval required":
+  return "maintenance resume requires fresh approval from the original owner; this is separate from initial enrollment activation"
+ case "Completed certification evidence required":
+  return "maintenance resume has no completed certification evidence; inspect the saved certification run before retrying"
  case "Configure a reviewed model hash and context before qualification", "Configure the suite model and immutable artifact pins first":
   return "the platform qualification model is missing its reviewed artifact hash or context; the program operator must configure the suite model download source, size, SHA-256, runtime image and context, then retry this installer; no new registration is needed"
  case "A complete supported AIuditor class envelope is required":

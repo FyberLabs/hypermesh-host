@@ -129,7 +129,8 @@ type HostHealth struct {
 	HostType string `json:"host_type,omitempty"`
 }
 
-// PathBState is the control-plane view of Path B.
+// PathBState is the control-plane certification state (JSON path_b_state,
+// to be renamed cert_state).
 type PathBState string
 
 const (
@@ -138,7 +139,7 @@ const (
 	PathBSuspended PathBState = "suspended"
 )
 
-// SellState is Host-reported sell posture. Not Path B.
+// SellState is Host-reported sell posture. Not the certification state.
 // Do not copy path_b_state into sell_state.
 type SellState string
 
@@ -223,7 +224,7 @@ type ScorecardReport struct {
 }
 
 // JobResultRequest is POST /agent/jobs/{job_id}/result.
-// Sell fields are omitempty so lease_start / lease_stop / path_b
+// Sell fields are omitempty so lease_start / lease_stop / lab soak (path_b)
 // do not leak them. sell_pause must set SellState. passed=true
 // with sell_state=n/a is invalid on the control plane.
 // EgressOk / EgressReason are host observations for lab quarantine

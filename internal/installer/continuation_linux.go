@@ -36,7 +36,7 @@ func continuationPrompt(label string) bool {
 		"Reboot this machine now?",
 		"Request the reboot again now?",
 		"Download this model and run its hardware certification test?",
-		"Activate the host service in paused mode?",
+		"Activate the host service and start selling?",
 		"The previous model test expired or failed. Keep its history and obtain a fresh plan to rebenchmark?",
 		"Download the pinned model and run these tests? Evidence goes to operator review; services remain inactive and selling stays disabled.",
 	} {

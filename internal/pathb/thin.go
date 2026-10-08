@@ -1,4 +1,4 @@
-// Package pathb runs thin-v1 (lab Path B) and pack-v1 (enrolled compact-cert).
+// Package pathb runs thin-v1 (lab soak) and pack-v1 (enrolled compact-cert).
 //
 // Both collect image hash / uptime / thermal when available. If a local
 // OpenAI-shaped completions endpoint is up, they POST a pinned probe and
@@ -23,7 +23,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/telem"
 )
 
-// SuiteThinV1 is the lab Path B suite_id. Empty suite_id is treated as thin-v1.
+// SuiteThinV1 is the lab soak suite_id. Empty suite_id is treated as thin-v1.
 const SuiteThinV1 = "thin-v1"
 
 // SuitePackV1 is the enrolled compact-cert suite_id (plane core suite).
@@ -74,7 +74,7 @@ type Collector interface {
 	Collect(ctx context.Context) (telem.Snapshot, error)
 }
 
-// Runner executes thin-v1 for path_b or instance_check jobs.
+// Runner executes thin-v1 for lab soak (path_b) or instance_check jobs.
 type Runner struct {
 	// Model is the exact catalog alias served by a certification container.
 	Model     string
@@ -96,8 +96,8 @@ type Runner struct {
 // Run collects host facts, then optionally probes the local completions
 // endpoint.
 //
-// path_b: telemetry is required. If this box rebooted since the last
-// successful path_b, POST passed=false (host log reason: reboot). A down
+// path_b (lab soak): telemetry is required. If this box rebooted since the
+// last successful lab soak, POST passed=false (host log reason: reboot). A down
 // endpoint still passes so enroll and green are not deadlocked before
 // lease_start; inference is recorded as skipped. First run (no prior
 // boot_id) records the id and does not fail just for being first.
@@ -110,7 +110,7 @@ type Runner struct {
 // enrolled compact-cert (plane CORE_SUITE_ID) can run the same probe.
 //
 // compact_cert requires a timed sample (decode_tok_s). A down endpoint or a
-// completion without usage.completion_tokens fails closed — unlike path_b,
+// completion without usage.completion_tokens fails closed — unlike the lab soak,
 // which may still green on telem alone before lease_start.
 func (r Runner) Run(ctx context.Context, job api.Job) Result {
 	if !knownSuite(job.SuiteID) {

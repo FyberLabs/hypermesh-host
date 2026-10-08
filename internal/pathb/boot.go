@@ -26,7 +26,7 @@ type Record struct {
 	BootTimeUnix int64  `json:"boot_time_unix,omitempty"`
 }
 
-// Store persists last-seen boot identity for path_b.
+// Store persists last-seen boot identity for the lab soak (path_b).
 type Store interface {
 	Load() (Record, error)
 	Save(Record) error

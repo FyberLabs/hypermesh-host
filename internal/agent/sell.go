@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,12 +12,44 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 )
 
-const sellFile = "sell.json"
+const (
+	sellFile = "sell.json"
+	// sellOwnerFile keeps the posture to restore after a maintenance hold:
+	// the owner's pause, or selling when there was none.
+	sellOwnerFile = "sell-owner.json"
+)
+
+// Pause sources recorded in sell.json.
+const (
+	// SellSourceOwner marks a pause that was explicitly requested through the
+	// owner socket, the owner CLI or a control-plane sell_pause job.
+	SellSourceOwner = "owner"
+	// SellSourceActivation marks the installer's startup guard. It keeps the
+	// host paused while activation is verified and is released by the
+	// installer once the service is confirmed running.
+	SellSourceActivation = "activation"
+)
 
 // SellPosture is the host-local sell actuator state. Not Path B.
+//
+// A paused posture with no source and no until predates sources. Earlier
+// installers wrote it at activation as the exact compact bytes in
+// activationLegacyPause, which the agent itself never produces; that pause is
+// cleared. Any other sourceless indefinite pause was written by the agent for
+// an owner, a control-plane job or a maintenance hold and is kept as an owner
+// pause, since its origin cannot be told apart.
 type SellPosture struct {
 	SellState api.SellState `json:"sell_state"`
 	Until     string        `json:"until,omitempty"`
+	Source    string        `json:"source,omitempty"`
+}
+
+// activationLegacyPause is the file earlier installers wrote at activation.
+// The agent writes indented JSON, so these bytes only come from an installer.
+const activationLegacyPause = `{"sell_state":"paused"}`
+
+func (p SellPosture) installerShaped() bool {
+	return p.SellState == api.SellPaused && strings.TrimSpace(p.Until) == "" && p.Source == ""
 }
 
 // jobOutcome is the host-local job result. Sell fields are only POSTed for sell_pause.
@@ -39,6 +72,80 @@ func (a *Agent) clock() time.Time {
 
 func (a *Agent) sellPath() string {
 	return filepath.Join(a.cfg.StateDir, sellFile)
+}
+
+func (a *Agent) sellOwnerPath() string {
+	return filepath.Join(a.cfg.StateDir, sellOwnerFile)
+}
+
+func (a *Agent) sellLog() *slog.Logger {
+	if a.log != nil {
+		return a.log
+	}
+	return slog.Default()
+}
+
+// loadKeptSell reads the posture kept beside a maintenance hold: an owner
+// pause, or selling when no owner pause was in effect.
+func (a *Agent) loadKeptSell() (SellPosture, bool) {
+	b, err := os.ReadFile(a.sellOwnerPath())
+	if err != nil {
+		return SellPosture{}, false
+	}
+	var p SellPosture
+	if json.Unmarshal(b, &p) != nil {
+		return SellPosture{}, false
+	}
+	switch p.SellState {
+	case api.SellSelling:
+		return SellPosture{SellState: api.SellSelling}, true
+	case api.SellPaused:
+		p.Source = SellSourceOwner
+		return p, true
+	}
+	return SellPosture{}, false
+}
+
+// ownerPauseIntent returns the owner pause represented by the stored posture,
+// if any. raw is the stored file.
+func ownerPauseIntent(p SellPosture, raw []byte) (SellPosture, bool) {
+	if p.SellState != api.SellPaused {
+		return SellPosture{}, false
+	}
+	switch {
+	case p.Source == SellSourceOwner:
+		return p, true
+	case p.Source != "":
+		return SellPosture{}, false
+	case strings.TrimSpace(p.Until) != "":
+		// Only an explicit pause request ever stored an end time.
+		return SellPosture{SellState: api.SellPaused, Until: p.Until, Source: SellSourceOwner}, true
+	case strings.TrimSpace(string(raw)) == activationLegacyPause:
+		return SellPosture{}, false
+	}
+	return SellPosture{SellState: api.SellPaused, Source: SellSourceOwner}, true
+}
+
+// settleSourcelessPause runs outside a maintenance hold on a paused posture
+// with no source and no until. A posture kept beside a released hold is
+// restored; the pause earlier installers wrote at activation returns to
+// selling; anything else is kept and labeled as an owner pause.
+// Caller must hold sellMu.
+func (a *Agent) settleSourcelessPause(raw []byte) SellPosture {
+	next, ok := a.loadKeptSell()
+	if !ok {
+		next, ok = ownerPauseIntent(SellPosture{SellState: api.SellPaused}, raw)
+	}
+	if !ok {
+		next = SellPosture{SellState: api.SellSelling}
+	}
+	if err := a.saveSell(next); err != nil {
+		a.sellLog().Warn("sell pause not settled", "err", err)
+		return SellPosture{SellState: api.SellPaused}
+	}
+	a.sellLog().Info("sell pause settled", "sell_state", next.SellState, "until", next.Until, "source", next.Source)
+	_ = os.Remove(a.sellOwnerPath())
+	return next
 }
 
 func (a *Agent) loadSell() SellPosture {
@@ -72,19 +179,26 @@ func (a *Agent) effectiveSell() SellPosture {
 
 func (a *Agent) effectiveSellLocked() SellPosture {
  if a.maintenanceHeld(){return SellPosture{SellState:api.SellPaused}}
+	raw, _ := os.ReadFile(a.sellPath())
 	p := a.loadSell()
+	if p.installerShaped() {
+		p = a.settleSourcelessPause(raw)
+	} else if _, err := os.Lstat(a.sellOwnerPath()); err == nil {
+		// A kept owner pause only applies while sell.json is the hold's pause.
+		_ = os.Remove(a.sellOwnerPath())
+	}
 	if p.SellState == "" || p.SellState == api.SellNA {
 		p = SellPosture{SellState: api.SellSelling}
 		if err := a.saveSell(p); err != nil {
-			a.log.Warn("sell posture not saved", "err", err)
+			a.sellLog().Warn("sell posture not saved", "err", err)
 		}
 		return p
 	}
 	if p.SellState == api.SellPaused && untilReached(p.Until, a.clock()) {
-		a.log.Info("sell pause expired", "until", p.Until)
+		a.sellLog().Info("sell pause expired", "until", p.Until)
 		p = SellPosture{SellState: api.SellSelling}
 		if err := a.saveSell(p); err != nil {
-			a.log.Warn("sell expiry not saved", "err", err)
+			a.sellLog().Warn("sell expiry not saved", "err", err)
 		}
 	}
 	return p
@@ -128,7 +242,7 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 	echoDev := jobDev
 
 	if jobDev == "" || jobDev != localID {
-		a.log.Info("sell_pause refused",
+		a.sellLog().Info("sell_pause refused",
 			"reason", "device_id mismatch",
 			"job_device_id", job.DeviceID,
 			"device_id", localID,
@@ -147,7 +261,7 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 	if untilRaw != "" {
 		t, ok := parseUntil(untilRaw)
 		if !ok {
-			a.log.Info("sell_pause refused", "reason", "invalid until", "until", job.Until, "sell_state", current.SellState)
+			a.sellLog().Info("sell_pause refused", "reason", "invalid until", "until", job.Until, "sell_state", current.SellState)
 			return jobOutcome{
 				Result:    pathb.Result{Passed: false, Reason: "invalid until"},
 				SellState: current.SellState,
@@ -158,12 +272,30 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 		storeUntil = formatUntil(t)
 	}
 
-	if a.maintenanceHeld(){storeUntil=""}
- next := SellPosture{SellState: api.SellPaused, Until: storeUntil}
-	if current.SellState == api.SellPaused && current.Until == storeUntil {
-		a.log.Info("sell_pause", "reason", "already paused", "until", storeUntil)
+	if storeUntil != "" && untilReached(storeUntil, a.clock()) {
+		// A pause that has already ended is a resume. The plane sends this to
+		// resume selling, and earlier agents reach the same result when the
+		// stored pause expires.
+		return a.resumeLocked(localID, current)
+	}
+	next := SellPosture{SellState: api.SellPaused, Until: storeUntil, Source: SellSourceOwner}
+	if a.maintenanceHeld() {
+		// sell.json keeps the hold's pause; the owner pause is restored on release.
+		if err := writeJSON0600(a.sellOwnerPath(), next); err != nil {
+			a.sellLog().Warn("sell pause not saved", "err", err)
+			return jobOutcome{
+				Result:    pathb.Result{Passed: false, Reason: "sell persist failed"},
+				SellState: current.SellState,
+				Until:     current.Until,
+				DeviceID:  localID,
+			}
+		}
+		storeUntil = ""
+		a.sellLog().Info("sell_pause", "reason", "kept for after maintenance", "until", next.Until)
+	} else if stored := a.loadSell(); current.SellState == api.SellPaused && current.Until == storeUntil && stored.Source == SellSourceOwner {
+		a.sellLog().Info("sell_pause", "reason", "already paused", "until", storeUntil)
 	} else if err := a.saveSell(next); err != nil {
-		a.log.Warn("sell pause not saved", "err", err)
+		a.sellLog().Warn("sell pause not saved", "err", err)
 		return jobOutcome{
 			Result:    pathb.Result{Passed: false, Reason: "sell persist failed"},
 			SellState: current.SellState,
@@ -171,7 +303,7 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 			DeviceID:  localID,
 		}
 	} else {
-		a.log.Info("sell_pause", "sell_state", api.SellPaused, "until", storeUntil)
+		a.sellLog().Info("sell_pause", "sell_state", api.SellPaused, "until", storeUntil)
 	}
 
 	return jobOutcome{
@@ -180,6 +312,78 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 		Until:     storeUntil,
 		DeviceID:  localID,
 	}
+}
+
+// sellResume clears any pause so the host sells again. It is the inverse of
+// sellPause and takes the same device check. A maintenance hold is not lifted
+// here; only the installer resume operation releases it.
+func (a *Agent) sellResume(deviceID string) jobOutcome {
+	a.sellMu.Lock()
+	defer a.sellMu.Unlock()
+	current := a.effectiveSellLocked()
+	localID := strings.TrimSpace(a.state.DeviceID)
+	dev := strings.TrimSpace(deviceID)
+	if dev == "" || dev != localID {
+		a.sellLog().Info("sell_resume refused", "reason", "device_id mismatch", "job_device_id", deviceID, "device_id", localID)
+		return jobOutcome{
+			Result:    pathb.Result{Passed: false, Reason: "device_id mismatch"},
+			SellState: current.SellState,
+			Until:     current.Until,
+			DeviceID:  dev,
+		}
+	}
+	return a.resumeLocked(localID, current)
+}
+
+// resumeLocked persists selling. Caller must hold sellMu and has checked the device.
+func (a *Agent) resumeLocked(localID string, current SellPosture) jobOutcome {
+	if a.maintenanceHeld() {
+		a.sellLog().Info("sell_resume refused", "reason", "host maintenance hold")
+		return jobOutcome{
+			Result:    pathb.Result{Passed: false, Reason: "host maintenance hold"},
+			SellState: api.SellPaused,
+			DeviceID:  localID,
+		}
+	}
+	if current.SellState == api.SellSelling {
+		a.sellLog().Info("sell_resume", "reason", "already selling")
+		return jobOutcome{
+			Result:    pathb.Result{Passed: true, Reason: "sell_resume"},
+			SellState: api.SellSelling,
+			DeviceID:  localID,
+		}
+	}
+	if err := a.saveSell(SellPosture{SellState: api.SellSelling}); err != nil {
+		a.sellLog().Warn("sell resume not saved", "err", err)
+		return jobOutcome{
+			Result:    pathb.Result{Passed: false, Reason: "sell persist failed"},
+			SellState: current.SellState,
+			Until:     current.Until,
+			DeviceID:  localID,
+		}
+	}
+	a.sellLog().Info("sell_resume", "sell_state", api.SellSelling)
+	return jobOutcome{
+		Result:    pathb.Result{Passed: true, Reason: "sell_resume"},
+		SellState: api.SellSelling,
+		DeviceID:  localID,
+	}
+}
+
+// releaseActivationPause clears the installer's activation guard. Any other
+// posture, including an owner pause, is left unchanged.
+func (a *Agent) releaseActivationPause() (SellPosture, error) {
+	a.sellMu.Lock()
+	defer a.sellMu.Unlock()
+	if !a.maintenanceHeld() {
+		if p := a.loadSell(); p.SellState == api.SellPaused && p.Source == SellSourceActivation {
+			if err := a.saveSell(SellPosture{SellState: api.SellSelling}); err != nil {
+				return a.effectiveSellLocked(), err
+			}
+			a.sellLog().Info("activation sell pause released")
+		}
+	}
+	return a.effectiveSellLocked(), nil
 }
 
 func jobResultBody(kind api.JobKind, res jobOutcome) api.JobResultRequest {

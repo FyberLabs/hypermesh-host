@@ -19,7 +19,7 @@ import (
 const matrixDigest = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 // TestJobKindFailPassMatrix is the locked README fail/pass table for
-// path_b, instance_check, lease_start, lease_stop, and sell_pause.
+// path_b (lab soak), instance_check, lease_start, lease_stop, and sell_pause.
 // Existing *_test.go coverage stays; this file is the single matrix.
 func TestJobKindFailPassMatrix(t *testing.T) {
 	const completion = "UNIQUE_MATRIX_COMPLETION"

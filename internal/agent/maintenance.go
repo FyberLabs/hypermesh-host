@@ -28,10 +28,12 @@ func (a *Agent) enterMaintenance(ctx context.Context,plan string)error{
   var old struct{PlanSHA256 string `json:"plan_sha256"`}
   if json.Unmarshal(raw,&old)!=nil||old.PlanSHA256!=plan{return fmt.Errorf("another maintenance plan is already recorded")}
  }else if !os.IsNotExist(err){return fmt.Errorf("maintenance state unavailable")}
+ // sellMu stays held until the marker exists, so a posture read in between
+ // cannot settle the hold's pause back to the kept posture. If the marker
+ // write fails, the next read restores the kept posture.
  a.sellMu.Lock()
- err:=a.saveSell(SellPosture{SellState:api.SellPaused})
- a.sellMu.Unlock()
- if err!=nil{return fmt.Errorf("cannot persist indefinite sell pause")}
+ defer a.sellMu.Unlock()
+ if err:=a.holdSellForMaintenance();err!=nil{return fmt.Errorf("cannot persist indefinite sell pause")}
  // Atomic private writer syncs before publishing. Hold persists across reboot.
  return writeJSON0600(path,map[string]any{"schema":1,"plan_sha256":plan,"requested_at":time.Now().UTC()})
 }
@@ -42,4 +44,18 @@ func (a *Agent) handleOwnerMaintenance(w http.ResponseWriter,r *http.Request){
  if dec.Decode(&req)!=nil{http.Error(w,"invalid maintenance request",http.StatusBadRequest);return}
  if a.enterMaintenance(r.Context(),req.PlanSHA256)!=nil{http.Error(w,"maintenance request not confirmed; inspect local state",http.StatusConflict);return}
  encodeJSON(w,http.StatusOK,map[string]any{"maintenance":true,"selling_allowed":false})
+}
+
+// holdSellForMaintenance writes the hold's indefinite pause to sell.json in
+// the shape earlier installers expect. The posture to restore afterwards is
+// kept beside it first: the owner's pause, or selling when there is none.
+// Caller must hold sellMu.
+func (a *Agent) holdSellForMaintenance()error{
+ if !a.maintenanceHeld(){
+  raw,_:=os.ReadFile(a.sellPath())
+  kept:=SellPosture{SellState:api.SellSelling}
+  if owner,ok:=ownerPauseIntent(a.loadSell(),raw);ok&&!untilReached(owner.Until,a.clock()){kept=owner}
+  if err:=writeJSON0600(a.sellOwnerPath(),kept);err!=nil{return err}
+ }
+ return a.saveSell(SellPosture{SellState:api.SellPaused})
 }
