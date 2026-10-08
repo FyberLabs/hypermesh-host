@@ -3,7 +3,6 @@
 package installer
 
 import (
- "bytes"
  "context"
  "errors"
  "encoding/json"
@@ -440,17 +439,7 @@ func releaseActivationSellAt(ctx context.Context,stateDir string,limit time.Dura
 // exact guard this installer wrote is replaced; any other posture is the
 // agent's and is left alone.
 func releaseActivationSellFile(path string)error{
- raw,err:=readSetupRegular(path,true)
- if err!=nil{return fmt.Errorf("cannot inspect sell posture")}
- if !bytes.Equal(bytes.TrimSpace(raw),activationSellGuard){return nil}
- f,err:=os.CreateTemp(filepath.Dir(path),".sell-")
- if err!=nil{return fmt.Errorf("cannot release activation sell pause")}
- defer os.Remove(f.Name())
- _,err=f.Write([]byte("{\"sell_state\":\"selling\"}\n"))
- if err==nil{err=f.Chmod(0o600)}
- if err==nil{err=f.Sync()}
- if e:=f.Close();err==nil{err=e}
- if err==nil{err=os.Rename(f.Name(),path)}
- if err!=nil{return fmt.Errorf("cannot release activation sell pause")}
- return nil
+ if _,err:=readSetupRegular(path,true);err!=nil{return fmt.Errorf("cannot inspect sell posture")}
+ _,err:=replaceSellIfUnchanged(path,activationSellGuard,[]byte("{\"sell_state\":\"selling\"}\n"))
+ return err
 }
