@@ -205,12 +205,10 @@ func TestActivationReleaseLeavesGuardWhenAgentCannotRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	var diag bytes.Buffer
-	if err := releaseActivationSellAt(context.Background(), dir, 0, 1500*time.Millisecond, &diag); err != nil {
-		t.Fatal(err)
+	if err := releaseActivationSellAt(context.Background(), dir, 0, 1500*time.Millisecond, &diag); err == nil {
+		t.Fatal("incomplete activation reported as success")
 	}
-	if !strings.Contains(diag.String(), "sudo hypermesh-deploy sell resume") {
-		t.Fatalf("no resume instruction: %q", diag.String())
-	}
+	if strings.Contains(diag.String(), "sell resume") { t.Fatal("manual recovery requested") }
 	if raw, _ := os.ReadFile(sell); !bytes.Equal(raw, activationSellGuard) {
 		t.Fatalf("installer changed sell.json: %s", raw)
 	}

@@ -291,17 +291,20 @@ func waitStableAgent(ctx context.Context,window,poll time.Duration,probe func(co
  var first serviceInvocation
  for{
   raw,err:=probe(ctx);if err!=nil{return fmt.Errorf("cannot verify agent startup")}
-  current,err:=activeInvocation(raw);if err!=nil{return err}
-  if first.PID==0{first=current;started=time.Now()}else if current!=first{return fmt.Errorf("agent restarted during startup")}
+  current,err:=activeInvocation(raw)
+  // An immediate signed self-update may replace the invocation or briefly
+  // stop the unit. Require a full stable window after the last transition.
+  // The caller's deadline bounds crash loops and units that never start.
+  if err!=nil { first=serviceInvocation{};started=time.Time{} } else if first.PID==0||current!=first {first=current;started=time.Now()}
   if ctx.Err()!=nil{return fmt.Errorf("startup verification interrupted")}
-  if time.Since(started)>=window{return nil}
+  if !started.IsZero()&&time.Since(started)>=window{return nil}
   timer:=time.NewTimer(poll)
   select{case <-ctx.Done():timer.Stop();return fmt.Errorf("startup verification interrupted");case <-timer.C:}
  }
 }
 
 func verifyAgentStartup(ctx context.Context)error{
-   verify,cancel:=context.WithTimeout(ctx,25*time.Second);defer cancel()
+   verify,cancel:=context.WithTimeout(ctx,2*time.Minute);defer cancel()
    return waitStableAgent(verify,15*time.Second,500*time.Millisecond,func(ctx context.Context)([]byte,error){
     return (setupSource{}).output(ctx,"systemctl","--system","show","hypermesh-agent.service",
      "-p","ActiveState","-p","SubState","-p","MainPID","-p","NRestarts","-p","InvocationID")
@@ -432,8 +435,7 @@ func releaseActivationSell(ctx context.Context,diagnostic io.Writer)error{
 // releaseActivationSellAt never edits sell.json itself. An agent that predates
 // the release route updates itself to the current release on its first job
 // loop after startup, so a missing route extends the wait to updateWait. If
-// the agent still has no route then, the guard stays and the owner is told how
-// to start selling.
+// the agent still has no route then, the guard stays and continuation retries.
 func releaseActivationSellAt(ctx context.Context,stateDir string,limit,updateWait time.Duration,diagnostic io.Writer)error{
  deadline:=time.Now().Add(limit)
  routeMissing,extended:=false,false
@@ -450,10 +452,9 @@ func releaseActivationSellAt(ctx context.Context,stateDir string,limit,updateWai
   }
   if !time.Now().Before(deadline){
    if routeMissing{
-    fmt.Fprintln(diagnostic,"The service is running, but its agent has not yet updated to a version that can end the activation pause, so this host stays paused. Once the agent has updated, start selling with: sudo hypermesh-deploy sell resume")
-    return nil
+    return fmt.Errorf("agent update has not completed; activation remains paused for automatic continuation")
    }
-   return fmt.Errorf("service is active but its activation sell pause was not released; run the same command again")
+   return fmt.Errorf("service is active but its activation sell pause was not released; continuation will retry")
   }
   timer:=time.NewTimer(time.Second)
   select{

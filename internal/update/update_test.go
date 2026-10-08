@@ -386,14 +386,14 @@ func TestTickVerificationAndBusy(t *testing.T) {
 				return dest + ".pre-" + sanitizeVersion(previous), nil
 			},
 			Restart: func(ctx context.Context) error {
-				if !restartAllowed("systemctl", []string{"restart", AgentUnit}) {
+				if !restartAllowed("systemctl", []string{"--no-block", "restart", AgentUnit}) {
 					t.Fatal("restart not allowed")
 				}
 				if restartAllowed("systemctl", []string{"restart", "hypermesh-wg"}) || restartAllowed("reboot", nil) {
 					t.Fatal("wg or reboot was allowed")
 				}
 				restartName = "systemctl"
-				restartArgs = []string{"restart", AgentUnit}
+				restartArgs = []string{"--no-block", "restart", AgentUnit}
 				return nil
 			},
 		})
@@ -406,7 +406,7 @@ func TestTickVerificationAndBusy(t *testing.T) {
 		if string(got) != string(bin) {
 			t.Fatalf("payload %q", got)
 		}
-		if restartName != "systemctl" || strings.Join(restartArgs, " ") != "restart hypermesh-agent" {
+		if restartName != "systemctl" || strings.Join(restartArgs, " ") != "--no-block restart hypermesh-agent" {
 			t.Fatalf("restart %s %v", restartName, restartArgs)
 		}
 		m, err := ReadMarker(base.MarkerPath)
@@ -2552,5 +2552,21 @@ func TestTickUsesInstalledOriginForProductionSwitch(t *testing.T){
    want:=ActionSkip;if origin==ChannelTest{want=ActionInstall}
    if p.Action!=want||installed!=(origin==ChannelTest)||restarted!=(origin==ChannelTest){t.Fatalf("%+v installed=%v restarted=%v",p,installed,restarted)}
   })
+ }
+}
+
+func TestRestartAgentQueuesOnlyItsOwnUnit(t *testing.T) {
+ dir := t.TempDir()
+ // Reject a blocking restart: the caller is itself the service being stopped.
+ script := "#!/bin/sh\n[ \"$#\" -eq 3 ] && [ \"$1\" = --no-block ] && [ \"$2\" = restart ] && [ \"$3\" = hypermesh-agent ]\n"
+ if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0700); err != nil { t.Fatal(err) }
+ t.Setenv("PATH", dir)
+ if err := RestartAgent(context.Background()); err != nil { t.Fatal(err) }
+ for _, args := range [][]string{
+  {"restart", AgentUnit},
+  {"--no-block", "restart", "hypermesh-wg"},
+  {"--no-block", "restart", AgentUnit, "other.service"},
+ } {
+  if restartAllowed("systemctl", args) { t.Fatalf("unsafe restart accepted: %v", args) }
  }
 }

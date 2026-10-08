@@ -284,7 +284,8 @@ func osRead(path string) ([]byte, error) {
 
 // RestartAgent restarts hypermesh-agent and nothing else.
 func RestartAgent(ctx context.Context) error {
-	return restart(ctx, "systemctl", "restart", AgentUnit)
+	// Do not wait for systemd to terminate this calling process.
+	return restart(ctx, "systemctl", "--no-block", "restart", AgentUnit)
 }
 
 func restart(ctx context.Context, name string, args ...string) error {
@@ -299,5 +300,5 @@ func restart(ctx context.Context, name string, args ...string) error {
 }
 
 func restartAllowed(name string, args []string) bool {
-	return name == "systemctl" && len(args) == 2 && args[0] == "restart" && args[1] == AgentUnit
+	return name == "systemctl" && len(args) == 3 && args[0] == "--no-block" && args[1] == "restart" && args[2] == AgentUnit
 }
