@@ -492,6 +492,22 @@ func TestRetiredPeerIsNotRecreated(t *testing.T) {
 	}
 }
 
+func TestMismatchedPeerDiscoveryIsNotSaved(t *testing.T) {
+	p, _, _, _ := identityFixture(t)
+	base, _ := origins.Load(p.Path)
+	// The fixture's discovery always answers for the "local" authority.
+	peer, err := p.Peer("other-aiuditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = peer.Token(context.Background(), base.(string), tenant, device, request, "hm_dev_fixture"); err == nil {
+		t.Fatal("accepted another authority's configuration")
+	}
+	if _, err = os.Stat(peer.Path); !os.IsNotExist(err) {
+		t.Fatal("saved a checkpoint for another authority", err)
+	}
+}
+
 func TestLegacyReenrollmentBindsASigningKey(t *testing.T) {
 	newDevice := "12345678-1234-4234-8234-123456789bbb"
 	p, _, calls, _ := identityFixtureFor(t, newDevice, newDevice)

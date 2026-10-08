@@ -275,6 +275,10 @@ func (p Provider) tokenLocked(ctx context.Context, base, tenant, device, request
 		if err != nil {
 			return "", err
 		}
+		// Check before saving: a stored mismatch would never be rediscovered.
+		if p.Authority != "" && authority != p.Authority {
+			return "", fmt.Errorf("machine authority discovery returned another authority")
+		}
 		s = state{Renewal: renewal, Authority: authority, Plane: plane, Schema: 1, Base: base, Tenant: tenant, Device: device, Request: request, Key: key}
 		if e = save(p.Path, s); e != nil {
 			return "", e
@@ -727,7 +731,11 @@ func (p Provider) RetireEnrollment(ctx context.Context, device string, signing b
 		present = append(present, path)
 	}
 	var moved [][2]string
+	marker := ""
 	rollback := func(err error) error {
+		if marker != "" {
+			os.Remove(marker)
+		}
 		for i := len(moved) - 1; i >= 0; i-- {
 			os.Rename(moved[i][1], moved[i][0])
 		}
@@ -752,14 +760,21 @@ func (p Provider) RetireEnrollment(ctx context.Context, device string, signing b
 		if _, err = rand.Read(nonce); err != nil {
 			return rollback(err)
 		}
-		if err = save(p.Path+".retired-"+hex.EncodeToString(nonce), state{Schema: 1, Device: device}); err != nil {
+		path := p.Path + ".retired-" + hex.EncodeToString(nonce)
+		if err = save(path, state{Schema: 1, Device: device}); err != nil {
 			return rollback(err)
 		}
+		marker = path
 	}
+	// A retirement that cannot be made durable is undone, so the current
+	// enrollment keeps working if re-enrollment stops here.
 	dir, err := os.Open(filepath.Dir(p.Path))
 	if err != nil {
-		return err
+		return rollback(err)
 	}
 	defer dir.Close()
-	return dir.Sync()
+	if err = dir.Sync(); err != nil {
+		return rollback(err)
+	}
+	return nil
 }

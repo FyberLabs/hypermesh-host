@@ -21,6 +21,7 @@ type Provider struct {
 func (Provider) Token(context.Context, string, string, string, string, string) (string, error) {
 	return "", fmt.Errorf("machine identity requires Linux")
 }
+
 // ExistingToken keeps the enrollment secret on platforms without a signing
 // identity, so agents there can still authenticate after enrolling.
 func (Provider) ExistingToken(_ context.Context, _, _, _, bootstrap string) (string, error) {
