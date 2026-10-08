@@ -293,6 +293,12 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 		storeUntil = formatUntil(t)
 	}
 
+	if storeUntil != "" && untilReached(storeUntil, a.clock()) {
+		// A pause that has already ended is a resume. The plane sends this to
+		// resume selling, and earlier agents reach the same result when the
+		// stored pause expires.
+		return a.resumeLocked(localID, current)
+	}
 	next := SellPosture{SellState: api.SellPaused, Until: storeUntil, Source: SellSourceOwner}
 	if a.maintenanceHeld() {
 		// sell.json keeps the hold's pause; the owner pause is restored on release.
@@ -332,21 +338,26 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 // sellResume clears any pause so the host sells again. It is the inverse of
 // sellPause and takes the same device check. A maintenance hold is not lifted
 // here; only the installer resume operation releases it.
-func (a *Agent) sellResume(job api.Job) jobOutcome {
+func (a *Agent) sellResume(deviceID string) jobOutcome {
 	a.sellMu.Lock()
 	defer a.sellMu.Unlock()
 	current := a.effectiveSellLocked()
 	localID := strings.TrimSpace(a.state.DeviceID)
-	jobDev := strings.TrimSpace(job.DeviceID)
-	if jobDev == "" || jobDev != localID {
-		a.sellLog().Info("sell_resume refused", "reason", "device_id mismatch", "job_device_id", job.DeviceID, "device_id", localID)
+	dev := strings.TrimSpace(deviceID)
+	if dev == "" || dev != localID {
+		a.sellLog().Info("sell_resume refused", "reason", "device_id mismatch", "job_device_id", deviceID, "device_id", localID)
 		return jobOutcome{
 			Result:    pathb.Result{Passed: false, Reason: "device_id mismatch"},
 			SellState: current.SellState,
 			Until:     current.Until,
-			DeviceID:  jobDev,
+			DeviceID:  dev,
 		}
 	}
+	return a.resumeLocked(localID, current)
+}
+
+// resumeLocked persists selling. Caller must hold sellMu and has checked the device.
+func (a *Agent) resumeLocked(localID string, current SellPosture) jobOutcome {
 	if a.maintenanceHeld() {
 		a.sellLog().Info("sell_resume refused", "reason", "host maintenance hold")
 		return jobOutcome{
@@ -401,7 +412,7 @@ func jobResultBody(kind api.JobKind, res jobOutcome) api.JobResultRequest {
 		Passed:    res.Passed,
 		ImageHash: res.ImageHash,
 	}
-	if kind == api.KindSellPause || kind == api.KindSellResume {
+	if kind == api.KindSellPause {
 		req.SellState = res.SellState
 		req.Until = res.Until
 		req.DeviceID = res.DeviceID

@@ -377,7 +377,7 @@ func (a *Agent) handleOwnerSellResume(w http.ResponseWriter, r *http.Request) {
 	if deviceID == "" {
 		deviceID = strings.TrimSpace(a.state.DeviceID)
 	}
-	out := a.sellResume(api.Job{Kind: api.KindSellResume, DeviceID: deviceID})
+	out := a.sellResume(deviceID)
 	args := map[string]any{}
 	if id := strings.TrimSpace(req.DeviceID); id != "" {
 		args["device_id"] = id

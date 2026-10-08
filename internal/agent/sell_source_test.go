@@ -179,22 +179,41 @@ func TestOwnerCLIPauseThenResume(t *testing.T) {
 	}
 }
 
-func TestSellResumeJob(t *testing.T) {
+func TestEndedSellPauseJobResumes(t *testing.T) {
 	a := newOwnerTestAgent(t)
-	if out := a.sellPause(api.Job{Kind: api.KindSellPause, DeviceID: testDevice, Until: "2099-01-01T00:00:00Z"}); !out.Passed {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return now }
+	if out := a.sellPause(api.Job{Kind: api.KindSellPause, DeviceID: testDevice}); !out.Passed {
 		t.Fatalf("pause %+v", out)
 	}
-	refused := a.runJob(context.Background(), api.Job{Kind: api.KindSellResume, DeviceID: "other"})
+	// The plane resumes with a pause whose end is not after the host clock.
+	refused := a.runJob(context.Background(), api.Job{Kind: api.KindSellPause, DeviceID: "other", Until: "2026-10-07T11:59:00Z"})
 	if refused.Passed || refused.SellState != api.SellPaused {
 		t.Fatalf("foreign resume %+v", refused)
 	}
-	out := a.runJob(context.Background(), api.Job{Kind: api.KindSellResume, DeviceID: testDevice})
-	if !out.Passed || out.SellState != api.SellSelling {
+	out := a.runJob(context.Background(), api.Job{Kind: api.KindSellPause, DeviceID: testDevice, Until: "2026-10-07T11:59:00Z"})
+	if !out.Passed || out.SellState != api.SellSelling || out.Until != "" {
 		t.Fatalf("resume %+v", out)
 	}
-	body := jobResultBody(api.KindSellResume, out)
+	if storedSell(t, a).SellState != api.SellSelling {
+		t.Fatal("resume not persisted")
+	}
+	body := jobResultBody(api.KindSellPause, out)
 	if body.SellState != api.SellSelling || body.DeviceID != testDevice || !body.Passed {
 		t.Fatalf("result body %+v", body)
+	}
+	// A pause that ends in the future is still a pause.
+	out = a.runJob(context.Background(), api.Job{Kind: api.KindSellPause, DeviceID: testDevice, Until: "2026-10-07T13:00:00Z"})
+	if !out.Passed || out.SellState != api.SellPaused || out.Until != "2026-10-07T13:00:00Z" {
+		t.Fatalf("timed pause %+v", out)
+	}
+	// During maintenance the ended pause is refused like any resume.
+	if err := a.enterMaintenance(context.Background(), strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	out = a.runJob(context.Background(), api.Job{Kind: api.KindSellPause, DeviceID: testDevice, Until: "2026-10-07T11:59:00Z"})
+	if out.Passed || out.Reason != "host maintenance hold" || out.SellState != api.SellPaused {
+		t.Fatalf("resume during maintenance %+v", out)
 	}
 }
 
@@ -222,7 +241,7 @@ func TestMaintenanceRestoresSellingOrOwnerPause(t *testing.T) {
 		if err := dec.Decode(&legacy); err != nil || legacy.SellState != "paused" || legacy.Until != "" {
 			t.Fatalf("hold pause shape changed: %s %v", raw, err)
 		}
-		if res := a.sellResume(api.Job{Kind: api.KindSellResume, DeviceID: testDevice}); res.Passed || res.Reason != "host maintenance hold" {
+		if res := a.sellResume(testDevice); res.Passed || res.Reason != "host maintenance hold" {
 			t.Fatalf("resume during maintenance %+v", res)
 		}
 		release(t, a)
