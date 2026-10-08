@@ -104,3 +104,7 @@ observed it verifies prerequisites before proceeding; it does not reboot again.
 Unexpected platform drift or damaged state remains an error requiring recovery.
 Preserve the journals when diagnosing it. Advanced manual reboot commands retain
 their explicit approval behavior.
+
+After initial owner approval, setup binds a [durable host signing identity](machine-identity.md)
+before reboot. Token renewal and key rotation happen automatically; they do not
+require keeping your browser signed in.

@@ -9,21 +9,23 @@ import (
 )
 
 var redactKeys = map[string]struct{}{
-	"enroll_token":     {},
-	"token":            {},
-	"authorization":    {},
-	"bearer":           {},
-	"secret":           {},
-	"password":         {},
-	"prompt":           {},
-	"prompts":          {},
-	"renter_prompt":    {},
-	"device_secret":    {},
-	"credential":       {},
-	"enroll":           {},
-	"peer_private_key": {},
-	"private_key":      {},
-	"privatekey":       {},
+	"enroll_token":        {},
+	"token":               {},
+	"authorization":       {},
+	"bearer":              {},
+	"secret":              {},
+	"password":            {},
+	"prompt":              {},
+	"prompts":             {},
+	"renter_prompt":       {},
+	"device_secret":       {},
+	"credential":          {},
+	"enroll":              {},
+	"peer_private_key":    {},
+	"private_key":         {},
+	"privatekey":          {},
+	"machine_private_key": {},
+	"access_token":        {},
 }
 
 // New returns a text logger on stderr that redacts forbidden keys.
@@ -39,7 +41,7 @@ func RedactAttr(_ []string, a slog.Attr) slog.Attr {
 		return slog.String(a.Key, "[redacted]")
 	}
 	if s, ok := a.Value.Any().(string); ok {
-		if strings.HasPrefix(s, "hm_dev_") {
+		if strings.HasPrefix(s, "hm_dev_") || strings.HasPrefix(s, "hm_msi_") || strings.HasPrefix(s, "hm_ct_") {
 			return slog.String(a.Key, "[redacted]")
 		}
 	}

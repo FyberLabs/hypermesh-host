@@ -17,6 +17,7 @@ func TestRedactAttr(t *testing.T) {
 		"peer_private_key", "PEERPRIVATE",
 		"device_id", "11111111-1111-1111-1111-111111111111",
 		"note", "hm_dev_shown_once",
+		"machine", "hm_msi_sensitive",
 		"status", 200,
 	)
 
@@ -30,7 +31,7 @@ func TestRedactAttr(t *testing.T) {
 	if strings.Contains(out, "PEERPRIVATE") {
 		t.Fatal("peer private key leaked into logs")
 	}
-	if strings.Contains(out, "hm_dev_shown_once") {
+	if strings.Contains(out, "hm_dev_shown_once") || strings.Contains(out, "hm_msi_sensitive") {
 		t.Fatal("device secret leaked into logs")
 	}
 	if !strings.Contains(out, "11111111-1111-1111-1111-111111111111") {

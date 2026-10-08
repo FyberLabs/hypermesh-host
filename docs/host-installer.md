@@ -1061,8 +1061,9 @@ requests cannot be reset this way. If interrupted after the new journal was
 saved, rerun without that flag to resume it. Prior requests remain in private
 `registration-history-REQUEST_ID.json` files.
 
-Intentional retirement/reinstallation needs the separate fresh-key reinstall
-workflow still on the roadmap. Do not delete journals as a recovery shortcut.
+A fresh-key reinstall under the same host name and owner retires the previous
+install automatically when it completes (see "Re-enrollment and machine signing
+identities"). Do not delete journals as a recovery shortcut.
 Preserve private journals locally and never upload them as support logs.
 
 Success is `registered-inactive`: the dashboard device is paused and
@@ -1964,3 +1965,32 @@ original launcher dispatches to that image. A failed preparation leaves the prev
 session and executable usable. Automated coverage includes pathname replacement,
 failed upgrade preparation, repeated upgrades and default noninteractive consent.
 Live AGX continuation across an installer upgrade remains to be verified.
+
+### Re-enrollment and machine signing identities
+
+Explicit re-enrollment stops old workload/tunnel activity and archives the local
+machine signing checkpoint and its AIuditor delegations before exchanging the new
+enrollment token. Private history remains on disk; the replacement enrollment does
+not reuse those keys or cached tokens. An unsafe checkpoint blocks the exchange.
+The API client also checks the signing checkpoint against its current device ID,
+so stale state cannot authenticate requests for a different device. Normal restarts
+reuse the active enrollment.
+
+On the plane, re-enrolling (enroll token or guided registration) under the same
+host name for the same owner retires the old install automatically: it is archived,
+its leases and tunnels end, and every configured AIuditor authority revokes its
+signing key, management and contract credentials and host connection. If no
+authority can be reached the enrollment fails with a retryable error and the old
+install stays active. An enroll token never replaces a browser-registered install,
+and a name enrolled by another owner is refused with 409.
+
+A replacement enrollment now automatically binds a fresh signing key before its
+first authenticated agent operation. The archived checkpoint marks this as a
+required signing transition: authority failure retries without silently reverting
+to bootstrap authentication. Retirement checks every checkpoint before archiving
+any of them, and runs under the same lock as credential use, so a process still
+holding the retired enrollment cannot recreate its identity. A model host that
+never created a checkpoint (an older enroll-token install) also binds a signing
+key after re-enrollment; supervisor hosts keep their enrollment secret. Binding/renewal keeps a 15-second maximum HTTP timeout
+even when the installer injects a zero-timeout client, and preserves shorter client
+timeouts. The matching Panopticon/AIuditor support must deploy before this build.

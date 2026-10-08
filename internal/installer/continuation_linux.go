@@ -48,6 +48,13 @@ func continuationPrompt(label string) bool {
 }
 
 func earlyEnrollment(ctx context.Context, dir string, s *guidedState, p SetupPlan, out io.Writer) error {
+ if err:=completeEarlyEnrollment(ctx,dir,s,p,out);err!=nil{return err}
+ var j registrationJournal
+ if err:=guidedRead(filepath.Join(dir,"enrollment.json"),&j,true);err!=nil{return err}
+ n,err:=installationNetwork(s.Network);if err!=nil{return err}
+ return bindMachineIdentity(ctx,n.Plane,s.Tenant,j)
+}
+func completeEarlyEnrollment(ctx context.Context, dir string, s *guidedState, p SetupPlan, out io.Writer) error {
 	n, err := installationNetwork(s.Network)
 	if err != nil {
 		return err
@@ -82,7 +89,7 @@ func earlyEnrollment(ctx context.Context, dir string, s *guidedState, p SetupPla
 	} else {
 		return e
 	}
-	remote, err := hostregistration.New(n.Plane, s.Tenant)
+	remote, err := newRegistrationClient(n.Plane, s.Tenant)
 	if err != nil {
 		return err
 	}

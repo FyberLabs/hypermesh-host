@@ -110,3 +110,13 @@ authentication, bounded durable backoff, and systemd search-path/drop-in rejecti
 Actual reboot/service behavior on AGX remains physical acceptance work. Dashboard
 status delivery and remote signed continuation updates remain unfinished; the
 agent updater does not update the separate continuation executable.
+
+## Durable machine identity
+
+Implemented [host signing identity](machine-identity.md): root-private Ed25519
+keys separate from WireGuard, short-lived tokens, automatic renewal and 30-day
+rotation with a persisted pending key. Installer and running agent share the
+checkpoint; response loss and reboot do not require owner login. The plane
+retires bootstrap bearer access when the key is bound. Companion Panopticon
+migration/service/edge deployment precedes this host release. Physical acceptance
+and the separately documented continuation dashboard/update work remain pending.

@@ -381,7 +381,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
  if err==nil&&(p.SHA256!=*approved||agentPlanDigest(p)!=*approved){err=fmt.Errorf("agent approval digest does not match")}
  if err==nil{err=validateInstalledAgentInputs(p)}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
- remote,err:=hostregistration.New(p.ControlPlane,p.TenantID)
+ remote,err:=newRegistrationClient(p.ControlPlane,p.TenantID)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  unlock,err:=lockSetupState(defaultSetupState);if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
  ctx,cancel:=context.WithTimeout(ctx,25*time.Minute);defer cancel()

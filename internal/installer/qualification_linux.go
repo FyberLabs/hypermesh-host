@@ -193,7 +193,7 @@ func RunQualifyHost(ctx context.Context, args []string, input io.Reader, out, di
 		fmt.Fprintln(diagnostic, err)
 		return 1
 	}
-	c, err := hostregistration.New(p.Agent.ControlPlane, p.Agent.TenantID)
+	c, err := newRegistrationClient(p.Agent.ControlPlane, p.Agent.TenantID)
 	if err != nil {
 		fmt.Fprintln(diagnostic, err)
 		return 1
@@ -348,7 +348,7 @@ func guidedQualification(ctx context.Context, path string, ui guidedUI, diagnost
 	if identity.State != "registered-inactive" {
 		return false, fmt.Errorf("qualification requires inactive registration")
 	}
-	client, err := hostregistration.New(plan.ControlPlane, plan.TenantID)
+	client, err := newRegistrationClient(plan.ControlPlane, plan.TenantID)
 	if err != nil {
 		return false, err
 	}
