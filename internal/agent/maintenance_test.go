@@ -14,7 +14,8 @@ func TestMaintenancePersistsHoldAndBlocksNewWork(t *testing.T){
  if err:=fresh.enterMaintenance(context.Background(),sha);err!=nil{t.Fatal("retry failed",err)}
  if fresh.enterMaintenance(context.Background(),strings.Repeat("b",64))==nil{t.Fatal("other plan replaced hold")}
  if err:=os.Remove(filepath.Join(a.cfg.StateDir,"maintenance.json"));err!=nil{t.Fatal(err)}
- if fresh.effectiveSell().SellState!=api.SellPaused{t.Fatal("resume silently enabled selling")}
+ // Without an owner pause the host sells again once the hold is released.
+ if fresh.effectiveSell().SellState!=api.SellSelling{t.Fatal("released hold left the host paused")}
 }
 func TestMalformedMaintenanceHoldsAndCancellationDoNotMutate(t *testing.T){
  a:=&Agent{cfg:Config{StateDir:t.TempDir()}}

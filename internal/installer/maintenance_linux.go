@@ -5,6 +5,7 @@ package installer
 import (
  "bytes"
  "context"
+ "errors"
  "encoding/json"
  "flag"
  "fmt"
@@ -44,22 +45,48 @@ func saveMaintenance(path string,j maintenanceJournal)error{
  raw,_:=json.Marshal(j);return recoveryWrite(path,raw,0600)
 }
 func maintenanceOwner(ctx context.Context,method,endpoint string,body any,out any)error{
- token,err:=readSetupRegular("/var/lib/hypermesh/owner.token",true);if err!=nil{return fmt.Errorf("local owner credential unavailable")}
+ return ownerSocketRequest(ctx,"/var/lib/hypermesh",method,endpoint,body,out)
+}
+// ownerSocketRequest calls the agent's local owner socket in stateDir with
+// the owner token stored beside it.
+// errOwnerRouteMissing means the running agent predates the requested route.
+var errOwnerRouteMissing=errors.New("local owner route unavailable")
+func ownerSocketRequest(ctx context.Context,stateDir,method,endpoint string,body any,out any)error{
+ token,err:=readSetupRegular(filepath.Join(stateDir,"owner.token"),true);if err!=nil{return fmt.Errorf("local owner credential unavailable")}
  if len(token)>256||strings.TrimSpace(string(token))==""{return fmt.Errorf("invalid local owner credential")}
- info,err:=os.Lstat("/var/lib/hypermesh/owner.sock")
+ sock:=filepath.Join(stateDir,"owner.sock")
+ info,err:=os.Lstat(sock)
  if err!=nil||info.Mode()&os.ModeSocket==0||info.Mode().Perm()!=0600{return fmt.Errorf("local owner socket unavailable or unsafe")}
  raw,_:=json.Marshal(body)
  req,err:=http.NewRequestWithContext(ctx,method,"http://localhost"+endpoint,bytes.NewReader(raw));if err!=nil{return err}
  req.Header.Set("Authorization","Bearer "+strings.TrimSpace(string(token)));req.Header.Set("Content-Type","application/json")
- transport:=&http.Transport{DialContext:func(ctx context.Context,_,_ string)(net.Conn,error){return (&net.Dialer{}).DialContext(ctx,"unix","/var/lib/hypermesh/owner.sock")}}
+ transport:=&http.Transport{DialContext:func(ctx context.Context,_,_ string)(net.Conn,error){return (&net.Dialer{}).DialContext(ctx,"unix",sock)}}
  defer transport.CloseIdleConnections()
  client:=http.Client{Transport:transport,Timeout:30*time.Second,CheckRedirect:func(*http.Request,[]*http.Request)error{return fmt.Errorf("redirect refused")}}
- response,err:=client.Do(req);if err!=nil{return fmt.Errorf("local maintenance request unconfirmed")}
+ response,err:=client.Do(req);if err!=nil{return fmt.Errorf("local owner request unconfirmed")}
  defer response.Body.Close()
- if response.StatusCode!=200{return fmt.Errorf("local maintenance request refused")}
+ if response.StatusCode==http.StatusNotFound||response.StatusCode==http.StatusMethodNotAllowed{return errOwnerRouteMissing}
+ if response.StatusCode!=200{return fmt.Errorf("local owner request refused")}
  b,err:=io.ReadAll(io.LimitReader(response.Body,(64<<10)+1))
- if err!=nil||len(b)>64<<10||json.Unmarshal(b,out)!=nil{return fmt.Errorf("invalid local maintenance response")}
+ if err!=nil||len(b)>64<<10||json.Unmarshal(b,out)!=nil{return fmt.Errorf("invalid local owner response")}
  return nil
+}
+func maintenanceSellAfter(ctx context.Context)string{
+ wait,cancel:=context.WithTimeout(ctx,15*time.Second);defer cancel()
+ for{
+  var local struct{Maintenance bool `json:"maintenance"`;SellState string `json:"sell_state"`}
+  if maintenanceOwner(wait,"GET","/v0/status",nil,&local)==nil&&!local.Maintenance&&local.SellState!=""{return local.SellState}
+  timer:=time.NewTimer(time.Second)
+  select{case <-wait.Done():timer.Stop();return "unknown";case <-timer.C:}
+ }
+}
+// maintenanceHoldReleased decides whether resume may proceed without the
+// matching hold. Only a missing marker on a resume that already reached the
+// resuming checkpoint counts as released; any other hold problem stops.
+func maintenanceHoldReleased(holdErr error,markerMissing bool,state string)(bool,error){
+ if holdErr==nil{return false,nil}
+ if markerMissing&&supportOneOf(state,"resuming","complete"){return true,nil}
+ return false,holdErr
 }
 func maintenanceMarkerMatches(sha string)error{
  raw,err:=readSetupRegular("/var/lib/hypermesh/maintenance.json",true)
@@ -130,7 +157,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
  f:=flag.NewFlagSet("maintain-agent",flag.ContinueOnError);f.SetOutput(diagnostic)
  path:=f.String("plan","","reviewed maintenance plan");sha:=f.String("approve-plan","","exact plan digest")
  apply:=f.Bool("apply",false,"approve drain and service stop");reboot:=f.Bool("reboot",false,"approve host reboot")
- start:=f.Bool("start",false,"approve original-owner authorization and paused startup")
+ start:=f.Bool("start",false,"approve original-owner authorization and service startup")
  retry:=f.Bool("retry-request",false,"explicitly retry unconfirmed same-boot reboot request")
  wait:=f.Duration("drain-timeout",30*time.Minute,"wait for current work to finish; at most 24h")
  if err:=f.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
@@ -163,13 +190,17 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   if err:=recoveryGuard(ctx,"",p.Certification.Agent,rebootSetupSource());err!=nil{return err}
   return noMaintenanceContainers(ctx)
  }
+ sellAfter:=""
+ // A retry after the hold was released skips the paused-hold checks: the
+ // marker is only removed after they passed, and the agent may since have
+ // restored selling or the owner's pause.
+ released:=false
  if resume{
   if !supportOneOf(j.State,"stopped","reboot-requested","resuming","complete"){err=fmt.Errorf("drain/stop must complete before resume")}
   if err==nil{
    holdErr:=maintenanceMarkerMatches(p.SHA256)
-   if holdErr!=nil{
-    if _,e:=os.Lstat("/var/lib/hypermesh/maintenance.json");!os.IsNotExist(e)||!supportOneOf(j.State,"resuming","complete"){err=holdErr}
-   }
+   _,e:=os.Lstat("/var/lib/hypermesh/maintenance.json")
+   released,err=maintenanceHoldReleased(holdErr,os.IsNotExist(e),j.State)
   }
   if err==nil{err=installed(ctx)}
   if err==nil{err=noMaintenanceContainers(ctx)}
@@ -184,17 +215,17 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
    if err==nil&&(!validCertificationJournal(cert)||cert.PlanSHA256!=p.Certification.SHA256||cert.RunID!=p.Certification.Run.RunID){err=fmt.Errorf("invalid certification checkpoint")}
    if err==nil{err=activateCertifiedMode(ctx,p.Certification,identity,client,&cert,func(v certificationJournal)error{return saveCertification(certificationStatePath(defaultSetupState,p.Certification.SHA256),v)},diagnostic,true)}
   }
-  if err==nil{
+  if err==nil&&!released{
    var local struct{DeviceID string `json:"device_id"`;SellState string `json:"sell_state"`;Until string `json:"until"`}
    err=maintenanceOwner(ctx,"GET","/v0/status",nil,&local)
    if err==nil&&(local.DeviceID!=identity.DeviceID||local.SellState!="paused"||local.Until!=""){err=fmt.Errorf("resume must retain an indefinite pause")}
   }
-  if err==nil{
+  if err==nil&&!released{
    var posture struct{SellState string `json:"sell_state"`;Until string `json:"until,omitempty"`}
    raw,err=readSetupRegular("/var/lib/hypermesh/sell.json",true)
    if err==nil&&(decodeSetupJSON(raw,&posture)!=nil||posture.SellState!="paused"||posture.Until!=""){err=fmt.Errorf("persistent indefinite pause required")}
   }
-  if err==nil{
+  if err==nil&&!released{
    remote,e:=client.CheckDevice(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret)
    if e!=nil||remote.PathAState!="accepted"||remote.PathBState!="green"||remote.ScheduleHold==nil||*remote.ScheduleHold||remote.SellState!="paused"||remote.LastHeartbeatAt==nil||time.Since(*remote.LastHeartbeatAt)<0||time.Since(*remote.LastHeartbeatAt)>120*time.Second||remote.CheckedAt.Before(time.Now().Add(-30*time.Second))||remote.CheckedAt.After(time.Now().Add(30*time.Second)){err=fmt.Errorf("fresh plane readiness required before releasing maintenance hold")}
   }
@@ -205,6 +236,8 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   }
   if err==nil{err=recoverySync("/var/lib/hypermesh")}
   if err==nil{j.State="complete";j.RecordedAt=time.Now().UTC();err=save(j)}
+  // With the hold released the agent restores a kept owner pause or sells.
+  if err==nil{sellAfter=maintenanceSellAfter(ctx)}
  }else{
   d:=maintenanceDeps{
    Hold:func(ctx context.Context)error{
@@ -241,6 +274,8 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   }
   err=drainMaintenance(ctx,p,&j,d,*retry)
  }
- if json.NewEncoder(out).Encode(map[string]any{"plan_sha256":p.SHA256,"state":j.State,"attempt_succeeded":err==nil,"selling_allowed":false})!=nil{return 1}
+ report:=map[string]any{"plan_sha256":p.SHA256,"state":j.State,"attempt_succeeded":err==nil,"selling_allowed":resume&&err==nil&&sellAfter=="selling"}
+ if sellAfter!=""{report["sell_state"]=sellAfter}
+ if json.NewEncoder(out).Encode(report)!=nil{return 1}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1};return 0
 }
