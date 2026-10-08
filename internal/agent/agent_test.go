@@ -2663,7 +2663,7 @@ func TestFreshEnrollmentChangesKeyAndRestartReusesIdentity(t *testing.T) {
     if err := second.ensureEnrolled(context.Background()); err != nil { t.Fatal(err) }
     if _,err:=os.Stat(checkpoint);!os.IsNotExist(err){t.Fatal("retained old signing checkpoint",err)}
     if second.client.DeviceID!="second-enrollment"{t.Fatal("client retained old device")}
-    token,err:=second.client.Credential(context.Background());if err!=nil||token!=testSecret{t.Fatal("replacement credential unavailable",err)}
+    token,err:=second.client.Credential(context.Background());if token!=""||err==nil{t.Fatal("replacement silently used bootstrap without binding",err)}
     if len(requests) != 2 { t.Fatalf("enroll requests: %d", len(requests)) }
     if requests[0].HostName != "configured-box" || requests[1].HostName != "configured-box" {
         t.Fatal("reported name changed")

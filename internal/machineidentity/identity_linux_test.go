@@ -23,6 +23,10 @@ const device = "12345678-1234-4234-8234-123456789def"
 const request = "12345678-1234-4234-8234-123456789aaa"
 
 func identityFixture(t *testing.T) (Provider, *time.Time, *int, *bool) {
+	return identityFixtureFor(t, device, request)
+}
+
+func identityFixtureFor(t *testing.T, device, request string) (Provider, *time.Time, *int, *bool) {
 	t.Helper()
 	now := time.Unix(1791400000, 0)
 	calls := 0
@@ -315,17 +319,15 @@ func TestRetirementArchivesPrimaryAndPeersAndPreparesFreshKey(t *testing.T) {
 			t.Fatal("lost private history", err)
 		}
 	}
-	base, _ := origins.Load(p.Path)
-	token, err := p.ExistingToken(context.Background(), base.(string), tenant, "replacement-device", "new-bootstrap")
-	if err != nil || token != "new-bootstrap" {
-		t.Fatal(token, err)
+	newDevice := "12345678-1234-4234-8234-123456789aaa"
+	replacement, _, _, _ := identityFixtureFor(t, newDevice, newDevice)
+	base, _ := origins.Load(replacement.Path)
+	replacement.Path = p.Path
+	token, err := replacement.ExistingToken(context.Background(), base.(string), tenant, newDevice, "hm_dev_fixture")
+	if err != nil || !strings.HasPrefix(token, "hm_msi_"+newDevice+".") {
+		t.Fatal("replacement did not bind", err)
 	}
-	// Even an attempt to bind the old registration creates a fresh key. The
-	// authority correctly refuses to replace its existing binding without a new
-	// enrollment; local retirement never grants that authority.
-	if _, err = get(t, p); err == nil || !strings.Contains(err.Error(), "409") {
-		t.Fatal("old remote binding was replaced", err)
-	}
+
 	fresh, err := read(p.Path)
 	if err != nil || fresh.Key == old.Key {
 		t.Fatal("reused signing key", err)
@@ -346,5 +348,39 @@ func TestRetirementRefusesUnsafeCheckpoint(t *testing.T) {
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != "private" {
 		t.Fatal("changed target", err)
+	}
+}
+
+type timeoutTransport struct {
+	t     *testing.T
+	limit time.Duration
+}
+
+func (tr timeoutTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	deadline, ok := r.Context().Deadline()
+	if !ok || time.Until(deadline) > tr.limit {
+		tr.t.Fatal("exchange has no bounded deadline")
+	}
+	return nil, fmt.Errorf("test transport stopped")
+}
+func TestExchangeBoundsInjectedClientTimeout(t *testing.T) {
+	key, err := newKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, timeout := range []time.Duration{0, time.Second, time.Hour} {
+		limit := 15 * time.Second
+		if timeout > 0 && timeout < limit {
+			limit = timeout
+		}
+		client := &http.Client{Timeout: timeout, Transport: timeoutTransport{t, limit}}
+		p := Provider{HTTP: client}
+		_, err = p.exchange(context.Background(), state{Base: "https://example.test", Tenant: tenant, Device: device, Request: request, Authority: "local", Plane: "local"}, key, "", "bootstrap", true, time.Now())
+		if err == nil {
+			t.Fatal("expected transport failure")
+		}
+		if client.Timeout != timeout {
+			t.Fatal("mutated injected client")
+		}
 	}
 }

@@ -1974,3 +1974,10 @@ not reuse those keys or cached tokens. An unsafe checkpoint blocks the exchange.
 The API client also checks the signing checkpoint against its current device ID,
 so stale state cannot authenticate requests for a different device. Normal restarts
 reuse the active enrollment; server-side retirement/revocation remains authoritative.
+
+A replacement enrollment now automatically binds a fresh signing key before its
+first authenticated agent operation. The archived checkpoint marks this as a
+required signing transition: authority failure retries without silently reverting
+to bootstrap authentication. Binding/renewal keeps a 15-second maximum HTTP timeout
+even when the installer injects a zero-timeout client, and preserves shorter client
+timeouts. The matching Panopticon/AIuditor support must deploy before this build.

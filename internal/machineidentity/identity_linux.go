@@ -141,6 +141,9 @@ func (p Provider) exchange(ctx context.Context, s state, key, next, bootstrap st
 	if p.HTTP != nil {
 		client = *p.HTTP
 	}
+	if client.Timeout <= 0 || client.Timeout > 15*time.Second {
+		client.Timeout = 15 * time.Second
+	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, e := client.Do(req)
 	if e != nil {
@@ -264,6 +267,18 @@ func (p Provider) ExistingToken(ctx context.Context, base, tenant, device, boots
 	}
 	s, e := read(p.Path)
 	if os.IsNotExist(e) {
+		retired, err := filepath.Glob(p.Path + ".retired-*")
+		if err != nil {
+			return "", err
+		}
+		if len(retired) > 0 {
+			if device == "" {
+				return "", fmt.Errorf("active enrollment is required for signing identity replacement")
+			}
+			// Enroll-token replacements use their immutable device ID as the
+			// authority context. The plane verifies the fresh bootstrap secret.
+			return p.Token(ctx, base, tenant, device, device, bootstrap)
+		}
 		return bootstrap, nil
 	}
 	if e != nil {
