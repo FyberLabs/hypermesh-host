@@ -23,7 +23,8 @@ func TestActivationSellGuard(t *testing.T) {
 		bad  bool
 	}{
 		{raw: `{"sell_state":"selling"}`},
-		{raw: `{"sell_state":"paused"}`, keep: true},
+		{raw: `{"sell_state":"paused"}`},
+		{raw: "{\n  \"sell_state\": \"paused\"\n}\n", keep: true},
 		{raw: `{"sell_state":"paused","source":"owner"}`, keep: true},
 		{raw: `{"sell_state":"paused","source":"activation"}`, keep: true},
 		{raw: `{"sell_state":"paused","until":"2026-10-08T00:00:00Z","source":"owner"}`, keep: true},
@@ -172,5 +173,31 @@ func TestSellCommandReportsRefusal(t *testing.T) {
 	missing := t.TempDir()
 	if code := runSell(context.Background(), missing, []string{"status"}, &out, &diag); code != 1 {
 		t.Fatalf("missing agent code %d", code)
+	}
+}
+
+func TestActivationReleaseWithAgentWithoutReleaseRoute(t *testing.T) {
+	dir := fakeOwnerSocket(t, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+	sell := filepath.Join(dir, "sell.json")
+	if err := os.WriteFile(sell, activationSellGuard, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseActivationSellAt(context.Background(), dir, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(sell)
+	if strings.TrimSpace(string(raw)) != `{"sell_state":"selling"}` {
+		t.Fatalf("guard not released: %s", raw)
+	}
+	// A pause the agent wrote after the guard is left alone.
+	owner := "{\n  \"sell_state\": \"paused\"\n}\n"
+	if err := os.WriteFile(sell, []byte(owner), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseActivationSellAt(context.Background(), dir, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(sell); string(raw) != owner {
+		t.Fatalf("agent pause replaced: %s", raw)
 	}
 }

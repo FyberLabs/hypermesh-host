@@ -5,6 +5,7 @@ package installer
 import (
  "bytes"
  "context"
+ "errors"
  "encoding/json"
  "flag"
  "fmt"
@@ -48,6 +49,8 @@ func maintenanceOwner(ctx context.Context,method,endpoint string,body any,out an
 }
 // ownerSocketRequest calls the agent's local owner socket in stateDir with
 // the owner token stored beside it.
+// errOwnerRouteMissing means the running agent predates the requested route.
+var errOwnerRouteMissing=errors.New("local owner route unavailable")
 func ownerSocketRequest(ctx context.Context,stateDir,method,endpoint string,body any,out any)error{
  token,err:=readSetupRegular(filepath.Join(stateDir,"owner.token"),true);if err!=nil{return fmt.Errorf("local owner credential unavailable")}
  if len(token)>256||strings.TrimSpace(string(token))==""{return fmt.Errorf("invalid local owner credential")}
@@ -62,6 +65,7 @@ func ownerSocketRequest(ctx context.Context,stateDir,method,endpoint string,body
  client:=http.Client{Transport:transport,Timeout:30*time.Second,CheckRedirect:func(*http.Request,[]*http.Request)error{return fmt.Errorf("redirect refused")}}
  response,err:=client.Do(req);if err!=nil{return fmt.Errorf("local owner request unconfirmed")}
  defer response.Body.Close()
+ if response.StatusCode==http.StatusNotFound||response.StatusCode==http.StatusMethodNotAllowed{return errOwnerRouteMissing}
  if response.StatusCode!=200{return fmt.Errorf("local owner request refused")}
  b,err:=io.ReadAll(io.LimitReader(response.Body,(64<<10)+1))
  if err!=nil||len(b)>64<<10||json.Unmarshal(b,out)!=nil{return fmt.Errorf("invalid local owner response")}
@@ -270,7 +274,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   }
   err=drainMaintenance(ctx,p,&j,d,*retry)
  }
- report:=map[string]any{"plan_sha256":p.SHA256,"state":j.State,"attempt_succeeded":err==nil,"selling_allowed":false}
+ report:=map[string]any{"plan_sha256":p.SHA256,"state":j.State,"attempt_succeeded":err==nil,"selling_allowed":resume&&err==nil&&sellAfter=="selling"}
  if sellAfter!=""{report["sell_state"]=sellAfter}
  if json.NewEncoder(out).Encode(report)!=nil{return 1}
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1};return 0

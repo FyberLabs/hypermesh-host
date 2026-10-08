@@ -3,7 +3,9 @@
 package installer
 
 import (
+ "bytes"
  "context"
+ "errors"
  "encoding/json"
  "flag"
  "fmt"
@@ -384,6 +386,9 @@ var activationSellGuard=[]byte("{\"sell_state\":\"paused\",\"source\":\""+agent.
 // A current pause (owner, maintenance or an earlier guard) is kept; selling,
 // an empty state or an expired timed pause is replaced by the guard.
 func activationKeepsSell(raw []byte,now time.Time)(bool,error){
+ // Earlier installers wrote exactly these bytes at activation. The agent
+ // clears them, so replace them with the guard instead of keeping them.
+ if strings.TrimSpace(string(raw))==`{"sell_state":"paused"}`{return false,nil}
  var posture agent.SellPosture
  if decodeSetupJSON(raw,&posture)!=nil{return false,fmt.Errorf("existing sell posture conflicts; inspect locally")}
  switch posture.SellState{
@@ -412,10 +417,14 @@ func prepareActivationSell(path string,now time.Time)error{
 // releaseActivationSell asks the running agent to clear the activation guard.
 // An owner pause is left in place.
 func releaseActivationSell(ctx context.Context)error{
- release,cancel:=context.WithTimeout(ctx,45*time.Second);defer cancel()
+ return releaseActivationSellAt(ctx,"/var/lib/hypermesh",45*time.Second)
+}
+func releaseActivationSellAt(ctx context.Context,stateDir string,limit time.Duration)error{
+ release,cancel:=context.WithTimeout(ctx,limit);defer cancel()
  for{
   var reply struct{SellState string `json:"sell_state"`;PauseSource string `json:"pause_source"`}
-  err:=maintenanceOwner(release,"POST","/v0/activation_release",map[string]string{},&reply)
+  err:=ownerSocketRequest(release,stateDir,"POST","/v0/activation_release",map[string]string{},&reply)
+  if errors.Is(err,errOwnerRouteMissing){return releaseActivationSellFile(filepath.Join(stateDir,"sell.json"))}
   if err==nil&&reply.PauseSource!=agent.SellSourceActivation&&reply.SellState!=""{return nil}
   timer:=time.NewTimer(time.Second)
   select{
@@ -424,4 +433,24 @@ func releaseActivationSell(ctx context.Context)error{
   case <-timer.C:
   }
  }
+}
+
+// releaseActivationSellFile clears the guard for an agent that predates the
+// release route, for example one kept by an installer-only upgrade. Only the
+// exact guard this installer wrote is replaced; any other posture is the
+// agent's and is left alone.
+func releaseActivationSellFile(path string)error{
+ raw,err:=readSetupRegular(path,true)
+ if err!=nil{return fmt.Errorf("cannot inspect sell posture")}
+ if !bytes.Equal(bytes.TrimSpace(raw),activationSellGuard){return nil}
+ f,err:=os.CreateTemp(filepath.Dir(path),".sell-")
+ if err!=nil{return fmt.Errorf("cannot release activation sell pause")}
+ defer os.Remove(f.Name())
+ _,err=f.Write([]byte("{\"sell_state\":\"selling\"}\n"))
+ if err==nil{err=f.Chmod(0o600)}
+ if err==nil{err=f.Sync()}
+ if e:=f.Close();err==nil{err=e}
+ if err==nil{err=os.Rename(f.Name(),path)}
+ if err!=nil{return fmt.Errorf("cannot release activation sell pause")}
+ return nil
 }

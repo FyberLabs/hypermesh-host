@@ -26,6 +26,7 @@ func TestContinuationEnrollsBeforeChangesAndResumesAcrossRebootAndReview(t *test
 		}
 		*calls = append(*calls, "enroll-and-enable-continuation")
 		g.state.Autonomous = true
+		g.state.SellConsent = true
 		return nil
 	}
 	g.adoptEnrollment = func(context.Context, agentInstallPlan) (bool, error) {
@@ -88,6 +89,7 @@ func TestContinuationRetriesFailedStageWithoutAuthentication(t *testing.T) {
 	ctx := context.WithValue(context.Background(), continuationConsent{}, true)
 	g.ui.ctx = ctx
 	g.state.Autonomous = true
+	g.state.SellConsent = true
 	g.adoptEnrollment = func(context.Context, agentInstallPlan) (bool, error) { return true, nil }
 	*failure = "check-agent"
 	if err := g.finish(ctx); err == nil || g.state.Stage != 4 {
@@ -294,5 +296,31 @@ func TestContinuationReadsRunningInodeAfterExecutablePathReplaced(t *testing.T) 
 	cmd.Env = append(os.Environ(), "HYPERMESH_TEST_RUNNING_INODE=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v: %s", err, out)
+	}
+}
+
+func TestLegacyContinuationApprovalAsksBeforeSelling(t *testing.T) {
+	g, calls, _ := fixtureGuided(t, "")
+	ctx := context.WithValue(context.Background(), continuationConsent{}, true)
+	g.ui.ctx = ctx
+	// Saved by an earlier installer: continuation approved, selling not.
+	g.state.Autonomous = true
+	g.adoptEnrollment = func(context.Context, agentInstallPlan) (bool, error) { return true, nil }
+	err := g.finish(ctx)
+	if err == nil || !strings.Contains(err.Error(), "paused startup only") || g.state.Stage != 6 {
+		t.Fatal("legacy approval started selling", err, g.state.Stage)
+	}
+	for _, call := range *calls {
+		if call == "activate-agent" {
+			t.Fatal("activated without selling approval", *calls)
+		}
+	}
+	*calls = nil
+	g.ui = guidedUI{ctx: context.Background(), out: io.Discard, in: bufio.NewReader(strings.NewReader(strings.Repeat("y\n", 4)))}
+	if err := g.finish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !g.state.SellConsent || g.state.Stage != 7 || (*calls)[0] != "activate-agent" {
+		t.Fatal("interactive approval did not activate", g.state.SellConsent, g.state.Stage, *calls)
 	}
 }

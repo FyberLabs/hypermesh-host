@@ -48,6 +48,10 @@ type guidedState struct {
  Stage int `json:"stage"`
  PlanDirectory string `json:"plan_directory,omitempty"`
  Autonomous bool `json:"autonomous,omitempty"`
+ // SellConsent records that the saved continuation approval covers selling
+ // after certification. Approvals saved by earlier installers covered paused
+ // startup only.
+ SellConsent bool `json:"sell_consent,omitempty"`
  ContinuationSHA string `json:"continuation_sha256,omitempty"`
  LauncherSHA string `json:"launcher_sha256,omitempty"`
 }
@@ -329,6 +333,14 @@ func (g guidedFlow) finish(ctx context.Context)error {
  if s.Stage==6 {
   fmt.Fprintln(g.ui.out,"Certification passed. Using this host’s saved registration to start the service; selling starts once startup is verified.")
   fmt.Fprintln(g.ui.out,"Pause or resume selling at any time with: sudo hypermesh-deploy sell pause | sell resume")
+  if g.state.Autonomous&&!g.state.SellConsent{
+   if g.ui.ctx!=nil&&g.ui.ctx.Value(continuationConsent{})==true{
+    return fmt.Errorf("certification passed, but the saved approval covers paused startup only; run the installer again with --interactive to approve starting selling")
+   }
+   if err=g.ui.confirm("The saved approval covered paused startup only. Start selling on this host once the service is verified?");err!=nil{return err}
+   g.state.SellConsent=true
+   if err=g.save();err!=nil{return err}
+  }
   if err=g.apply(ctx,"activate-agent","certification.json","Activate the host service and start selling?","--start");err!=nil{return err}
   if err=g.advance();err!=nil{return err}
  }
@@ -450,6 +462,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if !*background && s.Stage>=4 && !s.Autonomous {
   if err=ui.confirm("Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests, service startup and selling once certified?");err!=nil{fmt.Fprintln(diagnostic,err);return 1}
   s.Autonomous=true
+  s.SellConsent=true
   if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)}
   if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
   ctx=withContinuationConsent(ctx);ui.ctx=ctx
@@ -458,6 +471,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   prepareContinuation:func(ctx context.Context,p SetupPlan)error{
    if !s.Autonomous {
     if e:=ui.confirm("Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation, and service startup and selling after admin approval?");e!=nil{return e}
+    s.SellConsent=true
    }
    if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
    s.Autonomous=true
