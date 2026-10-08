@@ -28,10 +28,12 @@ func (a *Agent) enterMaintenance(ctx context.Context,plan string)error{
   var old struct{PlanSHA256 string `json:"plan_sha256"`}
   if json.Unmarshal(raw,&old)!=nil||old.PlanSHA256!=plan{return fmt.Errorf("another maintenance plan is already recorded")}
  }else if !os.IsNotExist(err){return fmt.Errorf("maintenance state unavailable")}
+ // sellMu stays held until the marker exists, so a posture read in between
+ // cannot settle the hold's pause back to the kept posture. If the marker
+ // write fails, the next read restores the kept posture.
  a.sellMu.Lock()
- err:=a.holdSellForMaintenance()
- a.sellMu.Unlock()
- if err!=nil{return fmt.Errorf("cannot persist indefinite sell pause")}
+ defer a.sellMu.Unlock()
+ if err:=a.holdSellForMaintenance();err!=nil{return fmt.Errorf("cannot persist indefinite sell pause")}
  // Atomic private writer syncs before publishing. Hold persists across reboot.
  return writeJSON0600(path,map[string]any{"schema":1,"plan_sha256":plan,"requested_at":time.Now().UTC()})
 }

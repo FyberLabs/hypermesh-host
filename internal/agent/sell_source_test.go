@@ -278,3 +278,23 @@ func TestMaintenanceRestoresSellingOrOwnerPause(t *testing.T) {
 		}
 	})
 }
+
+func TestMaintenancePauseSurvivesConcurrentPostureReads(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		a := newOwnerTestAgent(t)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for j := 0; j < 50; j++ {
+				a.effectiveSell()
+			}
+		}()
+		if err := a.enterMaintenance(context.Background(), strings.Repeat("b", 64)); err != nil {
+			t.Fatal(err)
+		}
+		<-done
+		if got := storedSell(t, a); got.SellState != api.SellPaused || got.Source != "" {
+			t.Fatalf("hold pause settled while entering maintenance: %+v", got)
+		}
+	}
+}
