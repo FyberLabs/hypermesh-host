@@ -1092,7 +1092,7 @@ build_release_binaries() {
         -o "${dist}/hypermesh-agent_${version}_linux_${arch}" ./cmd/agent || exit 1
       CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
         go build -trimpath -ldflags "$ldflags" \
-        -o "${dist}/hypermesh-deploy_${version}_linux_${arch}" ./cmd/hypermesh-deploy || exit 1
+        -o "${dist}/hypermesh-deploy_${version}_linux_${arch}" ./cmd/hypermesh-host || exit 1
     ) || return 1
   done
   cp "${root}/packaging/bootstrap.py" "${dist}/bootstrap.py"

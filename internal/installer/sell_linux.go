@@ -19,7 +19,7 @@ const sellUsage = "usage: hypermesh-deploy sell pause [--until=RFC3339] | sell r
 // is a single request to the local agent; no plan review is involved.
 func RunSell(ctx context.Context, args []string, out, diagnostic io.Writer) int {
 	if os.Geteuid() != 0 {
-		fmt.Fprintln(diagnostic, "requires root: sudo hypermesh-deploy sell ...")
+		fmt.Fprintln(diagnostic, "requires root: sudo hypermesh-host sell ...")
 		return 1
 	}
 	return runSell(ctx, "/var/lib/hypermesh", args, out, diagnostic)

@@ -9,7 +9,7 @@ Guided setup asks for the model directory, a disk quota, and a free-space reserv
 with the updated installer. To review storage settings later:
 
 ```sh
-sudo ./hypermesh-deploy install --cache-settings
+sudo ./hypermesh-host install --cache-settings
 ```
 
 The host-owned policy is `MODEL_DIRECTORY/.hypermesh-cache.json`, separate from

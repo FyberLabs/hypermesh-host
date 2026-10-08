@@ -34,7 +34,7 @@ The agent must include the maintenance owner endpoint. Older agents refuse the r
 
 ## Reviewed installer updates and signed agent evidence
 
-Install the verified CLI as a root-owned executable (for example `sudo install -m 0755 ./hypermesh-deploy /usr/local/bin/hypermesh-deploy`) before using in-place self-update. Keep the original downloaded executable available for recovery.
+Install the verified CLI as a root-owned executable (for example `sudo install -m 0755 ./hypermesh-host /usr/local/bin/hypermesh-host`) before using in-place self-update. Keep the original downloaded executable available for recovery.
 
 `plan-installer-update --release-url IMMUTABLE_URL --channel test|prod --trusted-key FILE --fingerprints LIST` verifies a strictly newer signed release and binds the exact existing executable, destination, target release and target hash. Apply the reviewed digest with `update-installer --plan FILE --approve-plan SHA256 --apply`. The current process finishes; invoke the CLI again to use the new version. No child executable is run implicitly and no agent is restarted.
 

@@ -350,7 +350,7 @@ func TestReleaseArchivesAreLinuxAMD64AndARM64(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{"cmd/hypermesh-deploy", "linux", "amd64", "arm64", "hypermesh-deploy"} {
+	for _, want := range []string{"cmd/hypermesh-host", "linux", "amd64", "arm64", "hypermesh-host"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("goreleaser missing %s", want)
 		}
@@ -445,7 +445,7 @@ func TestEnrollTokenFromEnvOrFile(t *testing.T) {
 }
 
 func TestEnrollTokenNotFromFlag(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join("..", "..", "cmd", "hypermesh-deploy", "main.go"))
+	body, err := os.ReadFile(filepath.Join("..", "..", "internal", "hostcli", "main.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestEnrollTokenNotFromFlag(t *testing.T) {
 		t.Fatal("enroll token file flag is missing")
 	}
 	roots := []string{
-		filepath.Join("..", "..", "cmd", "hypermesh-deploy"),
+		filepath.Join("..", "..", "internal", "hostcli"),
 		".",
 	}
 	for _, root := range roots {

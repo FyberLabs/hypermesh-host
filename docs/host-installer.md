@@ -176,7 +176,7 @@ disabled with consent, not that other services are disabled.
 - [ ] Enrollment plus benchmark/connectivity gates before selling.
 - [ ] Hardware acceptance runs below.
 
-The admission package is wired into `hypermesh-deploy check-resources`.
+The admission package is wired into `hypermesh-host check-resources`.
 Its eligible result means only that measured resource capacity passes the
 minimums, not that installation or selling is approved.
 
@@ -190,8 +190,8 @@ It creates no directories, installs nothing, and does not enroll a host.
 Build from the reviewed checkout:
 
 ```bash
-go build -o hypermesh-deploy ./cmd/hypermesh-deploy
-./hypermesh-deploy check-resources --memory-mode uma --uma-gib 40 --model-dir /existing/model/cache
+go build -o hypermesh-host ./cmd/hypermesh-host
+./hypermesh-host check-resources --memory-mode uma --uma-gib 40 --model-dir /existing/model/cache
 ```
 
 Use UMA mode on both the AGX and N5 MAX. The 40 GiB allocation above is an
@@ -202,7 +202,7 @@ For example, a proposed 80 GiB allocation requires 176 GiB free cache disk.
 For a discrete GPU host:
 
 ```bash
-./hypermesh-deploy check-resources --memory-mode discrete --model-dir /existing/model/cache
+./hypermesh-host check-resources --memory-mode discrete --model-dir /existing/model/cache
 ```
 
 RAM comes from Linux MemTotal/MemAvailable, which describe OS-visible memory
@@ -249,14 +249,14 @@ without testing it on the target machine.
 
 ## Read-only preflight plan milestone
 
-Implemented: `hypermesh-deploy plan` combines measured resource admission,
+Implemented: `hypermesh-host plan` combines measured resource admission,
 hardware inspection/recommendations, and a bounded HTTPS readiness request.
 It reports all preliminary blockers together plus the remaining installation
 gates. Exit 0 means preliminary checks passed; it does not authorize installation.
 Exit 1 means a check failed, and exit 2 means invalid arguments.
 
 ```bash
-./hypermesh-deploy plan --memory-mode uma --uma-gib 40 \
+./hypermesh-host plan --memory-mode uma --uma-gib 40 \
   --model-dir /existing/model/cache \
   --aiuditor-check-url https://YOUR_AIUDITOR/ITS_READINESS_PATH > preflight.json
 ```
@@ -393,8 +393,8 @@ does not complete an operating mode. Physical acceptance remains pending.
 ## Signed operator CLI release payload
 
 Implemented in the release publisher: alongside the agent, publish
-`hypermesh-deploy_<version>_linux_arm64` and
-`hypermesh-deploy_<version>_linux_amd64`. Both binaries are included in the same
+`hypermesh-host_<version>_linux_arm64` and
+`hypermesh-host_<version>_linux_amd64`. Both binaries are included in the same
 GPG-signed checksums, blob release directory, channel artifact manifest, and
 GitHub release. Existing production releases retain their original signed
 artifact set when retried; adding the CLI requires a new version.
@@ -420,18 +420,18 @@ and the website-to-enrollment acceptance flow remain pending.
 
 ## Verified CLI download milestone
 
-Implemented: `hypermesh-deploy download` fetches a selected release's deploy
+Implemented: `hypermesh-host download` fetches a selected release's deploy
 binary without enrollment, using a separately supplied trusted public key and
 fingerprint allowlist. This is the verified download primitive, not automatic
 latest-release discovery or self-replacement.
 
 ```bash
-./hypermesh-deploy download \
+./hypermesh-host download \
   --release-url https://YOUR_RELEASE_SERVER/IMMUTABLE_RELEASE_DIRECTORY \
   --channel test --min-build 21 --arch arm64 \
   --trusted-key /path/to/independently-trusted-release.pub \
   --fingerprints YOUR_TRUSTED_FINGERPRINT \
-  --output ./hypermesh-deploy.verified
+  --output ./hypermesh-host.verified
 ```
 
 Use the actual release directory, which must serve checksums.txt, its binary
@@ -580,7 +580,7 @@ files or symlinks. It never executes the binary or enrolls the host.
 python3 bootstrap.py --release-url https://YOUR_RELEASE_SERVER/RELEASE_DIRECTORY \
   --channel test --min-build 24 --arch arm64 \
   --trusted-key /path/to/approved-release.pub --fingerprint APPROVED_FINGERPRINT \
-  --output ./hypermesh-deploy
+  --output ./hypermesh-host
 ```
 
 Use `--arch amd64` for Linux AMD/Intel x86-64. This is a Linux CLI download,
@@ -650,15 +650,15 @@ evidence, cancellation and output bounds. Physical AGX/N5 results are pending.
 
 ## Versioned Linux prerequisite plans
 
-Implemented: `hypermesh-deploy plan-setup` runs the existing resource/hardware
+Implemented: `hypermesh-host plan-setup` runs the existing resource/hardware
 and readiness checks, then builds a reviewable JSON proposal for prerequisite
 packages and optional headless boot configuration. It makes no system changes
 and never sets `install_authorized`. Exit 0 means the proposal is reviewable;
 exit 1 means blocked and exit 2 means invalid arguments.
 
 ```bash
-./hypermesh-deploy plan-setup --list-profiles
-./hypermesh-deploy plan-setup --memory-mode uma --uma-gib 40 \
+./hypermesh-host plan-setup --list-profiles
+./hypermesh-host plan-setup --memory-mode uma --uma-gib 40 \
   --model-dir /existing/model/cache \
   --aiuditor-check-url https://YOUR_AIUDITOR/ITS_READINESS_PATH \
   --profile auto --headless > setup-plan.json
@@ -733,8 +733,8 @@ WireGuard mode and any headless change. Then provide its exact
 `plan_sha256` explicitly:
 
 ```bash
-sudo ./hypermesh-deploy apply-setup --plan setup-plan.json --approve-plan REVIEWED_PLAN_SHA256
-sudo ./hypermesh-deploy setup-status --plan-sha REVIEWED_PLAN_SHA256
+sudo ./hypermesh-host apply-setup --plan setup-plan.json --approve-plan REVIEWED_PLAN_SHA256
+sudo ./hypermesh-host setup-status --plan-sha REVIEWED_PLAN_SHA256
 ```
 
 The approval digest is not a secret or signature. Root access plus this exact
@@ -809,7 +809,7 @@ Example (replace the uppercase placeholders with independently reviewed values;
 use `amd64` on x86-64):
 
 ```bash
-./hypermesh-deploy download --artifact agent --match-installer \
+./hypermesh-host download --artifact agent --match-installer \
   --release-url https://RELEASE_HOST/test/BUILD-COMMIT_PREFIX \
   --channel test --arch arm64 --min-build BUILD \
   --trusted-key /trusted/release-public.asc --fingerprints TRUSTED_FINGERPRINT \
@@ -842,7 +842,7 @@ trust key, public host configuration, signed release identity and every
 destination file's SHA-256 and mode; it contains no enrollment credential.
 
 ```bash
-./hypermesh-deploy plan-agent \
+./hypermesh-host plan-agent \
   --setup-plan setup-plan.json \
   --release-url https://RELEASE_HOST/test/BUILD-COMMIT_PREFIX --channel test \
   --trusted-key /trusted/release-public.asc --fingerprints TRUSTED_FINGERPRINT \
@@ -850,8 +850,8 @@ destination file's SHA-256 and mode; it contains no enrollment credential.
   --tenant-id TENANT_UUID --host-name REPORTED_HOST_NAME > agent-plan.json
 
 # Review agent-plan.json, including public trust, destinations and configuration.
-sudo ./hypermesh-deploy install-agent --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256
-sudo ./hypermesh-deploy agent-install-status --plan-sha AGENT_PLAN_SHA256
+sudo ./hypermesh-host install-agent --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256
+sudo ./hypermesh-host agent-install-status --plan-sha AGENT_PLAN_SHA256
 ```
 
 For production, select the immutable production release, `--channel prod` and
@@ -994,12 +994,12 @@ environment configuration. The issuer is the complete HTTPS Keycloak realm URL,
 not the dashboard URL. Production uses the production origins.
 
 ```bash
-sudo ./hypermesh-deploy register-agent \
+sudo ./hypermesh-host register-agent \
   --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256 \
   --issuer https://AUTH_HOST/realms/REALM \
   --dashboard-url https://test.hyperme.sh --class-id agx-large
 
-sudo ./hypermesh-deploy registration-status --plan-sha AGENT_PLAN_SHA256
+sudo ./hypermesh-host registration-status --plan-sha AGENT_PLAN_SHA256
 ```
 
 The headless command displays the device-login URL and code on stderr. Sign in
@@ -1083,9 +1083,9 @@ installed-payload tampering. CI results are recorded in the implementation PR.
 After `register-agent` reports `registered-inactive`, run:
 
 ```bash
-sudo ./hypermesh-deploy check-agent \
+sudo ./hypermesh-host check-agent \
   --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256
-sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
+sudo ./hypermesh-host onboarding-status --plan-sha AGENT_PLAN_SHA256
 ```
 
 This is an identity, protocol, AIuditor program and local preflight check. It requires the same
@@ -1157,7 +1157,7 @@ It is a **historical journal summary**, not a fresh hardware/network/service
 check, proof of valid credentials, or authorization to activate/sell.
 
 ```bash
-sudo ./hypermesh-deploy support-bundle \
+sudo ./hypermesh-host support-bundle \
   --plan-sha AGENT_PLAN_SHA256 \
   --setup-plan-sha SETUP_PLAN_SHA256 \
   --output /root/hypermesh-support-01.json
@@ -1309,9 +1309,9 @@ After registration, explicitly request one heartbeat with the same installed
 agent plan and its approved digest:
 
 ```bash
-sudo ./hypermesh-deploy check-agent \
+sudo ./hypermesh-host check-agent \
   --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256 --heartbeat
-sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
+sudo ./hypermesh-host onboarding-status --plan-sha AGENT_PLAN_SHA256
 ```
 
 Without `--heartbeat` or `--wireguard`, `check-agent` remains read-only on the plane. With the
@@ -1363,9 +1363,9 @@ activation remain pending.
 After deploying the plane's `onboarding_tunnel_v1` capability, run:
 
 ```bash
-sudo ./hypermesh-deploy check-agent \
+sudo ./hypermesh-host check-agent \
   --plan agent-plan.json --approve-plan AGENT_PLAN_SHA256 --wireguard
-sudo ./hypermesh-deploy onboarding-status --plan-sha AGENT_PLAN_SHA256
+sudo ./hypermesh-host onboarding-status --plan-sha AGENT_PLAN_SHA256
 ```
 
 `--heartbeat` may be combined with this flag. All installation, private identity,
@@ -1410,9 +1410,9 @@ After `apply-setup` has completed the reviewed prerequisites, explicitly test
 the UMA allocation from that same setup plan:
 
 ```bash
-sudo ./hypermesh-deploy check-runtime-memory \
+sudo ./hypermesh-host check-runtime-memory \
   --setup-plan setup-plan.json --approve-plan SETUP_PLAN_SHA256 --allocate
-sudo ./hypermesh-deploy runtime-memory-status --setup-plan-sha SETUP_PLAN_SHA256
+sudo ./hypermesh-host runtime-memory-status --setup-plan-sha SETUP_PLAN_SHA256
 ```
 
 The digest approves the exact installer build, machine/profile, package state and
@@ -1523,7 +1523,7 @@ reviewed model**; authenticated acquisition now has its own reviewed flow in
 2. Generate a read-only workload plan (no Docker invocation or download):
 
    ```sh
-   hypermesh-deploy plan-workload \\
+   hypermesh-host plan-workload \\
      --setup-plan setup-plan.json \\
      --catalog-id CATALOG_ID \\
      --image-digest 'REGISTRY/IMAGE@sha256:REVIEWED_64_HEX_DIGEST' \\
@@ -1536,9 +1536,9 @@ reviewed model**; authenticated acquisition now has its own reviewed flow in
    paths/pins and context allocation. Approve its own `plan_sha256`:
 
    ```sh
-   sudo hypermesh-deploy check-workload --plan workload-plan.json \\
+   sudo hypermesh-host check-workload --plan workload-plan.json \\
      --approve-plan WORKLOAD_PLAN_SHA256 --run
-   sudo hypermesh-deploy workload-status --plan-sha WORKLOAD_PLAN_SHA256
+   sudo hypermesh-host workload-status --plan-sha WORKLOAD_PLAN_SHA256
    ```
 
 `--run` authorizes pulling the **pinned runtime image** into Docker and executing
@@ -1621,7 +1621,7 @@ and [native completion response](https://github.com/ggml-org/llama.cpp/blob/mast
 Include the exact workload plan digest when exporting installer diagnostics:
 
 ```sh
-sudo hypermesh-deploy support-bundle \\
+sudo hypermesh-host support-bundle \\
   --setup-plan-sha SETUP_PLAN_SHA256 \\
   --workload-plan-sha WORKLOAD_PLAN_SHA256 \\
   --output /root/hypermesh-support.json

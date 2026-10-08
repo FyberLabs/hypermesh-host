@@ -21,9 +21,9 @@ Use a real AIuditor baseline and real model/catalog pins, not placeholders.
 Install the verified CLI at a root-owned absolute path, preserving its bytes:
 
 ```sh
-sudo install -m 0755 ./hypermesh-deploy /usr/local/bin/hypermesh-deploy
+sudo install -m 0755 ./hypermesh-host /usr/local/bin/hypermesh-host
 sudo python3 scripts/host-acceptance.py \
-  --installer /usr/local/bin/hypermesh-deploy \
+  --installer /usr/local/bin/hypermesh-host \
   --certification-plan /root/host-plans/certification-plan.json \
   --phase initial-ready --output /root/acceptance-initial.json
 ```
@@ -44,7 +44,7 @@ still shows the same host and no selling. Then collect:
 
 ```sh
 sudo python3 scripts/host-acceptance.py \
-  --installer /usr/local/bin/hypermesh-deploy \
+  --installer /usr/local/bin/hypermesh-host \
   --certification-plan /root/host-plans/certification-plan.json \
   --maintenance-plan /root/host-plans/maintenance-plan.json \
   --phase after-maintenance --output /root/acceptance-after-maintenance.json
