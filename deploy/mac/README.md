@@ -1,6 +1,6 @@
 # Mac / Apple Silicon (lab scaffold)
 
-This is **not** a certified Path A/B box. Path A (AGX Orin) and Path B (Seeed Super J4012) stay Jetson-first.
+This is **not** a certified host class. The certified Jetson classes (AGX Orin and Seeed Super J4012) stay first.
 
 Host-local experimental. Cert still means **Fyber-published hashes**. Do not market TOPS as tokens/sec. TOPS is not tok/s.
 

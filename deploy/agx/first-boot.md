@@ -117,7 +117,7 @@ Later agent restarts do not stop `hypermesh-wg`. `wg show hypermesh` should keep
 
 Empty `image_digest` POSTs `passed=false` (no soak image; not a running instance). Bare `sha256:hex` fails. The host never makes up a registry digest or `repo@digest`. It computes `image_hash` from the file it ran and never fabricates one. Catalog id stays `llama-3.1-8b-q4`.
 
-Path B suite telem hash (`image_hash` from `HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, or a hash of `/etc/nv_tegra_release` / `/etc/os-release`) is **not** the catalog `file_hash`.
+The certification suite's telem hash (`image_hash` from `HYPERMESH_IMAGE_HASH`, `/etc/hypermesh/image-hash`, or a hash of `/etc/nv_tegra_release` / `/etc/os-release`) is **not** the catalog `file_hash`.
 
 Build the on-box image after overlay: [workload/README.md](workload/README.md). Target name `ghcr.io/fyberlabs/hypermesh-test`. Do not build that image on x86. Docker 29 Buildx does not accept `--runtime=nvidia` at build — the Dockerfile links CUDA devel stubs. Verify the running container on the AGX with `--runtime=nvidia --platform linux/arm64` (not `--gpus`). Pin the sha256 after the on-box build (CI may pin a digest then; the host never generates one). The default FROM tag is `nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04` (compile in-image; matches host CUDA 13.2.1; Orin sm_87) and stays **unverified-until-AGX-build** until someone on this box pulls it and the build succeeds. Runtime alternative `13.2.1-runtime-ubuntu24.04` is for a copy-a-binary recipe only. L4T major must match the host (r39). There is no `l4t-jetpack:r39.2.1` image. Do not use `l4t-jetpack` / `r36.*` / `ubuntu:22.04` / JP6. If 13.2.1 hits the driver-allowlist gap on-box, keep **13.0.0 only** as the documented fallback (`13.0.0-devel-ubuntu24.04` with `-e NVIDIA_DISABLE_REQUIRE=true`) — rescue, not a second default.
 
@@ -125,7 +125,7 @@ Build the on-box image after overlay: [workload/README.md](workload/README.md). 
 
 ### thin-v1
 
-`path_b` collects image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, `path_b` still passes the hardware telem part so enroll/green is not stuck before `lease_start`, and records that inference was skipped.
+The lab soak job (`path_b`, to be renamed `lab_soak`) collects image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, `path_b` still passes the hardware telem part so enroll/green is not stuck before `lease_start`, and records that inference was skipped.
 
 `instance_check` must hit that endpoint and fail if there is no real completion. That is the “container answers” gate. It still needs the GGUF-backed image running.
 
