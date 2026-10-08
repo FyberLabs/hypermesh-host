@@ -363,7 +363,7 @@ func (tr timeoutTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	return nil, fmt.Errorf("test transport stopped")
 }
-func TestExchangeBoundsInjectedClientTimeout(t *testing.T) {
+func TestIdentityRequestsBoundInjectedClientTimeout(t *testing.T) {
 	key, err := newKey()
 	if err != nil {
 		t.Fatal(err)
@@ -378,6 +378,10 @@ func TestExchangeBoundsInjectedClientTimeout(t *testing.T) {
 		_, err = p.exchange(context.Background(), state{Base: "https://example.test", Tenant: tenant, Device: device, Request: request, Authority: "local", Plane: "local"}, key, "", "bootstrap", true, time.Now())
 		if err == nil {
 			t.Fatal("expected transport failure")
+		}
+		// Discovery runs before the first exchange and has the same bound.
+		if _, _, _, err = p.discover(context.Background(), "https://example.test", tenant); err == nil {
+			t.Fatal("expected discovery transport failure")
 		}
 		if client.Timeout != timeout {
 			t.Fatal("mutated injected client")

@@ -534,11 +534,14 @@ func (p Provider) discover(ctx context.Context, base, tenant string) (string, st
 		return "", "", "", e
 	}
 	req.Header.Set("X-Tenant-ID", tenant)
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Same bound as the exchange: at most 15 seconds, shorter if injected.
+	client := &http.Client{Timeout: 15 * time.Second}
 	if p.HTTP != nil {
 		clone := *p.HTTP
 		client = &clone
-		client.Timeout = 30 * time.Second
+		if client.Timeout <= 0 || client.Timeout > 15*time.Second {
+			client.Timeout = 15 * time.Second
+		}
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, e := client.Do(req)
