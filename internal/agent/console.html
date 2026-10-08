@@ -23,7 +23,7 @@
 </head>
 <body>
   <h1>Hypermesh owner</h1>
-  <p class="hint">Unix socket <code>owner.sock</code>. Bearer required. Same actuators as <code>POST /v0/sell_pause</code> and <code>POST /v0/lease_stop</code>. Not a control plane.</p>
+  <p class="hint">Unix socket <code>owner.sock</code>. Bearer required. Same actuators as <code>POST /v0/sell_pause</code>, <code>POST /v0/sell_resume</code> and <code>POST /v0/lease_stop</code>. Not a control plane.</p>
 
   <label for="token">Bearer token</label>
   <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="contents of owner.token">
@@ -45,6 +45,7 @@
     <label for="until">sell_pause until (RFC3339, optional)</label>
     <input id="until" type="text" placeholder="omit for indefinite">
     <button type="button" id="pause">Pause sell</button>
+    <button type="button" id="resume">Resume selling</button>
     <button type="button" id="stop">Stop lease</button>
   </div>
   <p id="action" class="hint"></p>
@@ -111,6 +112,7 @@
     document.getElementById("path_b").textContent = pparts.join(" ");
     document.getElementById("raw").textContent = JSON.stringify(status, null, 2);
     document.getElementById("stop").disabled = !(status.lease && status.lease.lease_id);
+    document.getElementById("resume").disabled = status.sell_state !== "paused" || status.maintenance === true;
   }
 
   function readJSON(r) {
@@ -156,6 +158,23 @@
       .catch(function (e) { showErr(e.message || String(e)); });
   }
 
+  function resume() {
+    showErr("");
+    if (!token()) {
+      showErr("Bearer token required.");
+      return;
+    }
+    fetch("/v0/sell_resume", { method: "POST", headers: headers(), body: "{}" })
+      .then(readJSON)
+      .then(function (out) {
+        var msg = "sell_resume passed=" + (out && out.passed);
+        if (out && out.reason) msg += " reason=" + out.reason;
+        document.getElementById("action").textContent = msg;
+        return refresh();
+      })
+      .catch(function (e) { showErr(e.message || String(e)); });
+  }
+
   function stopLease() {
     showErr("");
     if (!token()) {
@@ -178,6 +197,7 @@
 
   document.getElementById("refresh").addEventListener("click", refresh);
   document.getElementById("pause").addEventListener("click", pause);
+  document.getElementById("resume").addEventListener("click", resume);
   document.getElementById("stop").addEventListener("click", stopLease);
   render(status);
 })();

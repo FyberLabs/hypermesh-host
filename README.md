@@ -85,7 +85,9 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 | `lease_stop` | Stop only when `job.lease_id` matches the local handle. Mismatch (including empty `lease_id` with a handle) POSTs `passed=false` and does not `docker stop` / `docker rm`. After a matching stop, `docker rm` the named container (`hypermesh-<lease_id>`) so the next `lease_start` is not blocked on an Exited leftover. No handle is a soft no-op (`passed=true`) and may omit `image_hash`; prefer the handle digest or an existing host hash when available. An already-gone container is also a soft success. A matching stop, and a stop with no local handle, clears the pending model pin for `catalog_id` (or the handle's catalog). Do not invent a hash. Do not bounce WireGuard. The host peer stays up until GET says `revoked` or 204. |
 | `lease_cancel` | Clear the pending pin for `catalog_id`. When `lease_id` is the running lease, stop that container the same way as `lease_stop`, then POST `passed=true` with reason `lease_cancel`. A cancel that does not match a running lease still clears the pin and passes. The plane does not send `lease_cancel` yet, so a cancelled lease clears its pin only when the pending TTL (default 30m) passes. |
 | `lease_expiry` | Same pin clear as `lease_cancel`. A matching running lease is stopped. Reason on success is `lease_expiry`. The plane does not send `lease_expiry` yet, so an expired lease clears its pin only when the pending TTL (default 30m) passes. |
-| `sell_pause` | Persist local sell posture in `$STATE_DIR/sell.json`. Matching `device_id` sets `sell_state=paused` (optional `until` RFC3339; omit = indefinite). Mismatch POSTs `passed=false` and the current real `sell_state` (usually `selling`) without flipping. Already paused is a no-op `passed=true`. While paused, new `lease_start` is refused (`passed=false`); the current lease is left running. When `until` is reached, posture returns to `selling`. Not `path_b`. |
+| `sell_pause` | Persist local sell posture in `$STATE_DIR/sell.json`. Matching `device_id` sets `sell_state=paused` (optional `until` RFC3339; omit = indefinite). Mismatch POSTs `passed=false` and the current real `sell_state` (usually `selling`) without flipping. Already paused is a no-op `passed=true`. While paused, new `lease_start` is refused (`passed=false`); the current lease is left running. When `until` is reached, posture returns to `selling`. The stored posture records `"source":"owner"`. An `until` at or before the host clock is a resume: the pause is cleared, `sell_state=selling` is persisted and POSTed (the plane resumes selling this way; an earlier agent stores the ended pause and returns to `selling` on its next posture check). During an installer maintenance hold a resume POSTs `passed=false` (`host maintenance hold`) and `sell_state=paused`. Not `path_b`. |
+
+Selling starts as soon as certification passes. Activation writes a temporary `{"sell_state":"paused","source":"activation"}` guard before it starts the service, so a failed start can be retried while the plane still reports the host paused. Once startup is verified, the installer calls `POST /v0/activation_release` on the owner socket, which clears only that guard; an owner pause stays. A maintenance hold writes `{"sell_state":"paused"}` and keeps the posture to restore in `sell-owner.json`: the owner pause if there is one, otherwise selling. When the hold is removed that posture is restored. Outside a maintenance hold, a stored pause with no `source` and no `until` comes from before sources existed. If the file is exactly the compact `{"sell_state":"paused"}` that earlier installers wrote at activation, the agent clears it and the host sells. The agent itself always writes indented JSON, so any other sourceless pause (an owner command, a control-plane `sell_pause` job, or a maintenance hold under an earlier agent) is kept and labeled as an owner pause; `hypermesh-deploy sell resume` clears it. A pause with an `until` is always an owner pause.
 
 Certification (`path_b`) is also the catalog bench. On that job this box inspects a local workload image and, when the probe returns `usage.completion_tokens`, POSTs `/agent/scorecard` for `pack-v1`. The control plane tags the catalog row from that report. No usage field or no local `repo@sha256` means that row stays untagged. The prompt stays off the result body.
 
@@ -107,12 +109,13 @@ On agent start (after enroll / stored identity): create `owner.token` if missing
 
 | Call | Path | Body | Response |
 |---|---|---|---|
-| Status | `GET /v0/status` | none | JSON only: `{device_id, sell_state, until?, lease, path_b, backend}`. `lease` is `null` or `{lease_id, catalog_id?, image_digest?}` from the local handle. `path_b` is host facts (`boot_id_present`, `boot_id?`, `completions_up`). This box logs CP `path_b_state` on heartbeat and does not persist it — status does not invent that field. `backend` is the log label `cuda-jetson`. No `device_secret`, no WireGuard keys. Does not append `owner-effects.jsonl`. |
-| Console | `GET /` and `GET /v0/console` | none | One HTML page on the same unix socket. Same Bearer. Embeds the current status JSON; the page fetches `/v0/status` and buttons call `sell_pause` / `lease_stop` (`lease_id` from status). |
+| Status | `GET /v0/status` | none | JSON only: `{device_id, sell_state, until?, pause_source?, maintenance, work_pending, lease, path_b, backend}`. `pause_source` is `owner` or `activation` while paused outside maintenance. `lease` is `null` or `{lease_id, catalog_id?, image_digest?}` from the local handle. `path_b` is host facts (`boot_id_present`, `boot_id?`, `completions_up`). This box logs CP `path_b_state` on heartbeat and does not persist it — status does not invent that field. `backend` is the log label `cuda-jetson`. No `device_secret`, no WireGuard keys. Does not append `owner-effects.jsonl`. |
+| Console | `GET /` and `GET /v0/console` | none | One HTML page on the same unix socket. Same Bearer. Embeds the current status JSON; the page fetches `/v0/status` and buttons call `sell_pause` / `sell_resume` / `lease_stop` (`lease_id` from status). |
 | Pause sell | `POST /v0/sell_pause` | optional `{until?, device_id?}`. Device is this box. `until` is RFC3339. If `device_id` is present it must match the enrolled id. | `{passed, sell_state, until?, device_id?}`. Never `passed=true` with `sell_state=n/a`. Same `sellPause` actuator as the CP job. |
+| Resume sell | `POST /v0/sell_resume` | optional `{device_id?}` | `{passed, sell_state, device_id?, reason?}`. Same resume as a CP `sell_pause` whose `until` has passed. |
 | Stop lease | `POST /v0/lease_stop` | `{lease_id}` required | `{passed, image_hash?}`. Same H1 identity as the CP `lease_stop` job. |
 
-After each authorized call attempt (pass or fail), this box appends one JSON line to `$STATE_DIR/owner-effects.jsonl`: `ts` (RFC3339), `tool` (`hypermesh.sell_pause` or `hypermesh.lease_stop`), `args`, `passed`, and the relevant fields (`sell_state` / `until` / `lease_id`). Plane-down receipts for Brewnix — not a `fyber.receipt` schema.
+After each authorized call attempt (pass or fail), this box appends one JSON line to `$STATE_DIR/owner-effects.jsonl`: `ts` (RFC3339), `tool` (`hypermesh.sell_pause`, `hypermesh.sell_resume` or `hypermesh.lease_stop`), `args`, `passed`, and the relevant fields (`sell_state` / `until` / `lease_id`). Plane-down receipts for Brewnix — not a `fyber.receipt` schema.
 
 CLI (talks to the socket + token file; does not contact the control plane):
 
@@ -120,8 +123,11 @@ CLI (talks to the socket + token file; does not contact the control plane):
 hypermesh-agent owner status
 hypermesh-agent owner console
 hypermesh-agent owner sell-pause [--until=RFC3339]
+hypermesh-agent owner sell-resume
 hypermesh-agent owner lease-stop --lease-id=<id>
 ```
+
+On an installed host, `sudo hypermesh-deploy sell pause [--until=RFC3339]`, `sudo hypermesh-deploy sell resume` and `sudo hypermesh-deploy sell status` call the same socket using the default state directory.
 
 `status` prints `GET /v0/status`. `console` prints unix-socket instructions (Bearer via curl / CLI bridge; this box does not bind TCP). `-state-dir` / `HYPERMESH_STATE_DIR` must point at the running agent's state dir.
 
@@ -256,7 +262,7 @@ deploy/mac          Apple Silicon Metal notes (lab; llama-cpp-cpu on darwin)
 
 ## Out of scope here
 
-Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs. AIuditor witness is a sidecar (`deploy/agx/aiuditor-witness.service`), not this binary. Owner console does not bind loopback/LAN/public TCP, does not enqueue CP jobs, does not add `sell_resume`, a drain mega-job, `reason_code`, `preempt_mode=hard`, Path B, SociACL, WebAuthn, OIDC, or privilege_grant.
+Payment-service, Kafka, a full host-scorecard, Seeed factory flash, public bot rental, fake tok/s, renter prompts in logs. AIuditor witness is a sidecar (`deploy/agx/aiuditor-witness.service`), not this binary. Owner console does not bind loopback/LAN/public TCP, does not enqueue CP jobs, does not add a drain mega-job, `reason_code`, `preempt_mode=hard`, Path B, SociACL, WebAuthn, OIDC, or privilege_grant.
 
 
 ## Enrollment identity

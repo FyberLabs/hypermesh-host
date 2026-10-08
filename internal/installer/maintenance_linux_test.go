@@ -36,3 +36,13 @@ func TestMaintenanceRecoversInterruptedStopWithoutOwnerSocket(t *testing.T){
  Stop:func(context.Context)error{stopped++;return nil},Stopped:func(context.Context)error{return nil},Save:func(maintenanceJournal)error{return nil}}
  if err:=drainMaintenance(context.Background(),p,&j,d,false);err!=nil||stopped!=1||j.State!="stopped"{t.Fatal(err,j.State)}
 }
+
+func TestMaintenanceHoldReleasedOnlyAfterResumeCheckpoint(t *testing.T){
+ hold:=fmt.Errorf("matching maintenance hold required")
+ if released,err:=maintenanceHoldReleased(nil,false,"stopped");released||err!=nil{t.Fatal("present hold treated as released")}
+ for _,state:=range []string{"resuming","complete"}{
+  if released,err:=maintenanceHoldReleased(hold,true,state);!released||err!=nil{t.Fatal("released hold blocks retry",state)}
+ }
+ if _,err:=maintenanceHoldReleased(hold,true,"stopped");err==nil{t.Fatal("missing hold accepted before resume began")}
+ if _,err:=maintenanceHoldReleased(hold,false,"resuming");err==nil{t.Fatal("mismatched hold accepted")}
+}
