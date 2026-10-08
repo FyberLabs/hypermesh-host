@@ -1177,8 +1177,9 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	}
 	if h == nil {
 		// Soft no-op: already stopped / no local handle. Do not fail.
-		// Prefer an existing hash; never generate one. A pin for a lease
-		// that never started is still released.
+		// Prefer an existing hash. Otherwise compute a measured hash from
+		// /etc/nv_tegra_release or /etc/os-release; never make one up. A pin
+		// for a lease that never started is still released.
 		a.clearPendingForLease(job, nil)
 		a.log.Info("lease_stop", "lease_id", job.LeaseID, "reason", "no local handle")
 		snap, _ := a.telem.Collect(ctx)
