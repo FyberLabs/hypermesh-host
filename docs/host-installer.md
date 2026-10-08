@@ -1979,9 +1979,10 @@ reuse the active enrollment.
 On the plane, re-enrolling (enroll token or guided registration) under the same
 host name for the same owner retires the old install automatically: it is archived,
 its leases and tunnels end, and every configured AIuditor authority revokes its
-signing key, management and contract credentials and host connection. If an
-authority cannot be reached the enrollment fails with a retryable error and the old
-install stays active. A name enrolled by another owner is refused with 409.
+signing key, management and contract credentials and host connection. If no
+authority can be reached the enrollment fails with a retryable error and the old
+install stays active. An enroll token never replaces a browser-registered install,
+and a name enrolled by another owner is refused with 409.
 
 A replacement enrollment now automatically binds a fresh signing key before its
 first authenticated agent operation. The archived checkpoint marks this as a

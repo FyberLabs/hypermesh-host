@@ -278,8 +278,8 @@ new token gets a fresh key and server-issued device ID. Restarts with that same
 token reuse the persisted identity and key. Re-enrolling under the same host name
 for the same owner retires the old install automatically: the plane archives it,
 ends its leases and tunnels, and AIuditor revokes its signing key, credentials and
-host connection. A name enrolled by another owner is still refused; retire that
-box from its owner's dashboard first. Upgrade the plane to the enrollment-name/key
+host connection. A name enrolled by another owner, or by a browser-registered
+install, is still refused; retire that box from its owner's dashboard first. Upgrade the plane to the enrollment-name/key
 API first.
 
 ## Hardware preflight and generic benchmarks

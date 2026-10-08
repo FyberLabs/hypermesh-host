@@ -662,17 +662,13 @@ func (p Provider) RetireEnrollment(ctx context.Context, device string, signing b
 		f.Close()
 		present = append(present, path)
 	}
-	if signing && (len(present) == 0 || present[0] != p.Path) {
-		nonce := make([]byte, 16)
-		if _, err = rand.Read(nonce); err != nil {
-			return err
-		}
-		// Archived checkpoints record the retired device; so does this marker.
-		if err = save(p.Path+".retired-"+hex.EncodeToString(nonce), state{Schema: 1, Device: device}); err != nil {
-			return err
-		}
-	}
 	var moved [][2]string
+	rollback := func(err error) error {
+		for i := len(moved) - 1; i >= 0; i-- {
+			os.Rename(moved[i][1], moved[i][0])
+		}
+		return err
+	}
 	for _, path := range present {
 		nonce := make([]byte, 16)
 		if _, err = rand.Read(nonce); err == nil {
@@ -682,10 +678,19 @@ func (p Provider) RetireEnrollment(ctx context.Context, device string, signing b
 				continue
 			}
 		}
-		for i := len(moved) - 1; i >= 0; i-- {
-			os.Rename(moved[i][1], moved[i][0])
+		return rollback(err)
+	}
+	// Archived checkpoints record the retired device; so does this marker.
+	// Write it only after every checkpoint moved, and undo the moves if it
+	// cannot be written, so a failed retirement leaves the host as it was.
+	if signing && (len(present) == 0 || present[0] != p.Path) {
+		nonce := make([]byte, 16)
+		if _, err = rand.Read(nonce); err != nil {
+			return rollback(err)
 		}
-		return err
+		if err = save(p.Path+".retired-"+hex.EncodeToString(nonce), state{Schema: 1, Device: device}); err != nil {
+			return rollback(err)
+		}
 	}
 	dir, err := os.Open(filepath.Dir(p.Path))
 	if err != nil {
