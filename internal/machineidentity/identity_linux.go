@@ -760,11 +760,11 @@ func (p Provider) RetireEnrollment(ctx context.Context, device string, signing b
 		if _, err = rand.Read(nonce); err != nil {
 			return rollback(err)
 		}
-		path := p.Path + ".retired-" + hex.EncodeToString(nonce)
-		if err = save(path, state{Schema: 1, Device: device}); err != nil {
+		// Track the marker first: save can fail after the file is visible.
+		marker = p.Path + ".retired-" + hex.EncodeToString(nonce)
+		if err = save(marker, state{Schema: 1, Device: device}); err != nil {
 			return rollback(err)
 		}
-		marker = path
 	}
 	// A retirement that cannot be made durable is undone, so the current
 	// enrollment keeps working if re-enrollment stops here.
