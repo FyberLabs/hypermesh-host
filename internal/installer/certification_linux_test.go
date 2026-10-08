@@ -137,7 +137,7 @@ func TestActivationRequiresStableSystemdInvocation(t *testing.T){
  stable:="ActiveState=active\nSubState=running\nMainPID=123\nNRestarts=0\nInvocationID="+strings.Repeat("a",32)
  for _,kind:=range []string{"pass","exited","pid","restarts","invocation","cancel","invalid"}{
   t.Run(kind,func(t *testing.T){
-   count:=0;ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel()
+   count:=0;ctx,cancel:=context.WithTimeout(context.Background(),40*time.Millisecond);defer cancel()
    err:=waitStableAgent(ctx,5*time.Millisecond,time.Millisecond,func(context.Context)([]byte,error){
     count++;raw:=stable
     if count>1{
@@ -152,8 +152,32 @@ func TestActivationRequiresStableSystemdInvocation(t *testing.T){
     if kind=="invalid"{raw="ActiveState=active"}
     return []byte(raw),nil
    })
-   if (err==nil)!=(kind=="pass"){t.Fatalf("%s: %v",kind,err)}
+   if (err==nil)!=(kind=="pass"||kind=="pid"||kind=="restarts"||kind=="invocation"){t.Fatalf("%s: %v",kind,err)}
    if kind=="pass"&&count<2{t.Fatal("accepted one instantaneous state")}
   })
  }
+}
+
+func TestActivationRejectsCrashLoop(t *testing.T) {
+ ctx,cancel:=context.WithTimeout(context.Background(),30*time.Millisecond);defer cancel()
+ n:=0
+ err:=waitStableAgent(ctx,10*time.Millisecond,time.Millisecond,func(context.Context)([]byte,error){
+  n++
+  return []byte(fmt.Sprintf("ActiveState=active\nSubState=running\nMainPID=%d\nNRestarts=%d\nInvocationID=%s",n,n,strings.Repeat("a",32))),nil
+ })
+ if err==nil { t.Fatal("crash loop accepted") }
+}
+
+func TestActivationWaitsThroughUpdateRestart(t *testing.T) {
+ ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel()
+ n:=0
+ stable:="ActiveState=active\nSubState=running\nMainPID=123\nNRestarts=0\nInvocationID="+strings.Repeat("a",32)
+ err:=waitStableAgent(ctx,10*time.Millisecond,time.Millisecond,func(context.Context)([]byte,error){
+  n++
+  if n==2 {return []byte("ActiveState=deactivating\nSubState=stop-sigterm\nMainPID=0"),nil}
+  if n>2 {return []byte(strings.Replace(stable,"MainPID=123","MainPID=124",1)),nil}
+  return []byte(stable),nil
+ })
+ if err!=nil {t.Fatal(err)}
+ if n<5 {t.Fatal("replacement was not observed for a stable interval")}
 }

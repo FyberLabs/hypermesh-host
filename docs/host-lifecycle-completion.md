@@ -120,3 +120,25 @@ checkpoint; response loss and reboot do not require owner login. The plane
 retires bootstrap bearer access when the key is bound. Companion Panopticon
 migration/service/edge deployment precedes this host release. Physical acceptance
 and the separately documented continuation dashboard/update work remain pending.
+
+
+## Activation and immediate agent updates
+
+Startup verification allows an agent update to replace the systemd invocation.
+Every stop or invocation change resets the required 15-second stable interval;
+a two-minute overall deadline still rejects crash loops or a service that never
+starts. The updater queues its own restart with systemd's nonblocking option so
+it does not wait on its own termination.
+
+If an older agent cannot yet release the activation pause, setup remains
+incomplete and the saved continuation retries after its update. A missing
+activation-release route is not successful completion and does not require the
+owner to run a separate selling command. Stable process verification alone does
+not grant selling: the existing activation release and live readiness gates
+still apply.
+
+This addresses the AGX activation/update collision seen on October 8, where a
+healthy replacement was stopped during activation and its build was subsequently
+marked rolled back. Existing rollback exclusions, registration keys and owner
+approvals are preserved; a newer signed release can advance normally. Physical
+acceptance of this correction remains pending deployment to AGX.
