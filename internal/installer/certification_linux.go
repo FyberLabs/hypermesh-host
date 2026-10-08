@@ -320,7 +320,7 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
   raw,e:=(setupSource{}).output(ctx,"systemctl","is-active","hypermesh-agent.service")
   if e==nil&&strings.TrimSpace(string(raw))=="active"{
    if err=verifyAgentStartup(ctx);err!=nil||resume{return err}
-   return releaseActivationSell(ctx)
+   return releaseActivationSell(ctx,diagnostic)
   }
  }
  // Retry after a crash first returns our previously started service to inactive.
@@ -375,7 +375,7 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
  }
  if err=startCertified(ctx,j,*permit.PermitExpiresAt,d);err!=nil||resume{return err}
  // A certified host sells as soon as its service is verified.
- return releaseActivationSell(ctx)
+ return releaseActivationSell(ctx,diagnostic)
 }
 
 const activationSellPath="/var/lib/hypermesh/sell.json"
@@ -415,31 +415,38 @@ func prepareActivationSell(path string,now time.Time)error{
 
 // releaseActivationSell asks the running agent to clear the activation guard.
 // An owner pause is left in place.
-func releaseActivationSell(ctx context.Context)error{
- return releaseActivationSellAt(ctx,"/var/lib/hypermesh",45*time.Second)
+func releaseActivationSell(ctx context.Context,diagnostic io.Writer)error{
+ return releaseActivationSellAt(ctx,"/var/lib/hypermesh",45*time.Second,5*time.Minute,diagnostic)
 }
-func releaseActivationSellAt(ctx context.Context,stateDir string,limit time.Duration)error{
- release,cancel:=context.WithTimeout(ctx,limit);defer cancel()
+
+// releaseActivationSellAt never edits sell.json itself. An agent that predates
+// the release route updates itself to the current release on its first job
+// loop after startup, so a missing route extends the wait to updateWait. If
+// the agent still has no route then, the guard stays and the owner is told how
+// to start selling.
+func releaseActivationSellAt(ctx context.Context,stateDir string,limit,updateWait time.Duration,diagnostic io.Writer)error{
+ deadline:=time.Now().Add(limit)
+ routeMissing:=false
  for{
   var reply struct{SellState string `json:"sell_state"`;PauseSource string `json:"pause_source"`}
-  err:=ownerSocketRequest(release,stateDir,"POST","/v0/activation_release",map[string]string{},&reply)
-  if errors.Is(err,errOwnerRouteMissing){return releaseActivationSellFile(filepath.Join(stateDir,"sell.json"))}
+  err:=ownerSocketRequest(ctx,stateDir,"POST","/v0/activation_release",map[string]string{},&reply)
   if err==nil&&reply.PauseSource!=agent.SellSourceActivation&&reply.SellState!=""{return nil}
+  if errors.Is(err,errOwnerRouteMissing)&&!routeMissing{
+   routeMissing=true
+   if wait:=time.Now().Add(updateWait);wait.After(deadline){deadline=wait}
+  }
+  if err==nil{routeMissing=false}
+  if !time.Now().Before(deadline){
+   if routeMissing{
+    fmt.Fprintln(diagnostic,"The service is running, but its agent has not yet updated to a version that can end the activation pause, so this host stays paused. Once the agent has updated, start selling with: sudo hypermesh-deploy sell resume")
+    return nil
+   }
+   return fmt.Errorf("service is active but its activation sell pause was not released; run the same command again")
+  }
   timer:=time.NewTimer(time.Second)
   select{
-  case <-release.Done():timer.Stop()
-   return fmt.Errorf("service is active but its activation sell pause was not released; run the same command again")
+  case <-ctx.Done():timer.Stop();return ctx.Err()
   case <-timer.C:
   }
  }
-}
-
-// releaseActivationSellFile clears the guard for an agent that predates the
-// release route, for example one kept by an installer-only upgrade. Only the
-// exact guard this installer wrote is replaced; any other posture is the
-// agent's and is left alone.
-func releaseActivationSellFile(path string)error{
- if _,err:=readSetupRegular(path,true);err!=nil{return fmt.Errorf("cannot inspect sell posture")}
- _,err:=replaceSellIfUnchanged(path,activationSellGuard,[]byte("{\"sell_state\":\"selling\"}\n"))
- return err
 }

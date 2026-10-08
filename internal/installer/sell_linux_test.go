@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -176,105 +178,50 @@ func TestSellCommandReportsRefusal(t *testing.T) {
 	}
 }
 
-func TestActivationReleaseWithAgentWithoutReleaseRoute(t *testing.T) {
+func TestActivationReleaseWaitsForAgentUpdate(t *testing.T) {
+	var calls atomic.Int32
+	dir := fakeOwnerSocket(t, func(w http.ResponseWriter, r *http.Request) {
+		// The first answers come from the older agent; then it has updated.
+		if calls.Add(1) <= 2 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sell_state":"selling"}`))
+	})
+	var diag bytes.Buffer
+	if err := releaseActivationSellAt(context.Background(), dir, 0, 10*time.Second, &diag); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 3 || diag.Len() != 0 {
+		t.Fatalf("calls=%d diag=%q", calls.Load(), diag.String())
+	}
+}
+
+func TestActivationReleaseLeavesGuardWhenAgentCannotRelease(t *testing.T) {
 	dir := fakeOwnerSocket(t, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	sell := filepath.Join(dir, "sell.json")
 	if err := os.WriteFile(sell, activationSellGuard, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := releaseActivationSellAt(context.Background(), dir, 5*time.Second); err != nil {
+	var diag bytes.Buffer
+	if err := releaseActivationSellAt(context.Background(), dir, 0, 1500*time.Millisecond, &diag); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := os.ReadFile(sell)
-	if strings.TrimSpace(string(raw)) != `{"sell_state":"selling"}` {
-		t.Fatalf("guard not released: %s", raw)
+	if !strings.Contains(diag.String(), "sudo hypermesh-deploy sell resume") {
+		t.Fatalf("no resume instruction: %q", diag.String())
 	}
-	// A pause the agent wrote after the guard is left alone.
-	owner := "{\n  \"sell_state\": \"paused\"\n}\n"
-	if err := os.WriteFile(sell, []byte(owner), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := releaseActivationSellAt(context.Background(), dir, 5*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	if raw, _ := os.ReadFile(sell); string(raw) != owner {
-		t.Fatalf("agent pause replaced: %s", raw)
+	if raw, _ := os.ReadFile(sell); !bytes.Equal(raw, activationSellGuard) {
+		t.Fatalf("installer changed sell.json: %s", raw)
 	}
 }
 
-func TestActivationReleaseFallbackKeepsPauseWrittenDuringRelease(t *testing.T) {
-	dir := t.TempDir()
-	sell := filepath.Join(dir, "sell.json")
-	if err := os.WriteFile(sell, activationSellGuard, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	owner := []byte("{\n  \"sell_state\": \"paused\"\n}\n")
-	wrote := false
-	beforeSellSwap = func() {
-		if wrote {
-			return
-		}
-		wrote = true
-		// The agent applies a pause after the guard was inspected, writing by
-		// temp file and rename as it does in production.
-		tmp := filepath.Join(dir, "sell.json.tmp-agent")
-		if err := os.WriteFile(tmp, owner, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Rename(tmp, sell); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() { beforeSellSwap = func() {} })
-	if err := releaseActivationSellFile(sell); err != nil {
-		t.Fatal(err)
-	}
-	if raw, _ := os.ReadFile(sell); !bytes.Equal(raw, owner) {
-		t.Fatalf("pause written during release was overwritten: %s", raw)
-	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
-		t.Fatalf("temporary files left behind: %v", entries)
-	}
-}
-
-func TestReplaceSellWithoutExchangeComparesBeforeRename(t *testing.T) {
-	dir := t.TempDir()
-	sell := filepath.Join(dir, "sell.json")
-	tmp := filepath.Join(dir, ".sell-next")
-	next := []byte("{\"sell_state\":\"selling\"}\n")
-	for _, tc := range []struct {
-		current string
-		want    bool
-	}{{string(activationSellGuard), true}, {"{\n  \"sell_state\": \"paused\"\n}\n", false}} {
-		if err := os.WriteFile(sell, []byte(tc.current), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(tmp, next, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		replaced, err := renameIfUnchanged(tmp, sell, activationSellGuard)
-		if err != nil || replaced != tc.want {
-			t.Fatalf("%q: replaced=%v err=%v", tc.current, replaced, err)
-		}
-		raw, _ := os.ReadFile(sell)
-		if tc.want != bytes.Equal(raw, next) {
-			t.Fatalf("%q: file now %s", tc.current, raw)
-		}
-		_ = os.Remove(tmp)
-	}
-}
-
-func TestExchangeFilesSwaps(t *testing.T) {
-	dir := t.TempDir()
-	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
-	_ = os.WriteFile(a, []byte("a"), 0o600)
-	_ = os.WriteFile(b, []byte("b"), 0o600)
-	if err := exchangeFiles(a, b); err != nil {
-		t.Skip("renameat2 exchange unavailable here:", err)
-	}
-	ra, _ := os.ReadFile(a)
-	rb, _ := os.ReadFile(b)
-	if string(ra) != "b" || string(rb) != "a" {
-		t.Fatalf("not swapped: a=%s b=%s", ra, rb)
+func TestActivationReleaseReportsUnreleasedGuard(t *testing.T) {
+	dir := fakeOwnerSocket(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sell_state":"paused","pause_source":"activation"}`))
+	})
+	if err := releaseActivationSellAt(context.Background(), dir, 0, time.Minute, io.Discard); err == nil {
+		t.Fatal("unreleased guard reported as released")
 	}
 }

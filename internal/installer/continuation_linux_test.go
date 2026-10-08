@@ -324,3 +324,26 @@ func TestLegacyContinuationApprovalAsksBeforeSelling(t *testing.T) {
 		t.Fatal("interactive approval did not activate", g.state.SellConsent, g.state.Stage, *calls)
 	}
 }
+
+func TestInteractiveRerunRenewsLegacySellingApproval(t *testing.T) {
+	g, calls, _ := fixtureGuided(t, "")
+	// RunGuidedInstall marks --interactive (guided_linux.go:360) before it
+	// applies the saved approval (guided_linux.go:457).
+	ctx := withContinuationConsent(context.WithValue(context.Background(), continuationInteractive{}, true))
+	g.ui = guidedUI{ctx: ctx, out: io.Discard, in: bufio.NewReader(strings.NewReader(strings.Repeat("y\n", 6)))}
+	g.state.Autonomous = true
+	g.adoptEnrollment = func(context.Context, agentInstallPlan) (bool, error) { return true, nil }
+	if err := g.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !g.state.SellConsent || g.state.Stage != 7 {
+		t.Fatal("interactive rerun did not record selling approval", g.state.SellConsent, g.state.Stage, *calls)
+	}
+	activated := false
+	for _, call := range *calls {
+		activated = activated || call == "activate-agent"
+	}
+	if !activated {
+		t.Fatal("interactive rerun did not activate", *calls)
+	}
+}
