@@ -2300,6 +2300,7 @@ func TestInstanceCheckFailsWhenEndpointDown(t *testing.T) {
 	var logBuf strings.Builder
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
 	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	setSafeWorkloadInspection(a)
 	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
 	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
 
@@ -2332,6 +2333,7 @@ func TestInstanceCheckPassesOnFakeCompletions(t *testing.T) {
 	var logBuf strings.Builder
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
 	a.log = slog.New(slog.NewTextHandler(&logBuf, nil))
+	setSafeWorkloadInspection(a)
 	a.pathb.Endpoint = srv.URL
 
 	got := a.runJob(context.Background(), api.Job{
@@ -2688,4 +2690,31 @@ func TestReenrollmentRefusesCorruptLeaseState(t *testing.T) {
     if err==nil || !strings.Contains(err.Error(),"invalid old lease state") {t.Fatalf("got %v",err)}
     st,err:=a.loadState()
     if err!=nil || st.DeviceID!="old-device" {t.Fatal("old identity overwritten")}
+}
+
+func setSafeWorkloadInspection(a *Agent) {
+	a.setLease(&runtime.Handle{ContainerID: "privacy-fixture"})
+	a.dockerRun = func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte(`{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":0,"Hard":0}]}`), nil
+	}
+}
+
+func TestInstanceCheckRejectsUnsafeWorkloadBeforeProbe(t *testing.T) {
+	for _, body := range []string{
+		`{"LogConfig":{"Type":"json-file"},"Ulimits":[{"Name":"core","Soft":0,"Hard":0}]}`,
+		`{"LogConfig":{"Type":"none"}}`,
+	} {
+		dir := t.TempDir()
+		a := newTestAgent(t, "http://127.0.0.1:9", dir, filepath.Join(dir, "uptime"), "", "")
+		setSafeWorkloadInspection(a)
+		a.dockerRun = func(_ context.Context, _ ...string) ([]byte, error) { return []byte(body), nil }
+		probes := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { probes++ }))
+		a.pathb.Endpoint = srv.URL
+		got := a.runJob(context.Background(), api.Job{Kind: api.KindInstanceCheck})
+		srv.Close()
+		if got.Passed || probes != 0 || got.Reason != "workload privacy configuration unsafe" {
+			t.Fatalf("unsafe workload probed: %+v probes=%d", got, probes)
+		}
+	}
 }

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -27,6 +28,8 @@ func JailArgs() []string {
 	return []string{
 		"--network", WorkloadNetworkName,
 		"--read-only",
+		"--log-driver", "none",
+		"--ulimit", "core=0",
 		"--tmpfs", "/tmp",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges:true",
@@ -93,5 +96,74 @@ func jailForbidden(args []string) error {
 	if net != "" && net != WorkloadNetworkName {
 		return fmt.Errorf("hypermesh: workload jail requires network %s, got %s", WorkloadNetworkName, net)
 	}
+	// Check every occurrence so a later option cannot override the jail.
+	logSeen, coreSeen := false, false
+	for i, arg := range args {
+		value := ""
+		flag := strings.SplitN(arg, "=", 2)[0]
+		if flag != "--log-driver" && flag != "--ulimit" {
+			continue
+		}
+		if strings.Contains(arg, "=") {
+			value = strings.SplitN(arg, "=", 2)[1]
+		} else if i+1 < len(args) {
+			value = args[i+1]
+		}
+		if flag == "--log-driver" {
+			logSeen = true
+			if value != "none" {
+				return fmt.Errorf("hypermesh: workload jail requires log driver none")
+			}
+		}
+		if flag == "--ulimit" && strings.HasPrefix(value, "core=") {
+			coreSeen = true
+			if value != "core=0" && value != "core=0:0" {
+				return fmt.Errorf("hypermesh: workload jail requires core=0")
+			}
+		}
+	}
+	if !logSeen || !coreSeen {
+		return fmt.Errorf("hypermesh: workload jail requires explicit logging and core dump limits")
+	}
 	return nil
+}
+
+// WorkloadPrivacy is the effective Docker configuration, not the requested argv.
+type WorkloadPrivacy struct {
+	LogDriver string
+	CoreSoft  int64
+	CoreHard  int64
+}
+
+// InspectWorkloadPrivacy fails closed before an instance probe sends any text.
+func InspectWorkloadPrivacy(ctx context.Context, run DockerRunner, container string) (WorkloadPrivacy, error) {
+	observation := WorkloadPrivacy{CoreSoft: -1, CoreHard: -1}
+	if run == nil || strings.TrimSpace(container) == "" {
+		return observation, fmt.Errorf("workload container unavailable")
+	}
+	out, err := run(ctx, "inspect", "--format", "{{json .HostConfig}}", container)
+	if err != nil {
+		return observation, fmt.Errorf("workload privacy inspection failed")
+	}
+	var config struct {
+		LogConfig struct{ Type string }
+		Ulimits   []struct {
+			Name string
+			Soft int64
+			Hard int64
+		}
+	}
+	if err := json.Unmarshal(out, &config); err != nil {
+		return observation, fmt.Errorf("workload privacy inspection invalid")
+	}
+	observation.LogDriver = config.LogConfig.Type
+	for _, limit := range config.Ulimits {
+		if limit.Name == "core" {
+			observation.CoreSoft, observation.CoreHard = limit.Soft, limit.Hard
+		}
+	}
+	if observation.LogDriver != "none" || observation.CoreSoft != 0 || observation.CoreHard != 0 {
+		return observation, fmt.Errorf("workload privacy configuration unsafe")
+	}
+	return observation, nil
 }

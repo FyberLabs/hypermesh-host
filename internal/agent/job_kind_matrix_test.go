@@ -400,6 +400,9 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 				tc.setup(t, a)
 			}
 
+			if tc.kind == api.KindInstanceCheck {
+				setSafeWorkloadInspection(a)
+			}
 			got := a.runJob(context.Background(), tc.job)
 			if got.Passed != tc.wantPass || (tc.wantReason != "" && got.Reason != tc.wantReason) {
 				t.Fatalf("result %+v want pass=%v reason=%q", got, tc.wantPass, tc.wantReason)

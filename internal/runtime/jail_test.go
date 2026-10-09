@@ -27,6 +27,9 @@ func assertWorkloadJail(t *testing.T, args []string) {
 	if !contains(args, "--tmpfs") || !contains(args, "/tmp") {
 		t.Fatalf("want /tmp tmpfs for read-only root: %v", args)
 	}
+	if flagValue(args, "--log-driver") != "none" || flagValue(args, "--ulimit") != "core=0" {
+		t.Fatalf("workload output/core dumps must not persist: %v", args)
+	}
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "docker.sock") {
 		t.Fatalf("must not mount docker.sock: %v", args)
@@ -110,5 +113,41 @@ func TestJailForbiddenHostNetwork(t *testing.T) {
 	}
 	if err := jailForbidden([]string{"run", "-v", "/var/run/docker.sock:/var/run/docker.sock"}); err == nil {
 		t.Fatal("expected docker.sock error")
+	}
+}
+
+func TestJailRejectsLoggingAndCoreOverrides(t *testing.T) {
+	for _, extra := range [][]string{{"--log-driver", "json-file"}, {"--log-driver=local"}, {"--ulimit", "core=1"}, {"--ulimit=core=0:1"}} {
+		if err := jailForbidden(append(JailArgs(), extra...)); err == nil {
+			t.Fatalf("accepted override %v", extra)
+		}
+	}
+	if jailForbidden([]string{"run"}) == nil {
+		t.Fatal("accepted daemon defaults")
+	}
+}
+
+func TestInspectWorkloadPrivacy(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		pass       bool
+	}{
+		{"safe", `{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":0,"Hard":0}]}`, true},
+		{"logs", `{"LogConfig":{"Type":"json-file"},"Ulimits":[{"Name":"core","Soft":0,"Hard":0}]}`, false},
+		{"default core", `{"LogConfig":{"Type":"none"}}`, false},
+		{"hard core", `{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":0,"Hard":1}]}`, false},
+		{"invalid", `{`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := InspectWorkloadPrivacy(context.Background(), func(_ context.Context, args ...string) ([]byte, error) {
+				if strings.Join(args, " ") != "inspect --format {{json .HostConfig}} fixture" {
+					t.Fatalf("wrong inspect: %v", args)
+				}
+				return []byte(tc.body), nil
+			}, "fixture")
+			if (err == nil) != tc.pass {
+				t.Fatalf("pass=%v err=%v", tc.pass, err)
+			}
+		})
 	}
 }
