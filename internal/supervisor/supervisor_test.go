@@ -136,12 +136,24 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 	var beatBody api.HeartbeatRequest
 	var result api.JobResultRequest
 	var resultN int
+	ready := make(chan struct{}, 1)
+	// Called under mu: observe protocol completion rather than assuming the
+	// runner finishes health probes within a three-second wall-clock budget.
+	notifyReady := func() {
+		if enrolls >= 1 && heartbeats >= 1 && resultN >= 1 {
+			select {
+			case ready <- struct{}{}:
+			default:
+			}
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		enrolls++
+		notifyReady()
 		_ = json.NewDecoder(r.Body).Decode(&enrollBody)
 		writeJSON(w, api.EnrollResponse{
 			DeviceID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -153,6 +165,7 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		heartbeats++
+		notifyReady()
 		_ = json.NewDecoder(r.Body).Decode(&beatBody)
 		writeJSON(w, api.HeartbeatResponse{DeviceID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", PathBState: api.PathBNeverRun})
 	})
@@ -186,6 +199,7 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 		defer mu.Unlock()
 		_ = json.NewDecoder(r.Body).Decode(&result)
 		resultN++
+		notifyReady()
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -227,15 +241,10 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Run(ctx) }()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		done := enrolls >= 1 && heartbeats >= 1 && resultN >= 1
-		mu.Unlock()
-		if done {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-ready:
+	case <-time.After(15 * time.Second):
+		t.Error("supervisor did not enroll, heartbeat and refuse the lease within the integration timeout")
 	}
 	cancel()
 	select {
