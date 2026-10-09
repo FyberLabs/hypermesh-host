@@ -74,6 +74,9 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	if err := runtime.RequireGGUFFile(gguf); err != nil {
 		return fail("certification model is missing; pull the pinned model first")
 	}
+	if err := a.authorizePrivateCacheFile(ctx, job, gguf); err != nil {
+		return fail(err.Error())
+	}
 	hash, err := certFileHash(ctx, gguf)
 	if err != nil || hash != pin {
 		return fail("certification model hash mismatch")

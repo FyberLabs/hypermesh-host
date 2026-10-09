@@ -683,6 +683,9 @@ func (a *Agent) applyEvict(dir string, victims []string) error {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+		if err := os.Remove(path + ".private.json"); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 		a.log.Info("model cache evict", "id", m.ID, "bytes", m.Bytes)
 	}
 	idx.Models = kept

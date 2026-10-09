@@ -266,3 +266,104 @@ func TestPrivateLabMeasurementsNeverPublishCatalogScorecards(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPrivateCacheCannotBecomePublicAfterIndexRebuildOrMissingSource(t *testing.T) {
+	data := []byte("GGUFprivate weights")
+	job, grant := privateFixture(t, data)
+	calls := 0
+	allow := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if !allow {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		json.NewEncoder(w).Encode(grant)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	a := newTestAgent(t, server.URL, dir, filepath.Join(dir, "uptime"), "", "")
+	a.cfg.PrivateBlobAccount = "modeltest"
+	a.cfg.GGUFPath = filepath.Join(dir, "model.gguf")
+	a.cfg.ModelCacheMax = "100000000000"
+	a.client.DeviceSecret = "device-secret"
+	a.bindIP = "10.77.0.2/32"
+	dest, err := a.cacheDest(job.FileHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Dir(dest), 0700)
+	os.WriteFile(dest, data, 0600)
+	if err := a.fetchPrivateModel(context.Background(), job, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.admitModel(job.CatalogID, job.FileHash, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.notePendingModel(job.CatalogID, job.FileHash); err != nil {
+		t.Fatal(err)
+	}
+	// The generic index is disposable. Private provenance must survive its rebuild.
+	os.Remove(filepath.Join(filepath.Dir(dest), cacheIndexName))
+	if err := a.reconcileModelCache(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.notePendingModel(job.CatalogID, job.FileHash); err != nil {
+		t.Fatal(err)
+	}
+	runs := 0
+	a.runtime = &runtime.NVIDIA{Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "run" {
+			runs++
+		}
+		return []byte("cid\n"), nil
+	}}
+	omitted := job
+	omitted.Kind, omitted.LeaseID, omitted.SourceRef = api.KindLeaseStart, "new-private-lease", ""
+	if result := a.leaseStart(context.Background(), omitted); result.Passed {
+		t.Fatal("omitted source mounted private cache")
+	}
+	if runs != 0 || calls != 1 {
+		t.Fatal("private provenance bypassed before startup")
+	}
+	allow = false
+	if err := a.authorizePrivateCacheFile(context.Background(), job, dest); err == nil {
+		t.Fatal("revoked grant mounted private cache")
+	}
+	if calls != 2 {
+		t.Fatal("private cache consumer did not request fresh authorization")
+	}
+	changed := job
+	changed.Runtime = "other"
+	if _, err := a.checkPrivateCacheBinding(changed, dest); err == nil {
+		t.Fatal("changed runtime reused private cache")
+	}
+	a.cfg.TenantID = testDevice
+	if _, err := a.checkPrivateCacheBinding(job, dest); err == nil {
+		t.Fatal("another tenant reused private cache")
+	}
+}
+
+func TestPrivateCacheMarkIsDurableBeforeBytesAndMalformedProvenanceFailsClosed(t *testing.T) {
+	a, _ := newCacheAgent(t)
+	job, _ := privateFixture(t, []byte("GGUFweights"))
+	dest, err := a.cacheDest(job.FileHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.rememberPrivateCache(job, dest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("provenance test unexpectedly created bytes")
+	}
+	public := job
+	public.SourceRef = ""
+	if _, err := a.checkPrivateCacheBinding(public, dest); err == nil {
+		t.Fatal("pre-transfer private mark was not durable")
+	}
+	os.WriteFile(dest+".private.json", []byte("["), 0600)
+	if _, err := a.checkPrivateCacheBinding(public, dest); err == nil {
+		t.Fatal("malformed provenance became public")
+	}
+}

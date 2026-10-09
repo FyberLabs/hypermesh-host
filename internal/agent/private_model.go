@@ -125,6 +125,9 @@ func (a *Agent) fetchPrivateModel(ctx context.Context, job api.Job, dest string)
 	if err != nil {
 		return err
 	}
+	if err := a.rememberPrivateCache(job, dest); err != nil {
+		return err
+	}
 	// Reauthorize every use, including verified cache hits. Never persist the SAS.
 	lim, err := a.policyLimits(a.pullLimits(grant.SizeBytes))
 	if err != nil {

@@ -879,6 +879,9 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 			return pathb.Result{Passed: false, Reason: reason}
 		}
 	}
+	if _, err := a.checkPrivateCacheBinding(job, dest); err != nil {
+		return pathb.Result{Reason: err.Error()}
+	}
 	hash, err := runtime.HashGGUFFile(dest)
 	if err != nil {
 		reason := leaseStartFailReason(err)
@@ -1071,6 +1074,9 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	gguf, pinID, havePin, refuse := a.leaseModelPath(job)
 	if refuse.Reason != "" {
 		return refuse
+	}
+	if err := a.authorizePrivateCacheFile(ctx, job, gguf); err != nil {
+		return pathb.Result{Reason: err.Error()}
 	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {

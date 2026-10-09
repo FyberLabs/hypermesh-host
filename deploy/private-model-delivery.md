@@ -39,3 +39,11 @@ Validation covers every immutable grant binding, hostile URL/SAS inputs, respons
 version/ETag/size checks, unchanged server configuration and authorization failure
 on an otherwise valid cached artifact. Live Azure delivery and GPU lab/lease
 acceptance remain separate checks.
+
+Private cache provenance is written atomically and synced before private bytes arrive.
+The credential-free sidecar survives cache index reconstruction and pending-pin expiry.
+Every lease or certification mount requires matching tenant, revision, runtime image,
+backend, configuration and size, followed by a fresh device-bound grant. Missing source
+references and malformed provenance fail closed. Eviction removes provenance only after
+removing the model file. Existing running lease retries also check their persisted private
+binding before acknowledgement.
