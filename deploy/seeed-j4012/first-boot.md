@@ -113,7 +113,7 @@ sudo systemctl status hypermesh-agent
 
 Control plane: `HYPERMESH_CONTROL_PLANE_URL=https://api.test.hyperme.sh`. Path prefix `/api/v1/hypermesh`. After enroll, the secret lives in `/var/lib/hypermesh/device.json` (0600).
 
-`lease_start` bind-mounts that GGUF at `/models/model.gguf:ro`. Unset `HYPERMESH_GGUF_PATH` uses `/var/lib/hypermesh/models/model.gguf`. An explicit path is kept. A missing file or a directory fails closed. Pin `catalog.image_digest` on the plane after the on-box workload build.
+`lease_start` bind-mounts that GGUF at `/models/model.gguf:ro`. Docker does not publish host ports for a container that is only on the internal `hypermesh-workload` network. The agent listens on the WireGuard address and forwards TCP to the container, and posts `passed=true` only after `/health` returns 200 on both paths. Unset `HYPERMESH_GGUF_PATH` uses `/var/lib/hypermesh/models/model.gguf`. An explicit path is kept. A missing file or a directory fails closed. Pin `catalog.image_digest` on the plane after the on-box workload build.
 
 Tunnel and lease behave the same as the AGX. One WireGuard peer per host. Router endpoint is `wg.test.hyperme.sh:51820`. Chat stays on `client_address:8080`.
 
