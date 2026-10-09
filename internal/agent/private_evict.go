@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
@@ -21,7 +22,7 @@ func (a *Agent) evictPrivateModel(ctx context.Context, job api.Job) pathb.Result
 	if err != nil {
 		return fail("private eviction hash invalid")
 	}
-	unlock, err := LockModelCache(ctx, filepath.Dir(dest))
+	unlock, err := LockModelCache(ctx, filepath.Dir(filepath.Dir(dest)))
 	if err != nil {
 		return fail("private eviction cache lock unavailable")
 	}
@@ -33,7 +34,7 @@ func (a *Agent) evictPrivateModel(ctx context.Context, job api.Job) pathb.Result
 	matching := false
 	kept := []privateCacheBinding{}
 	for _, binding := range bindings {
-		if binding.Tenant == a.cfg.TenantID && binding.Revision == revision {
+		if binding.Tenant == strings.ToLower(strings.TrimSpace(a.cfg.TenantID)) && binding.Revision == revision {
 			matching = true
 		} else {
 			kept = append(kept, binding)

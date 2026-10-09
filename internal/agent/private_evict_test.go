@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
@@ -12,7 +13,7 @@ import (
 
 func TestPrivateEvictionRemovesBytesBeforeProvenanceAndSurvivesRetry(t *testing.T) {
 	job, _ := privateFixture(t, []byte("GGUFprivate"))
-	a := &Agent{cfg: Config{TenantID: testTenant, GGUFPath: filepath.Join(t.TempDir(), "weights.gguf")}, log: slog.Default()}
+	a := &Agent{cfg: Config{TenantID: "  " + strings.ToUpper(testTenant) + "  ", GGUFPath: filepath.Join(t.TempDir(), "weights.gguf")}, log: slog.Default()}
 	dest, err := a.cacheDest(job.FileHash)
 	if err != nil {
 		t.Fatal(err)
