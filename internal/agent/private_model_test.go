@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
 const privateRevisionFixture = "1f3f9838-4ae2-49d5-9a44-fbc0fb000cc0"
@@ -175,5 +176,79 @@ func TestPrivateSettingsUseReviewedConfigurationInsteadOfHostDefaults(t *testing
 	job.ModelConfiguration.TimeoutSeconds++
 	if _, _, _, err = a.modelSettings(job); err == nil {
 		t.Fatal("accepted modified reviewed config")
+	}
+}
+
+func TestRunningPrivateLeaseRetainsAuthorizationAcrossRestartAndChangedRetries(t *testing.T) {
+	job, grant := privateFixture(t, []byte("GGUFprivate weights"))
+	job.LeaseID = "private-lease"
+	allowed := true
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if !allowed {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		json.NewEncoder(w).Encode(grant)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	a := newTestAgent(t, server.URL, dir, filepath.Join(dir, "uptime"), "", "")
+	a.cfg.PrivateBlobAccount = "modeltest"
+	a.client.DeviceSecret = "device-secret"
+	handle := &runtime.Handle{LeaseID: job.LeaseID, CatalogID: job.CatalogID, ImageDigest: job.ImageDigest, FileHash: job.FileHash,
+		Backend: job.Backend, PrivateRevisionID: privateRevisionFixture, PrivateRuntime: job.Runtime,
+		PrivateConfigurationSHA256: job.ModelConfigurationSHA256, PrivateSizeBytes: job.SizeBytes}
+	if err := a.saveLease(handle); err != nil {
+		t.Fatal(err)
+	}
+	persisted := a.loadLease()
+	if persisted == nil {
+		t.Fatal("private provenance lost on restart")
+	}
+	if err := a.authorizeLeaseRetry(context.Background(), job, persisted); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("same-lease retry skipped authorization")
+	}
+	mutations := map[string]func(*api.Job){
+		"omitted source":   func(j *api.Job) { j.SourceRef = "" },
+		"public source":    func(j *api.Job) { j.SourceRef = "https://huggingface.co/public.gguf" },
+		"changed revision": func(j *api.Job) { j.SourceRef = privateModelPrefix + testDevice },
+		"backend":          func(j *api.Job) { j.Backend = "hip-rocm" },
+		"runtime":          func(j *api.Job) { j.Runtime = "other" },
+		"configuration": func(j *api.Job) {
+			c := *j.ModelConfiguration
+			c.ContextTokens++
+			j.ModelConfiguration = &c
+			j.ModelConfigurationSHA256, _ = modelConfigurationHash(&c)
+		},
+		"image":   func(j *api.Job) { j.ImageDigest += "changed" },
+		"file":    func(j *api.Job) { j.FileHash += "changed" },
+		"catalog": func(j *api.Job) { j.CatalogID += "changed" },
+		"size":    func(j *api.Job) { j.SizeBytes++ },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			changed := job
+			mutate(&changed)
+			if a.authorizeLeaseRetry(context.Background(), changed, persisted) == nil {
+				t.Fatal("acknowledged changed running binding")
+			}
+		})
+	}
+	allowed = false
+	if a.authorizeLeaseRetry(context.Background(), job, persisted) == nil {
+		t.Fatal("acknowledged revoked running lease")
+	}
+	if calls != 2 {
+		t.Fatal("revoked retry did not request fresh grant")
+	}
+	legacy := *persisted
+	legacy.PrivateRevisionID = ""
+	if a.authorizeLeaseRetry(context.Background(), job, &legacy) == nil {
+		t.Fatal("accepted missing provenance")
 	}
 }

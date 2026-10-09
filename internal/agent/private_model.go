@@ -15,6 +15,7 @@ import (
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
+	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
 var modelRevisionID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -165,4 +166,27 @@ func (a *Agent) modelSettings(job api.Job) (jinja, contextTokens, timeout string
 		jinja = "1"
 	}
 	return jinja, strconv.Itoa(job.ModelConfiguration.ContextTokens), strconv.Itoa(job.ModelConfiguration.TimeoutSeconds), nil
+}
+
+// authorizeLeaseRetry checks the persisted workload, even if a retry drops its
+// private source reference. Never acknowledge changed or unproven private state.
+func (a *Agent) authorizeLeaseRetry(ctx context.Context, job api.Job, existing *runtime.Handle) error {
+	incomingPrivate := strings.HasPrefix(job.SourceRef, privateModelPrefix)
+	if existing.PrivateRevisionID == "" && !incomingPrivate && !strings.HasPrefix(existing.CatalogID, "private-") {
+		return nil
+	}
+	revision, err := privateRevision(job.SourceRef)
+	configHash, configErr := modelConfigurationHash(job.ModelConfiguration)
+	if err != nil || configErr != nil || existing.PrivateRevisionID == "" ||
+		existing.PrivateRevisionID != revision || existing.ImageDigest != job.ImageDigest ||
+		existing.FileHash != job.FileHash || existing.CatalogID != job.CatalogID ||
+		existing.Backend != job.Backend || existing.PrivateRuntime != job.Runtime ||
+		existing.PrivateSizeBytes != job.SizeBytes || existing.PrivateConfigurationSHA256 != configHash ||
+		configHash != job.ModelConfigurationSHA256 {
+		return fmt.Errorf("private model running binding differs")
+	}
+	if _, err = a.authorizedPrivateGrant(ctx, job); err != nil {
+		return fmt.Errorf("private model grant unavailable")
+	}
+	return nil
 }

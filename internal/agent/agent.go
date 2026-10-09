@@ -1047,13 +1047,8 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 			a.log.Info("lease_start refused", "reason", "lease already running", "lease_id", job.LeaseID, "local_lease_id", existing.LeaseID)
 			return pathb.Result{Passed: false, Reason: "lease already running"}
 		}
-		if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
-			if _, err := a.authorizedPrivateGrant(ctx, job); err != nil {
-				return pathb.Result{Reason: "private model grant unavailable"}
-			}
-			if existing.ImageDigest != job.ImageDigest || existing.FileHash != job.FileHash || existing.CatalogID != job.CatalogID {
-				return pathb.Result{Reason: "private model running binding differs"}
-			}
+		if err := a.authorizeLeaseRetry(ctx, job, existing); err != nil {
+			return pathb.Result{Reason: err.Error()}
 		}
 		return a.leaseStartAlready(existing)
 	}
@@ -1112,6 +1107,13 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: reason}
 	}
 	h.FileHash = hash
+	if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
+		h.PrivateRevisionID, _ = privateRevision(job.SourceRef)
+		h.PrivateRuntime = job.Runtime
+		h.PrivateConfigurationSHA256 = job.ModelConfigurationSHA256
+		h.PrivateSizeBytes = job.SizeBytes
+		h.Backend = job.Backend
+	}
 	a.clearPendingModel(job.CatalogID)
 	a.touchModelUse(hash)
 	if strings.TrimSpace(h.FileHash) == "" {
