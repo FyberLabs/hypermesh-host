@@ -335,3 +335,25 @@ test. Explicit pinning flags remain supported. See [the installation guide](docs
 Private uploaded-model delivery is an opt-in capability; see
 [the grant, version and runtime configuration contract](deploy/private-model-delivery.md).
 It requires the corresponding control-plane implementation and acceptance evidence.
+
+## Workload prompt privacy
+
+Hosted Docker workloads use `--log-driver none` and `--ulimit core=0`.
+Docker does not retain their stdout/stderr, and core dumps are disabled. Agent
+and witness containers keep their own logging settings. An `instance_check`
+inspects the running lease container before sending its completion probe and
+fails if the effective log driver is not `none` or the core soft/hard limits
+are not both zero. It reports only those settings in the host log.
+
+On a lab host, inspect the lease container:
+
+```bash
+docker inspect --format '{{json .HostConfig.LogConfig}} {{json .HostConfig.Ulimits}}' <lease-container>
+docker logs <lease-container>
+```
+
+Expect log type `none`, a `core` ulimit with `Soft: 0` and `Hard: 0`, and no
+workload output (Docker may report that the driver does not support reading).
+Use a unique synthetic prompt for lab acceptance and verify it is absent from
+`/var/lib/docker/containers` and the journal. Existing containers must be
+recreated after this upgrade to receive the new settings.
