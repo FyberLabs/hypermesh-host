@@ -2569,6 +2569,9 @@ func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
 		}
 		return 0, true
 	}
+	// Existing lease tests do not listen on the tunnel address. Ingress
+	// tests clear this and use the real /health wait.
+	a.leaseReady = func(context.Context, *runtime.Handle) error { return nil }
 	return a
 }
 

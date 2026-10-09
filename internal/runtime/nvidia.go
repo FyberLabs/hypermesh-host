@@ -81,6 +81,10 @@ type Handle struct {
 	// FileHash is sha256 of the mounted GGUF. lease_start POSTs this as
 	// image_hash. Distinct from ImageDigest (OCI repo@digest).
 	FileHash string `json:"file_hash,omitempty"`
+	// ContainerIP is the workload-bridge address the forwarder dials.
+	ContainerIP string `json:"container_ip,omitempty"`
+	// PublishAddr is the WireGuard host:port the forwarder listens on.
+	PublishAddr string `json:"publish_addr,omitempty"`
 	// Backend is the path that started this handle (omitempty for old lease.json).
 	Backend string `json:"backend,omitempty"`
 	// Private provenance survives restart; same-lease retries must match and
@@ -169,8 +173,9 @@ func ggufBind(host string) string {
 }
 
 // StartArgs is the docker run argv for a resolved repo@digest.
-// Publishes container 8080 on the tunnel address only so the LAN cannot
-// reach completions. The process inside may listen on 0.0.0.0:8080.
+// -p names the tunnel address so the LAN is not a publish target. Docker
+// does not open that port when the only network is internal; the agent
+// forwards TCP itself. The process inside may listen on 0.0.0.0:8080.
 // Bind-mounts the host GGUF at /models/model.gguf:ro (not baked into the image).
 // JailArgs put the container on the internal workload network (not host,
 // not the default bridge with LAN egress).

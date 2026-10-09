@@ -130,6 +130,11 @@ func (h *HIP) Stop(ctx context.Context, handle *Handle) error {
 	return stopAndRemove(ctx, h.run, handle)
 }
 
+// DockerRun exposes the docker CLI runner for container status and logs.
+func (h *HIP) DockerRun(ctx context.Context, args ...string) ([]byte, error) {
+	return h.run(ctx, args...)
+}
+
 func (h *HIP) run(ctx context.Context, args ...string) ([]byte, error) {
 	name := h.Docker
 	if name == "" {

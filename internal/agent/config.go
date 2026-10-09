@@ -52,9 +52,14 @@ type Config struct {
 	// persisted at 0600 after enroll. Never log it.
 	DeviceSecret string
 	ImageHash    string
-	// ListenPort is the host port published as -p <port>:8080 on lease_start.
-	// Empty uses 8080.
+	// ListenPort is the host port the agent listens on for lease traffic.
+	// Docker does not publish -p into an internal-only network. Empty uses 8080.
 	ListenPort string
+	// LeaseReadyWait is how long lease_start waits for llama-server /health
+	// on the container and through the WireGuard listener. Zero uses 600s.
+	// Negative means HYPERMESH_LEASE_START_READY_TIMEOUT_S was not a positive
+	// number of seconds.
+	LeaseReadyWait time.Duration
 	// CompletionsURL is the local OpenAI-shaped endpoint thin-v1 probes.
 	// Empty uses http://127.0.0.1:<ListenPort>/v1/chat/completions.
 	CompletionsURL string
@@ -146,6 +151,7 @@ func FromEnv() Config {
 		DeviceSecret:              os.Getenv("HYPERMESH_DEVICE_SECRET"),
 		ImageHash:                 os.Getenv("HYPERMESH_IMAGE_HASH"),
 		ListenPort:                envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
+		LeaseReadyWait:            secondsEnv("HYPERMESH_LEASE_START_READY_TIMEOUT_S", defaultLeaseReadyTimeout),
 		CompletionsURL:            os.Getenv("HYPERMESH_COMPLETIONS_URL"),
 		GGUFPath:                  envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
 		PrivateBlobAccount:        strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_BLOB_ACCOUNT")),
@@ -200,6 +206,18 @@ func wgModeFromEnv() string {
 	return v
 }
 
+func secondsEnv(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return -1
+	}
+	return time.Duration(n) * time.Second
+}
+
 func envOr(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -226,6 +244,9 @@ func (c Config) Validate() error {
 	}
 	if p := strings.TrimSpace(c.ListenPort); p != "" && !validPort(p) {
 		return fmt.Errorf("hypermesh: listen port must be 1-65535")
+	}
+	if c.LeaseReadyWait < 0 {
+		return fmt.Errorf("hypermesh: HYPERMESH_LEASE_START_READY_TIMEOUT_S must be a positive number of seconds")
 	}
 	if u := strings.TrimSpace(c.CompletionsURL); u != "" {
 		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
