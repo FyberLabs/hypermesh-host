@@ -49,7 +49,7 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
 			return fail(err.Error())
 		}
-		result := a.labPull(ctx, api.Job{CatalogID: job.CatalogID, ImageDigest: pin, SourceRef: job.SourceRef, SizeBytes: job.SizeBytes})
+		result := a.labPull(ctx, artifactPullJob(job))
 		if !result.Passed {
 			return result
 		}
@@ -78,6 +78,10 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	if err != nil || hash != pin {
 		return fail("certification model hash mismatch")
 	}
+	jinja, contextTokens, timeout, err := a.modelSettings(job)
+	if err != nil {
+		return fail("private model configuration binding invalid")
+	}
 	starter := a.starterFor(backend)
 	handle, err := starter.Start(ctx, runtime.Spec{
 		LeaseID: certLeaseID + "-" + job.JobID, CatalogID: job.CatalogID,
@@ -85,9 +89,9 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		HostPort: a.cfg.PublishPort(), GGUFPath: gguf,
 		// Certification is local only; it never publishes on the host LAN or tunnel.
 		BindAddress: "127.0.0.1",
-		LlamaJinja:  a.cfg.LlamaJinja, LlamaCtxSize: a.cfg.LlamaCtxSize,
-		LlamaTimeout: a.cfg.LlamaTimeout,
-		SingleSlot:   a.certContextTokens > 0,
+		LlamaJinja:  jinja, LlamaCtxSize: contextTokens,
+		LlamaTimeout: timeout,
+		SingleSlot:   a.certContextTokens > 0 || strings.HasPrefix(job.SourceRef, privateModelPrefix),
 	})
 	if err != nil {
 		return fail("certification runtime start failed")

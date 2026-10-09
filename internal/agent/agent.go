@@ -837,16 +837,27 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 // container — the subsequent lab soak / path_b job runs the jailed sample.
 func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	pin := strings.TrimSpace(job.ImageDigest)
+	if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
+		pin = job.FileHash
+	}
 	if !strings.HasPrefix(strings.ToLower(pin), "sha256:") || len(pin) < len("sha256:")+64 {
 		a.log.Info("lab_pull refused", "reason", "pinned hash required", "catalog_id", job.CatalogID)
 		return pathb.Result{Passed: false, Reason: "pinned hash required"}
 	}
 	dest := a.cfg.GGUFHostPath()
 	if source := strings.TrimSpace(job.SourceRef); source != "" {
-  if err:=downloadDestOK(a.cfg.GGUFHostPath());err!=nil{return pathb.Result{Reason:labPullFailReason(err)}}
-  directory:=filepath.Dir(a.cfg.GGUFHostPath())
-  if err:=os.MkdirAll(directory,0755);err!=nil{return pathb.Result{Reason:"model cache directory unavailable"}}
-  unlock,lockErr:=LockModelCache(ctx,directory);if lockErr!=nil{return pathb.Result{Reason:"model cache lock unavailable"}};defer unlock()
+		if err := downloadDestOK(a.cfg.GGUFHostPath()); err != nil {
+			return pathb.Result{Reason: labPullFailReason(err)}
+		}
+		directory := filepath.Dir(a.cfg.GGUFHostPath())
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			return pathb.Result{Reason: "model cache directory unavailable"}
+		}
+		unlock, lockErr := LockModelCache(ctx, directory)
+		if lockErr != nil {
+			return pathb.Result{Reason: "model cache lock unavailable"}
+		}
+		defer unlock()
 		var err error
 		dest, err = a.cacheDest(pin)
 		if err != nil {
@@ -854,7 +865,11 @@ func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
 			return pathb.Result{Passed: false, Reason: reason}
 		}
-		if err := a.doFetchWeights(ctx, dest, source, pin, job.SizeBytes); err != nil {
+		fetch := func() error { return a.doFetchWeights(ctx, dest, source, pin, job.SizeBytes) }
+		if strings.HasPrefix(source, privateModelPrefix) {
+			fetch = func() error { return a.fetchPrivateModel(ctx, job, dest) }
+		}
+		if err := fetch(); err != nil {
 			reason := labPullFailReason(err)
 			a.log.Info("lab_pull refused", "reason", reason, "catalog_id", job.CatalogID)
 			return pathb.Result{Passed: false, Reason: reason}
@@ -1032,14 +1047,28 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 			a.log.Info("lease_start refused", "reason", "lease already running", "lease_id", job.LeaseID, "local_lease_id", existing.LeaseID)
 			return pathb.Result{Passed: false, Reason: "lease already running"}
 		}
+		if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
+			if _, err := a.authorizedPrivateGrant(ctx, job); err != nil {
+				return pathb.Result{Reason: "private model grant unavailable"}
+			}
+			if existing.ImageDigest != job.ImageDigest || existing.FileHash != job.FileHash || existing.CatalogID != job.CatalogID {
+				return pathb.Result{Reason: "private model running binding differs"}
+			}
+		}
 		return a.leaseStartAlready(existing)
 	}
- if job.SourceRef!="" {
-  if err:=a.checkDemandFit(ctx,job.SizeBytes);err!=nil{return pathb.Result{Reason:err.Error()}}
-  if job.SizeBytes<=0 {return pathb.Result{Reason:"model download requires expected size"}}
-  pulled:=a.labPull(ctx,api.Job{CatalogID:job.CatalogID,ImageDigest:job.FileHash,SourceRef:job.SourceRef,SizeBytes:job.SizeBytes})
-  if !pulled.Passed{return pulled}
- }
+	if job.SourceRef != "" {
+		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
+			return pathb.Result{Reason: err.Error()}
+		}
+		if job.SizeBytes <= 0 {
+			return pathb.Result{Reason: "model download requires expected size"}
+		}
+		pulled := a.labPull(ctx, artifactPullJob(job))
+		if !pulled.Passed {
+			return pulled
+		}
+	}
 	gguf, pinID, havePin, refuse := a.leaseModelPath(job)
 	if refuse.Reason != "" {
 		return refuse
@@ -1053,7 +1082,15 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if res, ok := a.leaseHashCheck(job, hash, pinID, havePin); !ok {
 		return res
 	}
- if job.SourceRef!="" {if err:=a.checkDemandFit(ctx,job.SizeBytes);err!=nil{return pathb.Result{Reason:err.Error()}}}
+	if job.SourceRef != "" {
+		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
+			return pathb.Result{Reason: err.Error()}
+		}
+	}
+	jinja, contextTokens, timeout, err := a.modelSettings(job)
+	if err != nil {
+		return pathb.Result{Reason: "private model configuration binding invalid"}
+	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
 		LeaseID:      job.LeaseID,
@@ -1064,9 +1101,10 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		BindAddress:  a.currentBindIP(),
 		GGUFPath:     gguf,
 		Backend:      job.Backend,
-		LlamaJinja:   a.cfg.LlamaJinja,
-		LlamaCtxSize: a.cfg.LlamaCtxSize,
-		LlamaTimeout: a.cfg.LlamaTimeout,
+		LlamaJinja:   jinja,
+		LlamaCtxSize: contextTokens,
+		LlamaTimeout: timeout,
+		SingleSlot:   strings.HasPrefix(job.SourceRef, privateModelPrefix),
 	})
 	if err != nil {
 		reason := leaseStartFailReason(err)

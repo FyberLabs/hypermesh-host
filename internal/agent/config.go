@@ -39,14 +39,15 @@ var uuidRE = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 // Config is env/flag configuration for the host agent.
 type Config struct {
-	HostName string
-	Reenroll bool
-	ControlPlaneURL string
-	TenantID        string
-	EnrollToken     string
-	StateDir        string
-	HeartbeatEvery  time.Duration
-	JobEvery        time.Duration
+	PrivateBlobAccount string // Exact Azure account; empty disables private model delivery.
+	HostName           string
+	Reenroll           bool
+	ControlPlaneURL    string
+	TenantID           string
+	EnrollToken        string
+	StateDir           string
+	HeartbeatEvery     time.Duration
+	JobEvery           time.Duration
 	// DeviceSecret is an optional recovery override. Prefer the value
 	// persisted at 0600 after enroll. Never log it.
 	DeviceSecret string
@@ -137,8 +138,8 @@ func FromEnv() Config {
 		ControlPlaneURL:           envOr("HYPERMESH_CONTROL_PLANE_URL", defaultControlPlane),
 		TenantID:                  os.Getenv("HYPERMESH_TENANT_ID"),
 		EnrollToken:               os.Getenv("HYPERMESH_ENROLL_TOKEN"),
-		HostName: strings.TrimSpace(os.Getenv("HYPERMESH_HOST_NAME")),
-		Reenroll: os.Getenv("HYPERMESH_REENROLL") == "1",
+		HostName:                  strings.TrimSpace(os.Getenv("HYPERMESH_HOST_NAME")),
+		Reenroll:                  os.Getenv("HYPERMESH_REENROLL") == "1",
 		StateDir:                  envOr("HYPERMESH_STATE_DIR", defaultStateDir),
 		HeartbeatEvery:            defaultHeartbeat,
 		JobEvery:                  defaultJobInterval,
@@ -147,6 +148,7 @@ func FromEnv() Config {
 		ListenPort:                envOr("HYPERMESH_LISTEN_PORT", defaultListenPort),
 		CompletionsURL:            os.Getenv("HYPERMESH_COMPLETIONS_URL"),
 		GGUFPath:                  envOr("HYPERMESH_GGUF_PATH", DefaultModelPath),
+		PrivateBlobAccount:        strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_BLOB_ACCOUNT")),
 		DiskFloor:                 strings.TrimSpace(os.Getenv("HYPERMESH_DISK_FLOOR_BYTES")),
 		DiskMargin:                strings.TrimSpace(os.Getenv("HYPERMESH_DISK_MARGIN_BYTES")),
 		ModelCacheMax:             strings.TrimSpace(os.Getenv("HYPERMESH_MODEL_CACHE_MAX_BYTES")),

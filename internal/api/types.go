@@ -181,13 +181,21 @@ const (
 // Default AGX image stub-fails hip-rocm / llama-cpp-cpu / llama-cpp-vulkan.
 // hip-rocm is a real path only on a -tags rocm image; llama-cpp-cpu is
 // Metal only on darwin. llama-cpp-metal is not in the enum.
+type ModelConfiguration struct {
+	ContextTokens  int  `json:"context_tokens"`
+	Jinja          bool `json:"jinja"`
+	TimeoutSeconds int  `json:"timeout_seconds"`
+}
+
 type Job struct {
-	JobID       string  `json:"job_id"`
-	Kind        JobKind `json:"kind"`
-	DeviceID    string  `json:"device_id"`
-	LeaseID     string  `json:"lease_id,omitempty"`
-	CatalogID   string  `json:"catalog_id,omitempty"`
-	ImageDigest string  `json:"image_digest,omitempty"`
+	ModelConfiguration       *ModelConfiguration `json:"model_configuration,omitempty"`
+	ModelConfigurationSHA256 string              `json:"model_configuration_sha256,omitempty"`
+	JobID                    string              `json:"job_id"`
+	Kind                     JobKind             `json:"kind"`
+	DeviceID                 string              `json:"device_id"`
+	LeaseID                  string              `json:"lease_id,omitempty"`
+	CatalogID                string              `json:"catalog_id,omitempty"`
+	ImageDigest              string              `json:"image_digest,omitempty"`
 	// SourceRef is the trusted fetch pin for lab_pull (repo@rev/file or
 	// allowlisted HTTPS URL). Distinct from ImageDigest (content sha256).
 	SourceRef string `json:"source_ref,omitempty"`
