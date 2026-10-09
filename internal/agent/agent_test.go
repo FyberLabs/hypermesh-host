@@ -2718,3 +2718,19 @@ func TestInstanceCheckRejectsUnsafeWorkloadBeforeProbe(t *testing.T) {
 		}
 	}
 }
+
+func TestMetalInstanceCheckDoesNotInspectPIDWithDocker(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, filepath.Join(dir, "uptime"), "", "")
+	a.setLease(&runtime.Handle{ContainerID: "42", Backend: runtime.BackendLlamaCppCPU})
+	a.dockerRun = func(_ context.Context, _ ...string) ([]byte, error) {
+		t.Fatal("native Metal PID passed to Docker")
+		return nil, nil
+	}
+	a.pathb.Endpoint = "http://127.0.0.1:1/v1/chat/completions"
+	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
+	got := a.runJob(context.Background(), api.Job{Kind: api.KindInstanceCheck})
+	if strings.Contains(got.Reason, "privacy") {
+		t.Fatalf("native check blocked by Docker inspection: %+v", got)
+	}
+}

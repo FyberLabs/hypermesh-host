@@ -818,14 +818,18 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 			if handle != nil {
 				container = handle.ContainerID
 			}
-			run := a.dockerRun
-			if run == nil && a.runtime != nil {
-				run = a.runtime.DockerRun
-			}
-			privacy, err := runtime.InspectWorkloadPrivacy(ctx, run, container)
-			a.log.Info("instance_check workload privacy", "log_driver", privacy.LogDriver, "core_soft", privacy.CoreSoft, "core_hard", privacy.CoreHard)
-			if err != nil {
-				return jobOutcome{Result: pathb.Result{Passed: false, Reason: err.Error()}}
+			if handle != nil && handle.Backend == runtime.BackendLlamaCppCPU {
+				a.log.Info("instance_check native Metal workload", "backend", handle.Backend)
+			} else {
+				run := a.dockerRun
+				if run == nil && a.runtime != nil {
+					run = a.runtime.DockerRun
+				}
+				privacy, err := runtime.InspectWorkloadPrivacy(ctx, run, container)
+				a.log.Info("instance_check workload privacy", "log_driver", privacy.LogDriver, "core_soft", privacy.CoreSoft, "core_hard", privacy.CoreHard)
+				if err != nil {
+					return jobOutcome{Result: pathb.Result{Passed: false, Reason: err.Error()}}
+				}
 			}
 		}
 		res := a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))
