@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -365,5 +366,40 @@ func TestPrivateCacheMarkIsDurableBeforeBytesAndMalformedProvenanceFailsClosed(t
 	os.WriteFile(dest+".private.json", []byte("["), 0600)
 	if _, err := a.checkPrivateCacheBinding(public, dest); err == nil {
 		t.Fatal("malformed provenance became public")
+	}
+}
+
+func TestPrivateWriteRestoresProvenanceAfterIncomingCacheEviction(t *testing.T) {
+	job, grant := privateFixture(t, []byte("GGUFweights"))
+	a := &Agent{cfg: Config{TenantID: testTenant, GGUFPath: filepath.Join(t.TempDir(), "model.gguf")}, log: slog.Default()}
+	dest, err := a.cacheDest(job.FileHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(dest, []byte("GGUFcorrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.admitModel(job.CatalogID, job.FileHash, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.rememberPrivateCache(job, dest); err != nil {
+		t.Fatal(err)
+	}
+	id := job.FileHash
+	guard := a.privateWriteGuard(job, dest, func() error { return a.applyEvict(filepath.Dir(dest), []string{id}) })
+	if err = guard(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("corrupt incoming destination was not evicted")
+	}
+	if marked, err := a.checkPrivateCacheBinding(job, dest); err != nil || !marked {
+		t.Fatal("eviction lost incoming provenance", err)
+	}
+	if err = validatePrivateGrant(grant, job, "modeltest", strings.ToUpper(testTenant), time.Now()); err != nil {
+		t.Fatal("accepted tenant casing disabled private delivery", err)
 	}
 }
