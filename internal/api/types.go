@@ -169,6 +169,7 @@ const (
 	KindInstanceCheck JobKind = "instance_check"
 	KindLeaseStart    JobKind = "lease_start"
 	KindLeaseStop     JobKind = "lease_stop"
+	KindModelEvict    JobKind = "model_evict"
 	KindLeaseCancel   JobKind = "lease_cancel"
 	KindLeaseExpiry   JobKind = "lease_expiry"
 	KindSellPause     JobKind = "sell_pause"

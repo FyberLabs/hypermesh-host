@@ -72,6 +72,10 @@ func (a *Agent) rememberPrivateCache(job api.Job, path string) error {
 		return fmt.Errorf("private cache scope limit reached")
 	}
 	bindings = append(bindings, binding)
+	return writePrivateBindings(path, bindings)
+}
+
+func writePrivateBindings(path string, bindings []privateCacheBinding) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("private cache provenance unavailable")
 	}
