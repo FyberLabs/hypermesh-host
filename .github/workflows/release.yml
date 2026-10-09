@@ -30,9 +30,8 @@ jobs:
   release:
     name: release
     runs-on: [self-hosted, linux, x64]
-    # GitHub Free on this private repo has no deployment environments,
-    # so this job uses repository variables. Infra #143 moves the
-    # publisher to ref-based federated credentials:
+    # This job uses repository variables. It does not use a GitHub
+    # Environment. Federated credentials are ref-based:
     #   test: repo:FyberLabs/hypermesh-host:ref:refs/heads/main
     #   prod: repo:FyberLabs/hypermesh-host:ref:refs/tags/v*
     permissions:
@@ -90,9 +89,8 @@ jobs:
           cache: false
 
       # Two repo variables, not one shared client id and not an environment.
-      # Spellings are hypermesh_host_release_next_steps in infra #143.
-      # Test output is hypermesh_host_test_client_id.
-      # Prod output is hypermesh_host_prod_client_id.
+      # Test client id: repository variable HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID.
+      # Prod client id: repository variable HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID.
       - name: Azure login (test)
         if: env.channel == 'test'
         # azure/login v3.1.0

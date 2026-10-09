@@ -68,7 +68,7 @@ sudo ./tools/kernel_flash/l4t_initrd_flash.sh --flash-only --massflash 1 --netwo
 
 That writes the Seeed image to the NVMe. It is not an AGX overlay and not a factory Hypermesh preinstall.
 
-If the extracted tree has `tools/l4t_create_default_user.sh` and you need a headless first boot, create the user **before** flash the same way cottage does — on this Seeed tree, not the AGX tree:
+If the extracted tree has `tools/l4t_create_default_user.sh` and you need a headless first boot, create the user **before** flash the same way the AGX flash does — on this Seeed tree, not the AGX tree:
 
 ```bash
 sudo ./tools/l4t_create_default_user.sh -u hypermesh -p CHANGE_ME -a -n hypermesh-j4012

@@ -1093,7 +1093,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"kv-fyber-hmhost",
 		"hypermesh-host-release-gpg-private-key",
 		"hypermesh-host-release-gpg-passphrase",
-		"infra #143",
+		"kv-fyber-hmhost",
 	} {
 		if !strings.Contains(string(readme), want) {
 			t.Fatalf("README missing %s", want)
@@ -1128,7 +1128,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"storage-blob-preview",
 		"1.0.0b3",
 		"before it writes `channels/test.json`",
-		"infra #143 applied",
+		"HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID",
 	} {
 		if !strings.Contains(runbookText, want) {
 			t.Fatalf("update.md missing %s", want)

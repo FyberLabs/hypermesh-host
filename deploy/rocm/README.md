@@ -16,7 +16,7 @@ This image does not run hip-rocm.
 
 `HSA_OVERRIDE` and `HSA_OVERRIDE_GFX_VERSION` are never set, and the gfx target is never guessed.
 
-Cert still means **Fyber-published hashes**. `image_digest` stays `repo@digest`. This slice does not pull GHCR and does not invent a completion.
+Cert still means **Fyber-published hashes**. `image_digest` stays `repo@digest`. This slice does not pull GHCR and does not fabricate a completion.
 
 ## How a future ROCm host image enables it
 
@@ -40,4 +40,4 @@ Cert still means **Fyber-published hashes**. `image_digest` stays `repo@digest`.
 
 ## Out of scope here
 
-NVIDIA Jetson certified classes, public Thor, GHCR pull, fake tok/s, marketing TOPS as tokens/sec, `HSA_OVERRIDE`, invented gfx names.
+NVIDIA Jetson certified classes, public Thor, GHCR pull, fabricated tokens/sec, marketing TOPS as tokens/sec, `HSA_OVERRIDE`, and guessed gfx names.

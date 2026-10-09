@@ -976,7 +976,7 @@ for name in names:
 # After azure/login, reads the armored signing key and the passphrase
 # from Key Vault into a 0700 GNUPGHOME. Does not print either value.
 # The passphrase is masked in the Actions log. xtrace stays off.
-# Defaults from infra #143, overridable by repository variables:
+# Defaults, overridable by repository variables:
 # vault kv-fyber-hmhost, secret hypermesh-host-release-gpg-private-key,
 # secret hypermesh-host-release-gpg-passphrase.
 # Sets GNUPGHOME and signing_fpr in the caller. Do not run this in $().

@@ -19,13 +19,13 @@ Existing AGX/Jetson NVIDIA test machinery supplies the actual measurements.
 Use `--model-token-file /private/huggingface-token` for a gated model, or
 `--agent-plan /absolute/path/agent.json` for a non-guided inactive installation.
 Tokens are not included in evidence. The host's device identity authenticates
-reporting; it cannot authorize its own lab run or publish an AIuditor envelope.
+reporting; it cannot authorize its own lab run or publish an class envelope.
 
 Evidence is kept in `/var/lib/hypermesh/installer/qualification-RUN_UUID.json`.
 Interrupted tests remain failed attempts. Rerunning the command retries a pending
 report without repeating measurements. For automatic qualification, rerunning
 guided setup requests a fresh attempt without operator intervention. Three successful samples go to operator review; the program operator
-publishes the measured baseline in AIuditor before ordinary certification resumes.
+publishes the measured baseline in the certification program before ordinary certification resumes.
 No service is activated and selling remains disabled by this command.
 
 This first pack captures repeatability, model load, full-context completion and
@@ -64,7 +64,7 @@ remain inactive until the separate owner activation flow completes.
 
 Network admins can reject evidence and still authorize retries. Hosts can also
 request fresh attempts after failure or expiry; earlier journals and measurements
-remain intact. An unavailable AIuditor
+remain intact. An unavailable certification program
 or invalid configuration is not treated as an absent reference. Physical AGX
 execution remains pending deployment of both the plane and signed host build.
 
@@ -117,7 +117,7 @@ journals remain available.
 
 Guided certification archives a failed plan and offers a fresh plan for every
 failure category. Unconfirmed evidence uploads keep the original evidence and
-retry its delivery. Enrollment, device keys, model cache, scheduling holds,
+retry its delivery. Enrollment, device keys, model cache, scheduling restrictions,
 intake and activation checks remain in effect.
 
 For an established class reference, the plane initially accepts measured decode
@@ -145,7 +145,7 @@ Rerun the same installer after the network admin publishes the reference. The
 saved device credential continues onboarding, certification, and initial paused
 activation without a second device-code login or owner browser approval. The
 completed owner-approved registration is durable; current owner membership,
-device binding, certification, model pins, holds and leases are still checked
+device binding, certification, model pins, scheduling restrictions and leases are still checked
 before a short-lived activation permit is issued. Selling remains disabled.
 Deploy the companion plane activation change before this installer release.
 Maintenance resume after an operational stop retains its separate owner check.

@@ -1,6 +1,6 @@
 # Linux host lifecycle completion
 
-Approved scope: finish the five remaining implementation areas before the operator runs the resulting build on AGX-1. Physical checks may use AGX-1 after implementation; simulated CI is not hardware acceptance.
+These procedures cover recovery, maintenance, installer update, bootstrap, and acceptance. Simulated CI is not hardware acceptance.
 
 ## Delivery checklist
 
@@ -8,7 +8,7 @@ Approved scope: finish the five remaining implementation areas before the operat
 - [x] Enrolled maintenance: drain, safe stop/reboot, verified resume and explicit return to service.
 - [x] Reviewed installer self-update and signed agent-update reconciliation.
 - [x] Independent bootstrap trust and guided website-to-install flow.
-- [x] Automated installation/recovery acceptance suite and an executable AGX-1 acceptance procedure.
+- [x] Automated installation/recovery acceptance suite and an executable the AGX acceptance procedure.
 
 Workload modes and macOS remain deferred. AMD/N5 and Renesas/Rockchip require separate backend admission and physical evidence.
 
@@ -24,13 +24,13 @@ Use the matching signed installer and retain the original agent and certificatio
 
 1. Review `plan-maintenance --plan certification-plan.json --operation stop` (or `reboot`).
 2. Apply with `maintain-agent --plan maintenance-plan.json --approve-plan SHA256 --apply`. Reboot also requires `--reboot`.
-3. The local authenticated owner endpoint persists an indefinite pause and a maintenance hold. An owner pause in effect at that time is kept separately and restored after the hold. New workloads and self-updates are refused; lease cleanup remains available. Wait for the current lease/job to finish and for the plane to report paused. The installer also checks for remaining Hypermesh Docker containers and a local lease before disabling and stopping services.
-4. If drain times out, the hold remains; correct the blocker and retry the same plan. A durable stopping checkpoint allows recovery if the service stops before its reply or checkpoint arrives. A recorded reboot is never retried implicitly.
-5. After maintenance (and a different boot for reboot plans), use `resume-agent --plan maintenance-plan.json --approve-plan SHA256 --start`. It verifies machine identity, installation, credentials, current prerequisites and plane readiness through controlled activation. The host stays paused until plane readiness is confirmed and the hold is removed. Selling then resumes on its own unless the owner had paused it, in which case that pause is restored. The command output includes the resulting `sell_state`.
+3. The local authenticated owner endpoint persists an indefinite pause and a maintenance pause. An owner pause in effect at that time is kept separately and restored after the maintenance pause. New workloads and self-updates are refused; lease cleanup remains available. Wait for the current lease/job to finish and for the plane to report paused. The installer also checks for remaining Hypermesh Docker containers and a local lease before disabling and stopping services.
+4. If drain times out, the maintenance pause remains; correct the blocker and retry the same plan. A durable stopping checkpoint allows recovery if the service stops before its reply or checkpoint arrives. A recorded reboot is never retried implicitly.
+5. After maintenance (and a different boot for reboot plans), use `resume-agent --plan maintenance-plan.json --approve-plan SHA256 --start`. It verifies machine identity, installation, credentials, current prerequisites and plane readiness through controlled activation. The host stays paused until plane readiness is confirmed and the maintenance pause is removed. Selling then resumes on its own unless the owner had paused it, in which case that pause is restored. The command output includes the resulting `sell_state`.
 
 For repair/uninstall, stop first, then review and apply the recovery plan. Backups remain in the private installer recovery directory. Uninstall preserves enrollment and cached models; it does not retire the host. Repair restores the original signed installation and its install journal. Use the retained maintenance plan to resume after repair.
 
-The agent must include the maintenance owner endpoint. Older agents refuse the request; the installer does not substitute a forced stop. Missing connectivity, unexpected units/drop-ins, active workloads, unknown local state or a failed checkpoint prevent progress. Physical SSH reconnect and actual systemd/driver behavior still need AGX-1 acceptance.
+The agent must include the maintenance owner endpoint. Older agents refuse the request; the installer does not substitute a forced stop. Missing connectivity, unexpected units/drop-ins, active workloads, unknown local state or a failed checkpoint prevent progress. Physical SSH reconnect and actual systemd/driver behavior still need the AGX acceptance.
 
 ## Reviewed installer updates and signed agent evidence
 
@@ -66,7 +66,7 @@ Maintenance resume uses separate original-owner approval and device-authenticate
 resume-permit endpoints. A completed certification may outlive the initial
 24-hour acquisition/first-activation window, but resume requires the current
 green certification and completed evidence, unchanged authoritative program/catalog pins, intact
-evidence, accepted intake, no holds/jobs/leases and owner approval within ten
+evidence, accepted intake, no scheduling restrictions, jobs, or leases and owner approval within ten
 minutes. A permit lasts at most two minutes. First-activation expiry is unchanged.
 The host accepts an expired acquisition window only for an explicitly marked
 maintenance-resume permit; older planes fail closed.

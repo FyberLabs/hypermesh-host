@@ -151,7 +151,7 @@ Checks run at most once an hour (`HYPERMESH_UPDATE_EVERY`), including while a re
 
 ## Before the first release
 
-The release maintainer generates the signing key offline and stores it in Key Vault `kv-fyber-hmhost` (`rg-fyber`) as `hypermesh-host-release-gpg-private-key` and `hypermesh-host-release-gpg-passphrase`. This repo does not create the vault, the storage account, the container, the app registration, or the role. This private repository is on GitHub Free, so there is no Environment `release` and no environment secrets to create.
+The release maintainer generates the signing key offline and stores it in Key Vault `kv-fyber-hmhost` (`rg-fyber`) as `hypermesh-host-release-gpg-private-key` and `hypermesh-host-release-gpg-passphrase`. This repo does not create the vault, the storage account, the container, the app registration, or the role. The release job does not use a GitHub Environment and does not read GitHub environment secrets.
 
 The publish script exits before uploading when the Key Vault name or secret names are empty, when the key secret is empty, or when the storage account and container variables are empty.
 
@@ -198,7 +198,7 @@ The release job's token scopes are `contents: write` (the human GitHub Release) 
 
 The workflow refuses every ref except `refs/heads/main` (test) and `refs/tags/v*` whose commit is an ancestor of `origin/main` (prod). That includes `workflow_dispatch` from any other ref. A tag ruleset so only maintainers can push `v*` lives in infra, not in this repo.
 
-The first real publish needs infra #143 applied and these six repository variables set: `HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID`, `HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_STORAGE_ACCOUNT`, and `AZURE_STORAGE_CONTAINER`.
+The first real publish needs these six repository variables set: `HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID`, `HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_STORAGE_ACCOUNT`, and `AZURE_STORAGE_CONTAINER`.
 
 The self-hosted runner needs `gpg`, `az`, `python3`, `curl`, `sha256sum`, and `shred` when it is available. Go comes from `setup-go`. After login the publisher runs `az keyvault secret show --vault-name kv-fyber-hmhost --name hypermesh-host-release-gpg-private-key --query value -o tsv`, and the same command for `hypermesh-host-release-gpg-passphrase`, into a `chmod 700` `GNUPGHOME`. That command has no `--auth-mode`. Storage blob commands still pass `--auth-mode login`. It masks the passphrase and imports with `--batch --pinentry-mode loopback --passphrase-file`. It does not enable xtrace. The always-run step shreds that directory, runs `gpgconf --kill all`, and runs `az logout`. CI installs azure-cli 2.90.0 and `storage-blob-preview` 1.0.0b3, then checks every `az` flag in the release workflow and the publish scripts against that CLI's `--help`.
 
