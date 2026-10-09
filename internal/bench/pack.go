@@ -1,5 +1,5 @@
 // Package bench is the certification pack. The host runs it inside the lab soak job (path_b).
-// A repo digest is read from the local image. It is never invented.
+// A repo digest is read from the local image.
 package bench
 
 import (
@@ -55,7 +55,7 @@ func FirstRepoDigest(raw []byte) string {
 }
 
 // Pull fetches the local workload tag. It is not a catalog pin.
-// A repo@sha256 is refused here so a missing inspect cannot be invented.
+// A repo@sha256 is refused here so a missing inspect cannot be filled in.
 func Pull(ctx context.Context, ref string) error {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || strings.Contains(ref, "@") {

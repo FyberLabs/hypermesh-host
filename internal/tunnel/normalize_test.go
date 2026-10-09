@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// TestUserspacePeerCompare is the fresh-process restart on AGX64-1.
+// TestUserspacePeerCompare is a fresh-process restart of the userspace peer.
 // Each case builds a new Runner with no applied marker. The link is the
 // live wireguard-go device, not memory from a previous Apply in this process.
 func TestUserspacePeerCompare(t *testing.T) {

@@ -129,8 +129,8 @@ type HostHealth struct {
 	HostType string `json:"host_type,omitempty"`
 }
 
-// PathBState is the control-plane certification state (JSON path_b_state,
-// to be renamed cert_state).
+// PathBState is the control-plane certification state for the
+// plane-brokered lease path (JSON field path_b_state).
 type PathBState string
 
 const (
@@ -139,8 +139,8 @@ const (
 	PathBSuspended PathBState = "suspended"
 )
 
-// SellState is Host-reported sell posture. Not the certification state.
-// Do not copy path_b_state into sell_state.
+// SellState is host-reported sell posture. It is separate from
+// path_b_state.
 type SellState string
 
 const (

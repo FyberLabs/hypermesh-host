@@ -37,7 +37,7 @@ var ErrNoCatalogID = errors.New("hypermesh: lease catalog_id is required for lla
 const llamaServerCommand = `set -eu
 MODEL=/models/model.gguf
 if [ ! -s "$MODEL" ]; then
-	echo "No GGUF at $MODEL. Volume-mount the host weights (forgot -v ...:/models/model.gguf:ro). This image does not bake or invent a model." >&2
+	echo "No GGUF at $MODEL. Volume-mount the host weights (forgot -v ...:/models/model.gguf:ro). This image does not include a model." >&2
 	exit 1
 fi
 serve_alias=${HYPERMESH_SERVE_ALIAS:-}

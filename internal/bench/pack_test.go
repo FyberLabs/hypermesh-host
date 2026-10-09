@@ -33,6 +33,6 @@ func TestLlamaImageIsTheOnlyLocalPin(t *testing.T) {
 		t.Fatal("8B workload image should be inspectable")
 	}
 	if LocalImage("whisper-small") != "" || LocalImage("qwen-2.5-32b-q4") != "" {
-		t.Fatal("do not invent an image for a row this box does not build")
+		t.Fatal("unexpected image for a row this box does not build")
 	}
 }

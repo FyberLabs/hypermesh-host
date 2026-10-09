@@ -770,8 +770,8 @@ func wgSetConfig(s Session, listenPort int) string {
 
 // wantedRoutes is the AllowedIPs prefixes to install on the interface.
 // 0.0.0.0/0 and ::/0 are omitted unless InstallDefaultRoute is set. Installing
-// them would replace the LAN default route (on AGX64-1, 192.168.6.1 dev end0)
-// that reaches the control plane and the WireGuard endpoint.
+// them would replace the LAN default route that reaches the control plane
+// and the WireGuard endpoint.
 func wantedRoutes(allowed string, installDefault bool) ([]string, error) {
 	allowed = strings.TrimSpace(allowed)
 	if allowed == "" || allowed == "(none)" {

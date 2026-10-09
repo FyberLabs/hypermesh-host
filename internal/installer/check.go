@@ -58,7 +58,7 @@ func runResourceCheck(ctx context.Context, args []string, out, diagnostic io.Wri
 		admission.Reasons = append(admission.Reasons, probeErr.Error())
 	}
 	report := ResourceReport{1, *mode, path, resources, admission,
-		"resource capacity only; GPU allocation, architecture support, AIuditor connectivity, certification and selling readiness remain unverified"}
+		"resource capacity only; GPU allocation, architecture support, readiness connectivity, certification and selling readiness remain unverified"}
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {

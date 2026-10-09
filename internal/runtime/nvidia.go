@@ -36,8 +36,8 @@ var (
 // http://<client_address>:8080.
 const DefaultListenPort = "8080"
 
-// DefaultGGUFPath is the documented AGX64-1 example. The agent does not
-// use this as a silent default — HYPERMESH_GGUF_PATH must be a real file.
+// DefaultGGUFPath is the example host weights path used when a caller
+// omits one. Lease start still requires HYPERMESH_GGUF_PATH to be a real file.
 const DefaultGGUFPath = "/home/chris/hypermesh/workload/model.gguf"
 
 // ContainerGGUFPath is where llama-server looks inside the container.
@@ -124,7 +124,7 @@ func NewNVIDIA() *NVIDIA {
 }
 
 // ImageRef accepts the fixed image_digest field. It must be repo@digest.
-// Bare sha256:hex fails; we will not invent a registry or repository.
+// Bare sha256:hex fails. A registry and repository are required.
 func ImageRef(imageDigest string) (string, error) {
 	s := strings.TrimSpace(imageDigest)
 	if s == "" {

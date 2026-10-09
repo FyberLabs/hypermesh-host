@@ -48,7 +48,7 @@ Complete and validate each milestone before starting the next:
 6. Independent bootstrap trust and hyperme.sh download integration, then the
    full automated installation/recovery acceptance suite.
 
-Physical the AGX installation is the final acceptance run, not something claimed
+Physical AGX installation is the final acceptance run, not something claimed
 complete before the machine is available. N5 MAX and other Linux targets need
 their own measured acceptance; no profile is certified by its product name.
 Website and control-plane dependencies stay on this delivery checklist.
@@ -261,7 +261,7 @@ Exit 1 means a check failed, and exit 2 means invalid arguments.
 ```
 
 Replace the URL with the selected deployment's actual readiness endpoint;
-there is deliberately no invented default path. Requests require trusted TLS,
+there is no default readiness URL. Requests require trusted TLS,
 time out after ten seconds, reject redirects, and require HTTP 2xx. URLs with
 credentials, query parameters or fragments are rejected. Response bodies are
 not stored. The command changes no packages, keys, disks or system services.
@@ -520,7 +520,7 @@ build record.
   delivery contract with the required access policy.
 - [ ] Provision independent bootstrap trust, self-update and reviewed install.
 
-No public storage access or invented service endpoint is assumed. The configured
+No public storage access or extra service endpoint is assumed. The configured
 HTTPS root must serve the existing publisher layout. Discovery fetches files
 only and does not execute the CLI, enroll a host or modify system services.
 
@@ -533,7 +533,7 @@ box arrives; refine profile names from measured hardware.
 
 | Planned target | Intended package family | Validation focus |
 | --- | --- | --- |
-| AGX 64 / the AGX | Linux arm64 | JetPack/L4T compatibility, UMA allocation, ARM bootstrap and reenrollment |
+| AGX Orin 64GB | Linux arm64 | JetPack/L4T compatibility, UMA allocation, ARM bootstrap and reenrollment |
 | Seeed J4012 Jetson | Linux arm64 | Actual module/RAM, admission minimums, power/thermal constraints and vendor stack |
 | MINISFORUM N5 MAX, Ryzen AI Max+ 395, 128 GB | Linux amd64 (x86-64) | AMD GPU/runtime, UMA limits, preserve NAS storage and services |
 | Planned 495 system, 192 GB | Linux amd64 if detected x86-64 | Confirm exact processor/GPU and vendor-supported runtime before profile selection |
@@ -884,7 +884,7 @@ reloaded. Their activation condition requires
 `/var/lib/hypermesh/activation-approved`, which this command never creates.
 Do not manually create it to skip onboarding. Device authorization, fresh-key
 enrollment, authenticated connectivity/benchmark gating and activation remain
-the next task; this stage alone is not an the AGX acceptance run.
+the next task; this stage alone is not an AGX acceptance run.
 
 Tests cover kernel/userspace payloads, exact plan binding, unsafe inputs,
 private journal persistence, interruption/retry, changed existing files,
@@ -1067,7 +1067,7 @@ Preserve private journals locally and never upload them as support logs.
 Success is `registered-inactive`: the dashboard device is paused and
 uncertified. No activation marker, service enable/start, certification result or
 selling state is created. The authenticated control-plane and certification-program checks are implemented below.
-WireGuard and certification execution still precede service activation. the AGX physical acceptance is
+WireGuard and certification execution still precede service activation. Physical AGX acceptance is
 still pending.
 
 Automated coverage includes TLS auth/session separation and response binding,
@@ -1398,7 +1398,7 @@ selling. The idle plane peer persists for later activation and is revoked by hos
 retirement. A later ordinary check clears the saved connectivity success.
 
 Protocol, allocation/retry, failure, cleanup, timestamp and journal checks are
-automated. Physical the AGX/N5 validation, certification inference and workload
+automated. Physical AGX and N5 validation, certification inference and workload
 compatibility, certification execution, and service activation remain pending.
 
 
@@ -1457,7 +1457,7 @@ It does not prove exhaustive memory integrity, GPU compute correctness, actual
 model/context fit, certification inference, certification or readiness to sell.
 The runtime calls follow the [CUDA driver memory API](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__MEM.html)
 and [HIP memory API](https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/group___memory.html).
-Tests use simulated drivers and bounded CPU-only child processes; actual the AGX
+Tests use simulated drivers and bounded CPU-only child processes; actual AGX
 and N5 GPU evidence must still be collected.
 
 ## Remaining installation-to-ready sequence
@@ -1467,7 +1467,7 @@ see [the operator and host procedure](authenticated-certification.md). Complete
 the remaining stages without treating simulated tests as hardware acceptance:
 
 1. Provision reviewed catalog pins and a measured class envelope, then
-   perform real the AGX download, registration, context certification and paused startup.
+   perform a real AGX download, registration, context certification and paused startup.
 2. Add enrolled-host maintenance reboot/resume and repair/uninstall. Live status and pre-enrollment prerequisite reboot/resume are implemented.
    Installer self-update still needs its own reviewed transition.
 3. Complete independent website bootstrap trust and guided public download flow.
@@ -1497,7 +1497,7 @@ retains its telemetry behavior but cannot publish a catalog benchmark.
 Deploy the matching Panopticon job response extension before this host release.
 It adds current catalog `file_hash`, `size_bytes` and the admitted Jetson backend
 to authenticated dispatch. Null source pins stay null; populate reviewed catalog
-metadata rather than inventing a seed hash. This is a dispatch snapshot, not an
+metadata rather than filling in a seed hash. This is a dispatch snapshot, not an
 immutable per-job attestation across retries. Hardware tests remain pending.
 
 **Current status:** approved local execution, full-context checks, authenticated
@@ -1704,7 +1704,7 @@ heartbeat anomalies, identity/evidence binding, reboot markers, locking and CLI
 privacy. See [live host status](authenticated-certification.md#live-host-status).
 
 Enrolled-host maintenance reboot, repair/uninstall, signed-update reconciliation against the
-original installation, physical the AGX acceptance and sustained workload checks
+original installation, physical AGX acceptance and sustained workload checks
 remain open. This diagnostic does not replace those operations.
 
 ### Completed: approved prerequisite reboot and verified resume (2026-10-02)

@@ -83,11 +83,11 @@ func certificationRecoveryAction(state, code string) string {
  case "activating":
   return "Activation or rollback is unconfirmed. Inspect service state and rerun activate-agent with the same reviewed plan to reconcile its matching marker. Do not delete journals or create an activation marker by hand."
  case "active":
-  return "Stable paused startup was recorded at this timestamp. Check current service and dashboard state, heartbeat and holds before changing selling posture. This record does not prove current uptime, connectivity or permission to sell."
+  return "Stable paused startup was recorded at this timestamp. Check current service and dashboard state, heartbeat and scheduling restrictions before changing selling posture. This record does not prove current uptime, connectivity or permission to sell."
  case "failed":
   switch code {
   case "class_band":
-   return "The plane rejected the measured class envelope. Review hardware and the configured AIuditor baseline, then prepare a new reviewed run; this run is terminal."
+   return "The plane rejected the measured class envelope. Review hardware and the configured class baseline, then prepare a new reviewed run; this run is terminal."
   case "acquisition":
    return "Check model access/license, immutable source pins, models-filesystem capacity and plan expiry locally. Preserve the cache and identity; retry the reviewed unexpired plan after resolving the blocker."
   case "workload":
@@ -95,7 +95,7 @@ func certificationRecoveryAction(state, code string) string {
   case "tunnel":
    return "Check gateway allocation and UDP/overlay connectivity. Preserve enrollment and keys; retry the reviewed unexpired plan after resolving connectivity and reconciling temporary resources."
   default:
-   return "Inspect current prerequisites, service inactivity, holds, lease state and models-filesystem resources. Preserve enrollment; retry the reviewed unexpired plan after resolving blockers."
+   return "Inspect current prerequisites, service inactivity, scheduling restrictions, lease state and models-filesystem resources. Preserve enrollment; retry the reviewed unexpired plan after resolving blockers."
   }
  }
  return "Preserve installer state and inspect this journal locally."

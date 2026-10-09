@@ -137,11 +137,10 @@ owner to run a separate selling command. Stable process verification alone does
 not grant selling: the existing activation release and live readiness gates
 still apply.
 
-This addresses the AGX activation/update collision seen on October 8, where a
-healthy replacement was stopped during activation and its build was subsequently
-marked rolled back. Existing rollback exclusions, registration keys and owner
-approvals are preserved; a newer signed release can advance normally. Physical
-acceptance of this correction remains pending deployment to AGX.
+If activation stops a healthy replacement and then marks that build rolled back,
+existing rollback exclusions, registration keys and owner approvals stay in
+place. A newer signed release can advance normally. Physical acceptance of this
+correction remains pending deployment to an AGX.
 
 
 A stage-7 cursor from an older installer is not proof that activation release

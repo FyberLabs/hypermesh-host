@@ -30,7 +30,8 @@ const (
 	SellSourceActivation = "activation"
 )
 
-// SellPosture is the host-local sell actuator state. Not Path B.
+// SellPosture is the host-local sell state. It is separate from
+// path_b_state on the control plane.
 //
 // A paused posture with no source and no until predates sources. Earlier
 // installers wrote it at activation as the exact compact bytes in

@@ -1,7 +1,7 @@
 // Package runtime — workload jail and host-side egress observation.
 //
 // ObserveWorkloadEgress records a boolean the plane can trust for admission
-// sandbox. It does not scan the network, invent a path, or weaken the jail.
+// sandbox. It does not scan the network or weaken the jail.
 // If we cannot observe honestly, ok is false with reason egress_unobserved.
 package runtime
 

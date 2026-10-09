@@ -132,7 +132,7 @@ This box reports `nvpmodel -q`. Confirm ids on this image. TOPS is not tokens/se
 
 ## thin-v1
 
-Suite is `thin-v1`. The lab soak job (`path_b` in code, to be renamed `lab_soak`) collects image hash / uptime / thermal. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, telem can still pass so enroll/green is not stuck before `lease_start`, and records that inference was skipped.
+Suite is `thin-v1`. The lab soak job (`path_b`) collects image hash, uptime, and thermal readings. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, telemetry can still pass so enrollment is not blocked before `lease_start`, and records that inference was skipped.
 
 `passed=true` still needs a **non-empty `image_hash`** (telem/host, else the running lease `ImageDigest`). Empty telem + no lease → `passed=false`.
 

@@ -35,7 +35,7 @@ func TestHIPStartArgsNoNVIDIANoOverride(t *testing.T) {
 	}
 	for _, leak := range []string{"tok/s", "TOPS", "tokens/sec"} {
 		if strings.Contains(joined, leak) {
-			t.Fatalf("do not invent %s: %v", leak, args)
+			t.Fatalf("unexpected %s: %v", leak, args)
 		}
 	}
 }

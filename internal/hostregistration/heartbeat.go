@@ -42,7 +42,7 @@ func (c *Client) HeartbeatDevice(ctx context.Context,r Request,deviceID,secret s
 func (c *Client) checkHeartbeat(s HeartbeatReceipt,r Request,q heartbeatRequest)error {
  if err:=c.checkOnboarding(s.OnboardingSnapshot,r,q.onboardingRequest);err!=nil{return err}
  if !s.SupportsHeartbeat() {return fmt.Errorf("plane lacks onboarding heartbeat capability")}
- if s.AIuditorProgramState!="ready" {return fmt.Errorf("AIuditor program blocks heartbeat: %s; rerun check-agent for guidance",s.AIuditorProgramState)}
+ if s.AIuditorProgramState!="ready" {return fmt.Errorf("certification program blocks heartbeat: %s; rerun check-agent for guidance",s.AIuditorProgramState)}
  if s.HeartbeatState!="recorded"||s.HeartbeatRecordedAt==nil||s.HeartbeatRecordedAt.IsZero()||
  s.HeartbeatUptimeS==nil||*s.HeartbeatUptimeS!=q.UptimeS||s.LastHeartbeatAt==nil||
  !s.LastHeartbeatAt.Equal(*s.HeartbeatRecordedAt)||!s.CheckedAt.Equal(*s.HeartbeatRecordedAt)||

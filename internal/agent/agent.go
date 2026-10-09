@@ -1255,8 +1255,9 @@ func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Resul
 	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}, false
 }
 
-// leaseStartAlready is a same-lease remint or PostResult retry. Do not
-// docker run a second container. Reuse the measured GGUF hash.
+// leaseStartAlready handles a repeat lease_start for a lease that is
+// already running, or a PostResult retry. It does not docker run a
+// second container. It reuses the measured GGUF hash.
 func (a *Agent) leaseStartAlready(h *runtime.Handle) pathb.Result {
 	hash := strings.TrimSpace(h.FileHash)
 	if hash == "" {

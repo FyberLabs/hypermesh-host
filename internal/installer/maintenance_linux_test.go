@@ -38,7 +38,7 @@ func TestMaintenanceRecoversInterruptedStopWithoutOwnerSocket(t *testing.T){
 }
 
 func TestMaintenanceHoldReleasedOnlyAfterResumeCheckpoint(t *testing.T){
- hold:=fmt.Errorf("matching maintenance hold required")
+ hold:=fmt.Errorf("matching maintenance pause required")
  if released,err:=maintenanceHoldReleased(nil,false,"stopped");released||err!=nil{t.Fatal("present hold treated as released")}
  for _,state:=range []string{"resuming","complete"}{
   if released,err:=maintenanceHoldReleased(hold,true,state);!released||err!=nil{t.Fatal("released hold blocks retry",state)}

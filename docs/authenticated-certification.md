@@ -18,11 +18,11 @@ catalog's immutable source through the internal authenticated
 `PUT /api/v1/hypermesh/internal/onboarding-models/{catalog_id}` endpoint with
 `{"source_ref":"PUBLISHER/REPOSITORY@40_HEX_COMMIT/path/model.gguf"}`.
 Use the existing internal token and tenant headers through the internal service,
-not a host or browser credential. No source, hash or performance baseline is
-invented from a download. The runtime image must be public or already cached.
+not a host or browser credential. A download does not supply a source, hash,
+or performance baseline. The runtime image must be public or already cached.
 
 Complete the approved prerequisite/agent installation and original-owner
-registration. Resolve intake, holds, leases and pending jobs in the dashboard.
+registration. Resolve intake, scheduling restrictions, leases and pending jobs in the dashboard.
 Activation requires accepted intake; certification can run while intake is pending.
 
 ## Host commands
@@ -93,7 +93,7 @@ it contains measured metadata, not model tokens or browser credentials.
 
 Automated tests cover download integrity/deadlines, immutable/idempotent result
 upload, owner and state gates, SQL rollback/concurrency, and startup rollback.
-Physical the AGX installation, real class baseline compatibility, reboot recovery,
+Physical AGX installation, real class baseline compatibility, reboot recovery,
 and model license/source provisioning still require operator acceptance.
 
 ## Read-only certification recovery

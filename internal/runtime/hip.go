@@ -82,7 +82,7 @@ func HIPDevicesPresent() bool {
 }
 
 // Start runs repo@digest with ROCm device nodes. It does not pull GHCR,
-// does not set HSA_OVERRIDE, and does not invent completions or tok/s.
+// does not set HSA_OVERRIDE, and does not report completions or tok/s.
 func (h *HIP) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if strings.TrimSpace(spec.LeaseID) == "" {
 		return nil, ErrNoLeaseID

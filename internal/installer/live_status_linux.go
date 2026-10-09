@@ -106,7 +106,7 @@ func collectLiveHostStatus(ctx context.Context,p certificationPlan,d liveStatusD
    add(liveGate("class",s.ClassAvailable!=nil&&*s.ClassAvailable,"Hardware class is configured.","Platform must admit or restore this hardware class."))
    add(liveGate("intake",s.PathAState=="accepted","Plane reports accepted intake.","Review pending or rejected hardware intake in the host dashboard."))
    add(liveGate("certification",s.PathBState=="green","Plane currently reports green certification.","Review current certification status in the dashboard; resolve suspension or complete the reviewed certification flow."))
-   add(liveGate("schedule",s.ScheduleHold!=nil&&!*s.ScheduleHold,"No schedule hold is reported.","Review the schedule hold reason and recovery action in the host dashboard."))
+   add(liveGate("schedule",s.ScheduleHold!=nil&&!*s.ScheduleHold,"No scheduling restriction is reported.","Review the scheduling restriction and recovery action in the host dashboard."))
    add(onboardingProgramGate(s.AIuditorProgramState))
    // Use the plane's own clock for heartbeat age; future timestamps never pass.
    heartbeatOK:=false

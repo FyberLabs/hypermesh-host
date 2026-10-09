@@ -408,7 +408,7 @@ func TestStopSkipsRmWhenStopFails(t *testing.T) {
 }
 
 func TestStopThenStartReusesExitedName(t *testing.T) {
-	// AGX64-1 SWAP: docker stop left hypermesh-<lease_id> Exited;
+	// Stopped lease: docker stop left hypermesh-<lease_id> Exited;
 	// the next lease_start hit docker exit 125 (name already in use).
 	const leaseID = "22b3f0d7-f4dc-4423-8250-58449f15c61d"
 	name := ContainerName(leaseID)

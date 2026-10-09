@@ -225,7 +225,7 @@ func buildSetupPlan(ctx context.Context, p Plan, requested, wireguardMode string
 		Pending: []string{"Approve a complete plan and revalidate its inputs immediately before applying",
 			"Bind verified agent, rollback helper, configuration and service payloads in the apply milestone",
 			"Validate this candidate profile on hardware, including actual model/context fit",
-			"Complete device authorization, authenticated AIuditor checks and enrollment before selling"},
+			"Complete device authorization, authenticated certification-program checks and enrollment before selling"},
 		RebootPolicy: "No reboot is executed. Kernel and driver transitions require a separately validated profile."}
 	// Total bound as well as per-command bounds.
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)

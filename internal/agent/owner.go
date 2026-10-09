@@ -105,7 +105,7 @@ type ownerLeaseStatus struct {
 }
 
 // ownerPathBStatus is what this box actually stores or can probe.
-// CP heartbeat path_b_state is logged only and is not invented here.
+// Control-plane heartbeat path_b_state is logged only. Status does not store it.
 type ownerPathBStatus struct {
 	BootIDPresent bool   `json:"boot_id_present"`
 	BootID        string `json:"boot_id,omitempty"`

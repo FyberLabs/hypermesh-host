@@ -1,6 +1,6 @@
 // Package pull fetches pinned GGUF weights onto the lab host.
 //
-// Allowlist mirrors AIuditor crawl.py: Hugging Face plus a small set of
+// Allowlist mirrors the control-plane model crawl: Hugging Face plus a small set of
 // GGUF publishers. Fail closed on anything else. The crawler never
 // downloads; only the host agent does.
 package pull
@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-// GGUFPublisherAllowlist matches aiuditor_service.crawl.GGUF_PUBLISHER_ALLOWLIST.
+// GGUFPublisherAllowlist matches the control-plane GGUF publisher allowlist.
 var GGUFPublisherAllowlist = map[string]struct{}{
 	"bartowski":          {},
 	"thebloke":           {},
