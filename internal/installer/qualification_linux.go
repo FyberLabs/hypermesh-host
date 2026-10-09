@@ -41,7 +41,7 @@ type qualificationDeps struct {
 func performQualification(ctx context.Context, j *qualificationJournal, d qualificationDeps) error {
 	if j.State == "reported" {
 		if j.Report.FailureCode != "" {
-			return fmt.Errorf("qualification failed (%s): %s; for guided setup, rerun hypermesh-deploy to request and approve a fresh measurement attempt; for manual qualify-host, ask the operator to authorize a new run, then rerun qualify-host with the same --agent-plan and the new --run-id; registration is retained", j.Report.FailureCode, j.FailureDetail)
+			return fmt.Errorf("qualification failed (%s): %s; for guided setup, rerun hypermesh-host to request and approve a fresh measurement attempt; for manual qualify-host, ask the operator to authorize a new run, then rerun qualify-host with the same --agent-plan and the new --run-id; registration is retained", j.Report.FailureCode, j.FailureDetail)
 		}
 		return nil
 	}
@@ -104,7 +104,7 @@ func performQualification(ctx context.Context, j *qualificationJournal, d qualif
 		return err
 	}
 	if j.Report.FailureCode != "" {
-		return fmt.Errorf("qualification recorded a %s failure: %s; for guided setup, rerun hypermesh-deploy to request and approve a fresh measurement attempt; for manual qualify-host, ask the operator to authorize a new run, then rerun qualify-host with the same --agent-plan and the new --run-id; registration is retained", j.Report.FailureCode, j.FailureDetail)
+		return fmt.Errorf("qualification recorded a %s failure: %s; for guided setup, rerun hypermesh-host to request and approve a fresh measurement attempt; for manual qualify-host, ask the operator to authorize a new run, then rerun qualify-host with the same --agent-plan and the new --run-id; registration is retained", j.Report.FailureCode, j.FailureDetail)
 	}
 	return nil
 }

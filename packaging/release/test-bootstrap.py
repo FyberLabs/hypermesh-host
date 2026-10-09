@@ -56,6 +56,62 @@ class BootstrapTests(unittest.TestCase):
         Path(args[6]).write_bytes(self.payload)
         return json.loads(self.meta)
 
+    def test_detect_local_linux_architecture(self):
+        for machine, expected in (("aarch64", "arm64"), ("x86_64", "amd64"),
+                                  ("arm64", "arm64"), ("AMD64", "amd64")):
+            with mock.patch.object(bootstrap.platform, "system", return_value="Linux"), mock.patch.object(
+                    bootstrap.platform, "machine", return_value=machine):
+                self.assertEqual(bootstrap.detected_arch(), expected)
+        for system, machine in (("Darwin", "arm64"), ("Linux", "riscv64")):
+            with mock.patch.object(bootstrap.platform, "system", return_value=system), mock.patch.object(
+                    bootstrap.platform, "machine", return_value=machine):
+                with self.assertRaises(bootstrap.Rejected):
+                    bootstrap.detected_arch()
+
+    def test_discovery_binds_channel_and_immutable_identity(self):
+        for channel in ("test", "prod"):
+            meta = dict(json.loads(self.meta), channel=channel)
+            if channel == "prod":
+                meta["release_id"] = meta["version"]
+            url = "https://api.test.hyperme.sh/api/v1/hypermesh/public/host-releases/" + channel + "/" + meta["release_id"]
+            meta["releaseUrl"] = url
+            calls = []
+            def fetch(address, limit):
+                calls.append(address)
+                return json.dumps(meta).encode()
+            self.assertEqual(bootstrap.discover_release(channel, fetch)[0], url)
+            self.assertEqual(calls, ["https://hyperme.sh/api/hypermesh/host-releases?channel=" + channel])
+            for change in ({"channel": "other"}, {"build": True}, {"release_id": "../bad"},
+                           {"releaseUrl": 123}, {"releaseUrl": "http://bad.invalid/"}, {"releaseUrl": url + "/other"}):
+                with self.assertRaises(bootstrap.Rejected):
+                    bootstrap.discover_release(channel, lambda *_: json.dumps(dict(meta, **change)).encode())
+
+    def test_simple_command_discovers_and_detects_before_verification(self):
+        import contextlib
+        import io
+        import sys
+        for channel in ("prod", "test"):
+            meta = dict(json.loads(self.meta), channel=channel)
+            if channel == "prod":
+                meta["release_id"] = meta["version"]
+            url = "https://releases.invalid/" + channel + "/" + meta["release_id"]
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "hypermesh-host"
+                argv = ["verifier", "--output", str(output)]
+                if channel == "test":
+                    argv += ["--channel", "test"]
+                def verified(*args):
+                    self.assertEqual(args[:4], (url, channel, 24, "arm64"))
+                    Path(args[6]).write_bytes(self.payload)
+                    return meta
+                with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                        bootstrap, "discover_release", return_value=(url, meta)) as discover, mock.patch.object(
+                        bootstrap, "detected_arch", return_value="arm64"), mock.patch.object(
+                        bootstrap, "bootstrap", side_effect=verified), contextlib.redirect_stdout(io.StringIO()):
+                    bootstrap.main()
+                discover.assert_called_once_with(channel)
+                self.assertEqual(json.loads(Path(str(output) + ".install.json").read_text())["release_url"], url)
+
     def test_guided_receipt_and_next_command(self):
         import contextlib
         import io

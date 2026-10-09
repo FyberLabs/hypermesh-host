@@ -30,10 +30,10 @@ Activation requires accepted intake; certification can run while intake is pendi
 Use the installed release's deploy CLI and retain its reviewed agent plan:
 
 ```sh
-sudo hypermesh-deploy plan-certification --agent-plan agent-plan.json > certification-plan.json
-sudo hypermesh-deploy certify-agent --plan certification-plan.json \
+sudo hypermesh-host plan-certification --agent-plan agent-plan.json > certification-plan.json
+sudo hypermesh-host certify-agent --plan certification-plan.json \
   --approve-plan CERTIFICATION_PLAN_SHA256 --run
-sudo hypermesh-deploy activate-agent --plan certification-plan.json \
+sudo hypermesh-host activate-agent --plan certification-plan.json \
   --approve-plan CERTIFICATION_PLAN_SHA256 --start
 ```
 
@@ -102,8 +102,8 @@ Inspect the private journal without contacting the plane, rerunning a workload,
 or changing services:
 
 ```sh
-sudo hypermesh-deploy certification-status --plan-sha CERTIFICATION_PLAN_SHA256
-sudo hypermesh-deploy support-bundle \
+sudo hypermesh-host certification-status --plan-sha CERTIFICATION_PLAN_SHA256
+sudo hypermesh-host support-bundle \
   --certification-plan-sha CERTIFICATION_PLAN_SHA256 \
   --output /root/hypermesh-support-new.json
 ```
@@ -139,7 +139,7 @@ running. Use host-status below for current service and plane observations. Revie
 After creating the certification plan, use its matching signed installer:
 
 ```sh
-sudo hypermesh-deploy host-status --plan certification-plan.json
+sudo hypermesh-host host-status --plan certification-plan.json
 ```
 
 This read-only command combines current local observations and an authenticated
@@ -179,7 +179,7 @@ The installation integrity check compares configuration and units with the origi
 
 ## Host-requested rebenchmarking
 
-Rerun `sudo ./hypermesh-deploy` after resolving a failed measurement. With the
+Rerun `sudo ./hypermesh-host` after resolving a failed measurement. With the
 companion plane update, failed or expired qualification attempts receive a fresh
 run on the authenticated host's next request. No administrator action is needed
 to retry. The installer asks before downloading or running the workload; one

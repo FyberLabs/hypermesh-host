@@ -53,6 +53,7 @@ type guidedState struct {
  // startup only.
  SellConsent bool `json:"sell_consent,omitempty"`
  ContinuationSHA string `json:"continuation_sha256,omitempty"`
+ HostCLISHA string `json:"host_cli_sha256,omitempty"`
  LauncherSHA string `json:"launcher_sha256,omitempty"`
 }
 type guidedNetwork struct { Plane, Issuer, Dashboard string }
@@ -338,7 +339,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
  }
  if s.Stage==6 {
   fmt.Fprintln(g.ui.out,"Certification passed. Using this host’s saved registration to start the service; selling starts once startup is verified.")
-  fmt.Fprintln(g.ui.out,"Pause or resume selling at any time with: sudo hypermesh-deploy sell pause | sell resume")
+  fmt.Fprintln(g.ui.out,"Pause or resume selling at any time with: sudo hypermesh-host sell pause | sell resume")
   if g.state.Autonomous&&!g.state.SellConsent{
    if g.ui.ctx!=nil&&g.ui.ctx.Value(continuationConsent{})==true{
     return fmt.Errorf("certification passed, but the saved approval covers paused startup only; run the installer again with --interactive to approve starting selling")
@@ -508,7 +509,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  }
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  if s.Autonomous&&s.Stage<7 {fmt.Fprintln(out,"Setup continues automatically in hypermesh-onboarding.service. You may disconnect; progress is saved across reboots.")}
- if s.Stage==7{fmt.Fprintf(out,"Setup completed. Review %s to manage your host. Selling is enabled separately in the dashboard.\n",s.Host)}
+ if s.Stage==7{fmt.Fprintf(out,"Setup completed for %s. Manage this host with sudo hypermesh-host sell status, sell pause or sell resume.\n",s.Host)}
  return 0
 }
 

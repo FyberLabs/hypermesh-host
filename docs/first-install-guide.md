@@ -17,9 +17,23 @@ sudo apt-get update
 sudo apt-get install python3 gnupg
 ```
 
-Save the verifier in a new directory and run the release-specific command
-displayed on the website. It saves the verified `hypermesh-deploy` executable,
-a signing public key, and `hypermesh-deploy.install.json` (the download receipt).
+Save the verifier in a directory, then run:
+
+```sh
+python3 ./hypermesh-bootstrap.py
+# Or select newer test builds:
+python3 ./hypermesh-bootstrap.py --channel test
+```
+
+The verifier discovers the latest published release and detects Linux ARM64 or
+AMD64 locally. Production never falls back to test when unpublished. Use
+`--overwrite` to explicitly replace previous downloads after verification.
+Advanced `--release-url`, `--min-build` and `--arch` options remain available for
+pinned releases or downloading for another host. Unsupported channels and
+architectures fail clearly rather than choosing another build.
+
+It saves the verified `hypermesh-host` executable,
+a signing public key, and `hypermesh-host.install.json` (the download receipt).
 It does not install or start the host service.
 
 ## Start setup
@@ -27,7 +41,7 @@ It does not install or start the host service.
 In that directory, run:
 
 ```sh
-sudo ./hypermesh-deploy
+sudo ./hypermesh-host
 ```
 
 Follow the prompts. The installer offers your machine's hostname and the existing
@@ -42,7 +56,7 @@ paused startup after network approval. Browser sign-in and host enrollment happe
 before machine changes or reboot. You can use a browser on another computer or
 phone.
 
-After enrollment the installer installs a private copy of the verified CLI and
+After enrollment setup installs the verified CLI at `/usr/local/bin/hypermesh-host`, retains a private continuation copy, and
 enables `hypermesh-onboarding.timer`. That service resumes the saved setup after
 boot, disconnection or temporary failure. It uses the saved device credential;
 it does not need another browser login. The guide continues immediately while
@@ -89,7 +103,7 @@ verified installer build whose plans were approved.
 ## Advanced operations
 
 Individual planning, recovery, support and unattended commands remain
-available through `./hypermesh-deploy advanced-help`. They are not required
+available through `./hypermesh-host advanced-help`. They are not required
 for the normal guided installation. Manual installations made without a
 guided session retain their original plans; the guide does not adopt them
 or discard an existing identity.
@@ -108,3 +122,12 @@ their explicit approval behavior.
 After initial owner approval, setup binds a [durable host signing identity](machine-identity.md)
 before reboot. Token renewal and key rotation happen automatically; they do not
 require keeping your browser signed in.
+
+## CLI name and compatibility
+
+`hypermesh-host` is the host setup and management CLI. After setup, use
+`sudo hypermesh-host sell status`, `sell pause`, or `sell resume` from any
+directory. Existing `hypermesh-deploy` commands remain a compatibility entry
+point. Signed release artifact filenames and private continuation paths retain
+the old name so existing verifiers and timers continue to work. The public CLI
+is installed only after signature verification and saved setup consent.

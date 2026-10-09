@@ -18,14 +18,14 @@ Go 1.22+.
 go test ./...
 go build -ldflags "-X github.com/FyberLabs/hypermesh-host/internal/buildinfo.Commit=$(git rev-parse HEAD)" -o hypermesh-agent ./cmd/agent
 go build -o hypermesh-mhs-mcp ./cmd/hypermesh-mhs-mcp
-go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-deploy@latest
+go install github.com/FyberLabs/hypermesh-host/cmd/hypermesh-host@latest
 ```
 
 `build_commit` on the heartbeat prefers that ldflags value. If it is empty, this box uses the VCS revision from `debug.ReadBuildInfo` (`vcs.revision`). If that is empty too, the value is `unknown`.
 
-`hypermesh-deploy agx` preflights the pinned AGX image, writes the existing agent env and systemd units, then starts `hypermesh-wg` and `hypermesh-agent`. It stops on the first failure. `-serial` is required. The device id comes from the plane device list for that serial. Catalog must be HTTP 200 at `/api/v1/hypermesh/catalog`. The enroll token is `HYPERMESH_ENROLL_TOKEN` or `-enroll-token-file`, not a command-line value. A rerun on a box that already has `device.json` does not need a fresh token.
+`hypermesh-host agx` preflights the pinned AGX image, writes the existing agent env and systemd units, then starts `hypermesh-wg` and `hypermesh-agent`. It stops on the first failure. `-serial` is required. The device id comes from the plane device list for that serial. Catalog must be HTTP 200 at `/api/v1/hypermesh/catalog`. The enroll token is `HYPERMESH_ENROLL_TOKEN` or `-enroll-token-file`, not a command-line value. A rerun on a box that already has `device.json` does not need a fresh token.
 
-Release archives for `hypermesh-deploy` are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
+Release archives for `hypermesh-host` are linux amd64 and arm64 (`.goreleaser.yaml`). The Homebrew formula lives in `packaging/homebrew` until a tap exists.
 
 Agent releases are separate. `HYPERMESH_UPDATE_CHANNEL=test` tracks builds of `main`. `prod` tracks tagged `vX.Y.Z` releases. The host asks the control plane (`GET /api/v1/hypermesh/agent/updates/{channel}`) with its device credential and downloads from the short-lived URL in that response. It verifies a GPG signature over `checksums.txt` and the SHA-256 of the binary before it installs. It defers a restart while a lease is running or a job result is unacked, restarts only `hypermesh-agent`, and rolls back to `hypermesh-agent.pre-<version>` if the new binary does not heartbeat. There is no GitHub token on the box. Details, and what has to exist before the first publish: [deploy/agx/update.md](deploy/agx/update.md).
 
@@ -87,7 +87,7 @@ Pull is one job or 204. Body: `job_id`, `kind`, `device_id`, optional `lease_id`
 | `lease_expiry` | Same pin clear as `lease_cancel`. A matching running lease is stopped. Reason on success is `lease_expiry`. The plane does not send `lease_expiry` yet, so an expired lease clears its pin only when the pending TTL (default 30m) passes. |
 | `sell_pause` | Persist local sell posture in `$STATE_DIR/sell.json`. Matching `device_id` sets `sell_state=paused` (optional `until` RFC3339; omit = indefinite). Mismatch POSTs `passed=false` and the current real `sell_state` (usually `selling`) without flipping. Already paused is a no-op `passed=true`. While paused, new `lease_start` is refused (`passed=false`); the current lease is left running. When `until` is reached, posture returns to `selling`. The stored posture records `"source":"owner"`. An `until` at or before the host clock is a resume: the pause is cleared, `sell_state=selling` is persisted and POSTed (the plane resumes selling this way; an earlier agent stores the ended pause and returns to `selling` on its next posture check). During an installer maintenance hold a resume POSTs `passed=false` (`host maintenance hold`) and `sell_state=paused`. Not `path_b`. |
 
-Selling starts as soon as certification passes. Activation writes a temporary `{"sell_state":"paused","source":"activation"}` guard before it starts the service, so a failed start can be retried while the plane still reports the host paused. Once startup is verified, the installer calls `POST /v0/activation_release` on the owner socket, which clears only that guard; an owner pause stays. A maintenance hold writes `{"sell_state":"paused"}` and keeps the posture to restore in `sell-owner.json`: the owner pause if there is one, otherwise selling. When the hold is removed that posture is restored. Outside a maintenance hold, a stored pause with no `source` and no `until` comes from before sources existed. If the file is exactly the compact `{"sell_state":"paused"}` that earlier installers wrote at activation, the agent clears it and the host sells. The agent itself always writes indented JSON, so any other sourceless pause (an owner command, a control-plane `sell_pause` job, or a maintenance hold under an earlier agent) is kept and labeled as an owner pause; `hypermesh-deploy sell resume` clears it. A pause with an `until` is always an owner pause.
+Selling starts as soon as certification passes. Activation writes a temporary `{"sell_state":"paused","source":"activation"}` guard before it starts the service, so a failed start can be retried while the plane still reports the host paused. Once startup is verified, the installer calls `POST /v0/activation_release` on the owner socket, which clears only that guard; an owner pause stays. A maintenance hold writes `{"sell_state":"paused"}` and keeps the posture to restore in `sell-owner.json`: the owner pause if there is one, otherwise selling. When the hold is removed that posture is restored. Outside a maintenance hold, a stored pause with no `source` and no `until` comes from before sources existed. If the file is exactly the compact `{"sell_state":"paused"}` that earlier installers wrote at activation, the agent clears it and the host sells. The agent itself always writes indented JSON, so any other sourceless pause (an owner command, a control-plane `sell_pause` job, or a maintenance hold under an earlier agent) is kept and labeled as an owner pause; `hypermesh-host sell resume` clears it. A pause with an `until` is always an owner pause.
 
 Certification (`path_b`) is also the catalog bench. On that job this box inspects a local workload image and, when the probe returns `usage.completion_tokens`, POSTs `/agent/scorecard` for `pack-v1`. The control plane tags the catalog row from that report. No usage field or no local `repo@sha256` means that row stays untagged. The prompt stays off the result body.
 
@@ -127,7 +127,7 @@ hypermesh-agent owner sell-resume
 hypermesh-agent owner lease-stop --lease-id=<id>
 ```
 
-On an installed host, `sudo hypermesh-deploy sell pause [--until=RFC3339]`, `sudo hypermesh-deploy sell resume` and `sudo hypermesh-deploy sell status` call the same socket using the default state directory.
+On an installed host, `sudo hypermesh-host sell pause [--until=RFC3339]`, `sudo hypermesh-host sell resume` and `sudo hypermesh-host sell status` call the same socket using the default state directory.
 
 `status` prints `GET /v0/status`. `console` prints unix-socket instructions (Bearer via curl / CLI bridge; this box does not bind TCP). `-state-dir` / `HYPERMESH_STATE_DIR` must point at the running agent's state dir.
 
@@ -203,9 +203,9 @@ nvpmodel is the NX Super table (`MAXN_SUPER`). Confirm ids on that image.
 
 ### Model path
 
-`HYPERMESH_GGUF_PATH` unset or empty defaults to `/var/lib/hypermesh/models/model.gguf`. That directory is variable data under the existing state tree (FHS `/var/lib`). `device.json` stays in `/var/lib/hypermesh`, mode **0700**. The agent creates `models/` on start as root:root mode **0755**. Downloaded weight files are mode **0600**, owned by root. The 0700 parent means other users cannot traverse to those files; directory mode 0755 does not make the weights readable. Rootful Docker can still bind-mount them: dockerd resolves the mount as root, and the workload image has no `USER`, so the process is uid 0. Rootless Docker or a user-namespace remap cannot read the file. `hypermesh-deploy` writes the same path into `agent.env` when `-gguf-path` is empty and creates the directory. The systemd unit sets the same `Environment=` default; a value in `agent.env` overrides it. An explicit `HYPERMESH_GGUF_PATH` is used unchanged.
+`HYPERMESH_GGUF_PATH` unset or empty defaults to `/var/lib/hypermesh/models/model.gguf`. That directory is variable data under the existing state tree (FHS `/var/lib`). `device.json` stays in `/var/lib/hypermesh`, mode **0700**. The agent creates `models/` on start as root:root mode **0755**. Downloaded weight files are mode **0600**, owned by root. The 0700 parent means other users cannot traverse to those files; directory mode 0755 does not make the weights readable. Rootful Docker can still bind-mount them: dockerd resolves the mount as root, and the workload image has no `USER`, so the process is uid 0. Rootless Docker or a user-namespace remap cannot read the file. `hypermesh-host` writes the same path into `agent.env` when `-gguf-path` is empty and creates the directory. The systemd unit sets the same `Environment=` default; a value in `agent.env` overrides it. An explicit `HYPERMESH_GGUF_PATH` is used unchanged.
 
-The model store is `/var/lib/hypermesh/models/cache`. Each pinned GGUF is `<sha256>.gguf`. `HYPERMESH_MODEL_CACHE_MAX_BYTES` is the byte budget. Unset, it is the filesystem size minus `HYPERMESH_DISK_FLOOR_BYTES` (default 2 GiB). An explicit value is clamped to that same ceiling, and the clamp is logged. `hypermesh-deploy` writes that measured value into `agent.env`. The unit documents the same default and leaves the variable unset so `agent.env` wins. Last-used time is an `index.json` in the cache directory, rewritten with a temp file in that directory, fsync, and rename. atime is not used, because these roots are often mounted `relatime` or `noatime`. Startup drops index entries whose files are gone, adopts `*.gguf` files the index does not list, and deletes leftover `lab-pull-*.gguf` and `index.json.tmp-*` files in the cache directory. A successful `lab_pull` records `catalog_ids` on that model in `index.json` and records its pin for that `catalog_id` with an expiry. A later pull for the same catalog moves `catalog_ids` onto the new file. Eviction removes the model and its catalog ids together. The last-used time stays the LRU key. `HYPERMESH_MODEL_CACHE_PENDING_TTL` sets that lifetime (default 30m). The pin is cleared when the expiry passes, when `lease_start` succeeds, and on `lease_stop`, `lease_cancel`, and `lease_expiry` for that catalog. The plane does not send `lease_cancel` or `lease_expiry` yet, so a cancelled or expired lease clears its pin only when that TTL passes. A later `lab_pull` for the same catalog replaces the pin. `lease_start` bind-mounts the pending file while the pin is live. A non-empty job `file_hash` must match the mounted file. An empty `file_hash` with a live pin must match that pin's sha256. An empty `file_hash` with no pin mounts the loaded cache file only when its `catalog_ids` include the job catalog. An empty cache still mounts `HYPERMESH_GGUF_PATH`. Otherwise the job fails with `model not verified for catalog`. A start that proceeds without `file_hash` logs that the hash was not verified. A later change will require `file_hash` once the plane sends it. A pending pin whose file is gone is cleared, and only that `lease_start` fails with `pending model missing`. `lease_start` and a successful `lab_pull` update last-used. The loaded model, a model backing an active lease, and a model waiting for its `lease_start` are not evicted.
+The model store is `/var/lib/hypermesh/models/cache`. Each pinned GGUF is `<sha256>.gguf`. `HYPERMESH_MODEL_CACHE_MAX_BYTES` is the byte budget. Unset, it is the filesystem size minus `HYPERMESH_DISK_FLOOR_BYTES` (default 2 GiB). An explicit value is clamped to that same ceiling, and the clamp is logged. `hypermesh-host` writes that measured value into `agent.env`. The unit documents the same default and leaves the variable unset so `agent.env` wins. Last-used time is an `index.json` in the cache directory, rewritten with a temp file in that directory, fsync, and rename. atime is not used, because these roots are often mounted `relatime` or `noatime`. Startup drops index entries whose files are gone, adopts `*.gguf` files the index does not list, and deletes leftover `lab-pull-*.gguf` and `index.json.tmp-*` files in the cache directory. A successful `lab_pull` records `catalog_ids` on that model in `index.json` and records its pin for that `catalog_id` with an expiry. A later pull for the same catalog moves `catalog_ids` onto the new file. Eviction removes the model and its catalog ids together. The last-used time stays the LRU key. `HYPERMESH_MODEL_CACHE_PENDING_TTL` sets that lifetime (default 30m). The pin is cleared when the expiry passes, when `lease_start` succeeds, and on `lease_stop`, `lease_cancel`, and `lease_expiry` for that catalog. The plane does not send `lease_cancel` or `lease_expiry` yet, so a cancelled or expired lease clears its pin only when that TTL passes. A later `lab_pull` for the same catalog replaces the pin. `lease_start` bind-mounts the pending file while the pin is live. A non-empty job `file_hash` must match the mounted file. An empty `file_hash` with a live pin must match that pin's sha256. An empty `file_hash` with no pin mounts the loaded cache file only when its `catalog_ids` include the job catalog. An empty cache still mounts `HYPERMESH_GGUF_PATH`. Otherwise the job fails with `model not verified for catalog`. A start that proceeds without `file_hash` logs that the hash was not verified. A later change will require `file_hash` once the plane sends it. A pending pin whose file is gone is cleared, and only that `lease_start` fails with `pending model missing`. `lease_start` and a successful `lab_pull` update last-used. The loaded model, a model backing an active lease, and a model waiting for its `lease_start` are not evicted.
 
 ### Update
 
@@ -238,7 +238,7 @@ On AGX64-1 none were present at 2026-09-26 12:52 ET. Keep the check on every hos
 
 ```
 cmd/agent             host process (hypermesh-agent)
-cmd/hypermesh-deploy  AGX preflight, configure, connect
+cmd/hypermesh-host  AGX preflight, configure, connect
 cmd/hypermesh-supervisor  supervisor (outside, host, renter)
 cmd/hypermesh-mhs-mcp     stdio MCP stub for host / MHS device tools (scaffold)
 internal/api        HTTP client for the fixed agent routes ( + optional enroll-token helper)
@@ -284,13 +284,13 @@ API first.
 
 ## Hardware preflight and generic benchmarks
 
-Run `hypermesh-deploy inspect` for a hardware-class fingerprint, detected
+Run `hypermesh-host inspect` for a hardware-class fingerprint, detected
 processor/memory, backend recommendations and a conservative model memory budget.
 Jetson recognition requires Tegra evidence; AGX, other Jetsons, DGX-branded systems
 and Apple silicon retain their class labels. Other machines use detected runtime
 capabilities. This fingerprint contains no host name, serial, device UUID or keys.
 
-Run `hypermesh-deploy inspect --benchmark --model /path/model.gguf` to execute
+Run `hypermesh-host inspect --benchmark --model /path/model.gguf` to execute
 an installed llama-bench after checking the model against measured available
 memory. Missing accelerator-memory measurements fail closed. CPU is the fallback
 when no accelerator runtime is detected. Software/model downloads are explicit;
@@ -315,3 +315,19 @@ timestamps make newly generated signatures differ even for identical checksums.
 Missing signatures are uploaded from the new build; changed checksums, invalid
 signatures, and storage errors stop publication before the channel pointer moves.
 Release CI exercises retries with real GPG signatures and partial uploads.
+
+
+### Host CLI name and verifier defaults
+
+The host setup and management command is `hypermesh-host`. Guided setup installs
+the verified binary into `/usr/local/bin/hypermesh-host` after enrollment and
+setup consent. Existing `hypermesh-deploy` source installs remain compatible.
+Release transport filenames and private continuation paths retain their previous
+names for installed verifiers and timers.
+
+Run `python3 ./hypermesh-bootstrap.py` for the latest published production build,
+or add `--channel test` for test. The verifier detects the local Linux architecture
+and discovers the immutable release URL through hyperme.sh. It still verifies
+the bundled signing trust, metadata and artifact hashes before publishing files.
+Existing downloads require `--overwrite`; unpublished production never selects
+test. Explicit pinning flags remain supported. See [the installation guide](docs/first-install-guide.md).

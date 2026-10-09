@@ -14,8 +14,8 @@ or networking. The reboot disconnects the current session.
 ## Review and request
 
 ```sh
-sudo hypermesh-deploy plan-reboot --setup-plan setup-plan.json > reboot-plan.json
-sudo hypermesh-deploy reboot-setup --plan reboot-plan.json \
+sudo hypermesh-host plan-reboot --setup-plan setup-plan.json > reboot-plan.json
+sudo hypermesh-host reboot-setup --plan reboot-plan.json \
   --approve-plan REBOOT_PLAN_SHA256 --reboot
 ```
 
@@ -47,9 +47,9 @@ that reboot failed or completed. Keep the plan and checkpoint.
 After reconnecting, use the same installer and plan:
 
 ```sh
-sudo hypermesh-deploy resume-setup --plan reboot-plan.json \
+sudo hypermesh-host resume-setup --plan reboot-plan.json \
   --approve-plan REBOOT_PLAN_SHA256
-sudo hypermesh-deploy reboot-status --plan-sha REBOOT_PLAN_SHA256
+sudo hypermesh-host reboot-status --plan-sha REBOOT_PLAN_SHA256
 ```
 
 Resume never submits a reboot or reinstalls packages. It requires a matching
@@ -80,7 +80,7 @@ machine rebooted. If you are still on the original boot, inspect OS inhibitors
 and system logs. Only after reviewing the reason, explicitly retry:
 
 ```sh
-sudo hypermesh-deploy reboot-setup --plan reboot-plan.json \
+sudo hypermesh-host reboot-setup --plan reboot-plan.json \
   --approve-plan REBOOT_PLAN_SHA256 --reboot --retry-request
 ```
 
@@ -92,7 +92,7 @@ after correcting the cause. Do not delete checkpoints to bypass a blocker.
 Export a redacted historical summary with:
 
 ```sh
-sudo hypermesh-deploy support-bundle --reboot-plan-sha REBOOT_PLAN_SHA256 \
+sudo hypermesh-host support-bundle --reboot-plan-sha REBOOT_PLAN_SHA256 \
   --output /root/reboot-support-new.json
 ```
 

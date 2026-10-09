@@ -959,7 +959,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"build_release_binaries()", "CGO_ENABLED=0", "GOOS=linux", "./cmd/agent", "./cmd/hypermesh-deploy", "write_release_checksums()"} {
+	for _, want := range []string{"build_release_binaries()", "CGO_ENABLED=0", "GOOS=linux", "./cmd/agent", "./cmd/hypermesh-host", "write_release_checksums()"} {
 		if !strings.Contains(string(layout), want) {
 			t.Fatalf("release build helper missing %s", want)
 		}

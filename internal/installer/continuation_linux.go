@@ -319,6 +319,7 @@ func installContinuation(ctx context.Context, s *guidedState) error {
 			return fmt.Errorf("running continuation does not match signed release")
 		}
 	}
+	if err := installHostCLI("", binary, s.HostCLISHA); err != nil { return err }
 	image, err := continuationImage(sha)
 	if err != nil {
 		return err
@@ -380,6 +381,7 @@ func installContinuation(ctx context.Context, s *guidedState) error {
 	}
 	_, err = (setupSource{}).output(ctx, "systemctl", "enable", "--now", "hypermesh-onboarding.timer")
 	if err == nil {
+		s.HostCLISHA = sha
 		s.ContinuationSHA = sha
 		s.LauncherSHA = digestSetupBytes(launcher)
 	}

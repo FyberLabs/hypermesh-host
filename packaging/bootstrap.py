@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import signal
@@ -104,7 +105,7 @@ def fetch(address, limit):
         try:
             with opener.open(address, timeout=30) as response:
                 if response.status != 200:
-                    raise Rejected("download returned non-success status")
+                    raise Rejected("no published release is available for this channel" if response.status == 204 else "download returned non-success status")
                 data = response.read(limit + 1)
         except (OSError, urllib.error.URLError, ValueError):
             raise Rejected("HTTPS download failed; check connectivity and release directory") from None
@@ -254,15 +255,55 @@ def publish_outputs(outputs, overwrite):
             path.unlink(missing_ok=True)
 
 
+
+def detected_arch():
+    if platform.system() != "Linux":
+        raise Rejected("host installation currently supports Linux only")
+    machine = platform.machine().lower()
+    arch = {"aarch64": "arm64", "arm64": "arm64",
+            "x86_64": "amd64", "amd64": "amd64"}.get(machine)
+    if arch is None:
+        raise Rejected("unsupported processor architecture; Linux ARM64 or AMD64 is required")
+    return arch
+
+
+def discover_release(channel, fetcher=fetch):
+    # Discovery selects immutable metadata, never trust keys or executable code.
+    # The selected identity is subsequently checked against signed release.json.
+    if channel not in ("prod", "test"):
+        raise Rejected("unsupported release channel")
+    # The public site's release origin is independent of the account network.
+    # This also works before a production control plane has been deployed.
+    index = "https://hyperme.sh/api/hypermesh/host-releases?channel=" + channel
+    try:
+        meta = json.loads(fetcher(index, 64 << 10))
+        build, version, commit = meta["build"], meta["version"], meta["commit"]
+        if (meta["channel"] != channel or type(build) is not int or build <= 0
+                or not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+                or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)):
+            raise ValueError()
+        identity = version if channel == "prod" else f"{build}-{commit[:12]}"
+        if meta["release_id"] != identity:
+            raise ValueError()
+        if not isinstance(meta["releaseUrl"], str):
+            raise ValueError()
+        base = https_url(meta["releaseUrl"]).rstrip("/")
+        if urllib.parse.urlsplit(base).path != "/api/v1/hypermesh/public/host-releases/" + channel + "/" + identity:
+            raise ValueError()
+    except (ValueError, KeyError, TypeError):
+        raise Rejected("invalid release channel index") from None
+    return base, meta
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--release-url", required=True)
-    parser.add_argument("--channel", required=True, choices=["test", "prod"])
-    parser.add_argument("--min-build", required=True, type=int)
-    parser.add_argument("--arch", required=True, choices=["arm64", "amd64"])
+    parser.add_argument("--release-url", help="pin an immutable release directory instead of discovering the latest release")
+    parser.add_argument("--channel", default="prod", choices=["test", "prod"])
+    parser.add_argument("--min-build", default=0, type=int)
+    parser.add_argument("--arch", choices=["arm64", "amd64"], help="default: detect this Linux processor")
     parser.add_argument("--trusted-key", type=Path, help="explicit trust override; default is the bundled reviewed key")
     parser.add_argument("--fingerprint", default=TRUSTED_FINGERPRINT)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output", default=Path("./hypermesh-host"), type=Path)
     parser.add_argument("--key-output", type=Path, help="save bundled/selected public trust for subsequent plans")
     parser.add_argument("--overwrite", action="store_true", help="replace existing installer, public key and receipt after successful verification")
     args = parser.parse_args()
@@ -272,6 +313,14 @@ def main():
         args.key_output = Path(str(args.output) + ".pub")
     receipt = Path(str(args.output) + ".install.json")
     try:
+        if args.min_build < 0:
+            raise Rejected("minimum build must not be negative")
+        if args.arch is None:
+            args.arch = detected_arch()
+        selected = None
+        if args.release_url is None:
+            args.release_url, selected = discover_release(args.channel)
+            args.min_build = max(args.min_build, selected["build"])
         key = TRUSTED_KEY
         if args.trusted_key:
             with args.trusted_key.open("rb") as stream:
@@ -286,6 +335,9 @@ def main():
             staged_output = Path(directory) / "installer"
             meta = bootstrap(args.release_url, args.channel, args.min_build, args.arch,
                              key, args.fingerprint, staged_output)
+            if selected is not None and any(meta.get(k) != selected[k]
+                    for k in ("channel", "build", "version", "commit", "release_id")):
+                raise Rejected("signed release differs from the discovered channel identity")
             body = json.dumps({"schema": 1, "release_url": args.release_url,
                                "channel": meta["channel"], "build": meta["build"],
                                "commit": meta["commit"], "trusted_key": str(args.key_output.absolute()),

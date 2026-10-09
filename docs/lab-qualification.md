@@ -6,7 +6,7 @@ operator must authorize the lab run in Panopticon first; the run is bound to thi
 registered device, tenant, model pins and context for 24 hours.
 
 ```sh
-sudo ./hypermesh-deploy qualify-host --run-id RUN_UUID
+sudo ./hypermesh-host qualify-host --run-id RUN_UUID
 ```
 
 The command discovers the current guided installation plan, displays the pinned
@@ -50,7 +50,7 @@ ownership and permission checks.
 
 ## Automatic guided qualification
 
-Running `sudo ./hypermesh-deploy` now checks whether the configured hardware-class
+Running `sudo ./hypermesh-host` now checks whether the configured hardware-class
 suite model has an authoritative reference. If it has none, the plane creates or
 resumes a qualification attempt and the guide offers the pinned workload for
 approval. It executes the same three-sample qualification without asking the host
@@ -108,7 +108,7 @@ deployment; the manual context response is not a submitted qualification result.
 
 ## Host-requested rebenchmarking
 
-Rerun `sudo ./hypermesh-deploy` after resolving a failed measurement. With the
+Rerun `sudo ./hypermesh-host` after resolving a failed measurement. With the
 companion plane update, failed or expired qualification attempts receive a fresh
 run on the authenticated host's next request. No administrator action is needed
 to retry. The installer asks before downloading or running the workload; one
