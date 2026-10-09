@@ -73,6 +73,22 @@ and proprietary weights out of uploaded artifacts; use public test weights and
 synthetic inputs. The validator hashes actual regular files, rejects symlinks and
 tampering, and caps each artifact at 16 MiB.
 
+Each artifact is a JSON envelope whose metadata is included in its content hash:
+
+```json
+{"schema":"hypermesh-protection-artifact-v1","kind":"check","id":"firmware_identity","captured_at":"2026-10-09T12:00:00Z","payload":{"vendor_log":"captured test evidence"}}
+```
+
+Use `kind: sample` with the sample ID for measurement artifacts. The capture
+producer records `captured_at` when collecting the observation; copy that exact
+instant into the corresponding check/sample entry. The validator compares the
+hashed metadata with the dossier and rejects missing or relabeled capture times.
+All observations must be less than 24 hours old and no later than validation.
+Set dossier expiry no later than the earliest observation's capture time plus
+24 hours. A newly prepared dossier cannot extend the life of an old artifact.
+Hash-bound metadata remains producer-reported; independently trusted capture or
+attestation is still required to establish the truth of its contents.
+
 ## Physical memory tests
 
 1. Confirm vendor support for the exact SKU, board and installed firmware.
@@ -123,7 +139,7 @@ Use the existing pinned `plan-workload` / `check-workload` or lab qualification
 runner for supported profiles; unsupported AMD/ARM runtime profiles remain a
 separate prerequisite. Retain unique raw measurement artifacts for every sample.
 Populate `samples` with unique `id`, full `binding`, `protected` boolean,
-`tokens_per_second`, measured `peak_bytes` and `artifact_sha256`.
+`captured_at`, `tokens_per_second`, measured `peak_bytes` and `artifact_sha256`.
 Record peak resident/accelerator memory with the platform's measurement tool;
 model file size is not peak memory. Confirm full context fit and run a sustained
 stability test under the class's reviewed duration and thermal limits.

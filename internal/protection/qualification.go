@@ -30,20 +30,22 @@ type Binding struct {
 }
 
 type Check struct {
-	ID             string `json:"id"`
-	Status         string `json:"status"`
-	ArtifactSHA256 string `json:"artifact_sha256"`
+	CapturedAt     time.Time `json:"captured_at"`
+	ID             string    `json:"id"`
+	Status         string    `json:"status"`
+	ArtifactSHA256 string    `json:"artifact_sha256"`
 }
 
 // Sample records paired measurements with the same model/runtime/backend/context.
 // Test artifacts must show how throughput and peak memory were measured.
 type Sample struct {
-	ID              string  `json:"id"`
-	Binding         Binding `json:"binding"`
-	Protected       bool    `json:"protected"`
-	TokensPerSecond float64 `json:"tokens_per_second"`
-	PeakBytes       int64   `json:"peak_bytes"`
-	ArtifactSHA256  string  `json:"artifact_sha256"`
+	CapturedAt      time.Time `json:"captured_at"`
+	ID              string    `json:"id"`
+	Binding         Binding   `json:"binding"`
+	Protected       bool      `json:"protected"`
+	TokensPerSecond float64   `json:"tokens_per_second"`
+	PeakBytes       int64     `json:"peak_bytes"`
+	ArtifactSHA256  string    `json:"artifact_sha256"`
 }
 
 type Report struct {
@@ -111,6 +113,12 @@ func digest(value string) bool {
 	return err == nil && len(decoded) == 32 && value == strings.ToLower(value)
 }
 
+// Every observation expires independently; a fresh dossier cannot renew it.
+func observationFresh(at, expires, now time.Time) bool {
+	return !at.IsZero() && !at.After(now) && expires.After(at) &&
+		expires.Sub(at) <= 24*time.Hour && now.Before(at.Add(24*time.Hour))
+}
+
 // Evaluate validates completeness and consistency, not the truth of host evidence.
 // Expected binding comes from a fresh local observation, not the report itself.
 func Evaluate(r Report, expected Binding, now time.Time) Result {
@@ -149,7 +157,7 @@ func Evaluate(r Report, expected Binding, now time.Time) Result {
 	}
 	for _, id := range ids {
 		c, ok := checks[id]
-		if !ok || c.Status != "passed" || !digest(c.ArtifactSHA256) {
+		if !ok || c.Status != "passed" || !digest(c.ArtifactSHA256) || !observationFresh(c.CapturedAt, r.ExpiresAt, now) {
 			block("missing or unconfirmed check evidence: " + id)
 		}
 	}
@@ -162,7 +170,7 @@ func Evaluate(r Report, expected Binding, now time.Time) Result {
 		// but protected samples must belong to the current protected boot.
 		comparison := s.Binding
 		comparison.BootID = b.BootID
-		if s.ID == "" || seenSamples[s.ID] || seenArtifacts[s.ArtifactSHA256] || strings.TrimSpace(s.Binding.BootID) == "" || comparison != b || (s.Protected && s.Binding.BootID != b.BootID) || !digest(s.ArtifactSHA256) || s.PeakBytes <= 0 || s.TokensPerSecond <= 0 || math.IsNaN(s.TokensPerSecond) || math.IsInf(s.TokensPerSecond, 0) {
+		if s.ID == "" || seenSamples[s.ID] || seenArtifacts[s.ArtifactSHA256] || strings.TrimSpace(s.Binding.BootID) == "" || comparison != b || (s.Protected && s.Binding.BootID != b.BootID) || !digest(s.ArtifactSHA256) || !observationFresh(s.CapturedAt, r.ExpiresAt, now) || s.PeakBytes <= 0 || s.TokensPerSecond <= 0 || math.IsNaN(s.TokensPerSecond) || math.IsInf(s.TokensPerSecond, 0) {
 			block("invalid, duplicate or mismatched sample")
 			continue
 		}

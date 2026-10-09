@@ -3,6 +3,7 @@ package protection
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -22,6 +23,7 @@ func ready(t *testing.T, modes []Mode, backend string) (Report, Binding, time.Ti
 		t.Fatal(err)
 	}
 	for i := range r.Checks {
+		r.Checks[i].CapturedAt = r.ObservedAt
 		r.Checks[i].Status = "passed"
 		r.Checks[i].ArtifactSHA256 = sum(r.Checks[i].ID)
 	}
@@ -30,7 +32,7 @@ func ready(t *testing.T, modes []Mode, backend string) (Report, Binding, time.Ti
 		if i < 3 {
 			binding.BootID = "baseline-boot"
 		}
-		r.Samples = append(r.Samples, Sample{ID: fmt.Sprint(i), Binding: binding, Protected: i >= 3, TokensPerSecond: 10, PeakBytes: 1024, ArtifactSHA256: sum(fmt.Sprint(i))})
+		r.Samples = append(r.Samples, Sample{CapturedAt: r.ObservedAt, ID: fmt.Sprint(i), Binding: binding, Protected: i >= 3, TokensPerSecond: 10, PeakBytes: 1024, ArtifactSHA256: sum(fmt.Sprint(i))})
 	}
 	return r, b, now
 }
@@ -104,9 +106,14 @@ func TestFailClosedEvidence(t *testing.T) {
 
 func TestArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	content := "vendor boot evidence"
+	captured := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	raw, err := json.Marshal(Artifact{Schema: ArtifactSchema, Kind: "check", ID: "firmware_identity", CapturedAt: captured, Payload: json.RawMessage(`"vendor boot evidence"`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
 	ref := sum(content)
-	r := Report{Checks: []Check{{ArtifactSHA256: ref}}}
+	r := Report{Checks: []Check{{ID: "firmware_identity", CapturedAt: captured, ArtifactSHA256: ref}}}
 	path := filepath.Join(dir, ref)
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
@@ -114,6 +121,11 @@ func TestArtifacts(t *testing.T) {
 	if err := VerifyArtifacts(r, dir); err != nil {
 		t.Fatal(err)
 	}
+	r.Checks[0].CapturedAt = captured.Add(time.Hour)
+	if VerifyArtifacts(r, dir) == nil {
+		t.Fatal("accepted relabeled capture timestamp")
+	}
+	r.Checks[0].CapturedAt = captured
 	if err := os.WriteFile(path, []byte("tampered"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +140,46 @@ func TestArtifacts(t *testing.T) {
 	}
 	if VerifyArtifacts(r, dir) == nil {
 		t.Fatal("accepted symlink")
+	}
+}
+
+func TestObservationFreshnessCannotBeRenewedByDossier(t *testing.T) {
+	for _, kind := range []string{"check", "sample"} {
+		for _, age := range []string{"missing", "stale", "boundary", "future", "extended-expiry"} {
+			t.Run(kind+"/"+age, func(t *testing.T) {
+				r, b, now := ready(t, []Mode{Physical}, "cpu")
+				at := r.ObservedAt
+				switch age {
+				case "missing":
+					at = time.Time{}
+				case "stale":
+					at = now.Add(-25 * time.Hour)
+				case "boundary":
+					at = now.Add(-24 * time.Hour)
+				case "future":
+					at = now.Add(time.Second)
+				case "extended-expiry":
+					// Renewing the dossier must not extend existing observations.
+					r.ObservedAt = now
+					r.ExpiresAt = now.Add(24 * time.Hour)
+				}
+				if kind == "check" {
+					r.Checks[0].CapturedAt = at
+				} else {
+					r.Samples[0].CapturedAt = at
+				}
+				if out := Evaluate(r, b, now); out.ReviewReady || len(out.Blockers) == 0 {
+					t.Fatalf("accepted old evidence in fresh dossier: %+v", out)
+				}
+			})
+		}
+	}
+	// Baselines may predate dossier preparation, but expiry follows their age.
+	r, b, now := ready(t, []Mode{Physical}, "cpu")
+	r.Samples[0].CapturedAt = now.Add(-2 * time.Hour)
+	r.ExpiresAt = r.Samples[0].CapturedAt.Add(24 * time.Hour)
+	if out := Evaluate(r, b, now); !out.ReviewReady {
+		t.Fatalf("rejected fresh baseline with bounded expiry: %+v", out)
 	}
 }
 
