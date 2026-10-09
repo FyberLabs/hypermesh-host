@@ -1218,12 +1218,12 @@ func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Resul
 			return pathb.Result{Passed: false, Reason: err.Error()}, false
 		}
 	} else if err := a.openLeaseIngress(ctx, h, path); err != nil {
-		a.abandonStarted(ctx, h)
+		kept := a.abandonStarted(ctx, h)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return pathb.Result{Reason: "lease_start canceled"}, false
 		}
 		res := pathb.Result{Passed: false, Reason: err.Error()}
-		if a.modelStillBroken(job, gguf) {
+		if !kept && a.modelStillBroken(job, gguf) {
 			return res, true
 		}
 		a.log.Info("lease_start failed", "reason", res.Reason, "lease_id", job.LeaseID)
@@ -1354,9 +1354,8 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 	if err := a.stopHandle(ctx, h); err != nil {
 		return pathb.Result{Passed: false, Reason: "runtime stop failed"}
 	}
-	a.stopLeaseForwarder()
 	a.clearPendingForLease(job, h)
-	a.setLease(nil)
+	a.dropCurrentLease()
 	_ = a.saveLease(nil)
 	// Host WireGuard peer stays up. Teardown only on GET revoked or 204.
 	a.log.Info("lease_stop", "lease_id", job.LeaseID)
@@ -1507,7 +1506,7 @@ func (a *Agent) resetEnrollmentWork(ctx context.Context, device string) error {
         var handle runtime.Handle
         if err:=json.Unmarshal(raw,&handle);err!=nil {return fmt.Errorf("invalid old lease state: %w",err)}
         if err:=a.stopHandle(ctx,&handle);err!=nil {return err}
-        a.stopLeaseForwarder()
+        a.dropCurrentLease()
     } else if !os.IsNotExist(err) {return err}
     if err:=a.tunnels.Teardown(ctx);err!=nil {return err}
     for _,name:=range []string{leaseFile,sellFile,"boot.json"} {

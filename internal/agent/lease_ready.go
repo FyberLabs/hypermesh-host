@@ -141,9 +141,10 @@ func (a *Agent) forwarderLoop(ctx context.Context) {
 	}
 }
 
-// ensureLeaseForwarder starts the WireGuard listener again when a lease
-// is running and the listener is gone. It logs the failure. It does not
-// record a heartbeat or tunnel health failure.
+// ensureLeaseForwarder keeps the WireGuard listener on the current tunnel
+// address for a running lease. A live listener on a previous client_address
+// is replaced. It logs the failure. It does not record a heartbeat or
+// tunnel health failure.
 func (a *Agent) ensureLeaseForwarder(ctx context.Context) {
 	if a.leaseReady != nil {
 		return
@@ -152,7 +153,9 @@ func (a *Agent) ensureLeaseForwarder(ctx context.Context) {
 	if h == nil || h.Backend == runtime.BackendLlamaCppCPU {
 		return
 	}
-	if a.forwarderAlive() {
+	listen := a.leaseListenAddr()
+	if listen == "" {
+		a.log.Warn("lease forwarder not restarted", "reason", "no tunnel address", "lease_id", h.LeaseID)
 		return
 	}
 	ip := strings.TrimSpace(h.ContainerIP)
@@ -168,21 +171,23 @@ func (a *Agent) ensureLeaseForwarder(ctx context.Context) {
 		a.log.Warn("lease forwarder not restarted", "reason", "container address unknown", "lease_id", h.LeaseID)
 		return
 	}
-	listen := strings.TrimSpace(h.PublishAddr)
-	if listen == "" {
-		listen = a.leaseListenAddr()
-	}
-	if listen == "" {
-		a.log.Warn("lease forwarder not restarted", "reason", "no tunnel address", "lease_id", h.LeaseID)
+	dial := a.bridgeAddr(ip)
+	a.fwdMu.Lock()
+	defer a.fwdMu.Unlock()
+	cur := a.currentLease()
+	if cur == nil || strings.TrimSpace(cur.LeaseID) != strings.TrimSpace(h.LeaseID) {
 		return
 	}
-	if err := a.startLeaseForwarder(listen, a.bridgeAddr(ip)); err != nil {
+	if a.forwarderCurrentLocked(listen, dial) {
+		return
+	}
+	if err := a.startLeaseForwarderLocked(listen, dial); err != nil {
 		a.log.Warn("lease forwarder not restarted", "err", err, "lease_id", h.LeaseID)
 		return
 	}
-	h.ContainerIP = ip
-	h.PublishAddr = listen
-	a.log.Info("lease forwarder listening", "lease_id", h.LeaseID, "listen", listen)
+	cur.ContainerIP = ip
+	cur.PublishAddr = listen
+	a.log.Info("lease forwarder listening", "lease_id", cur.LeaseID, "listen", listen)
 }
 
 func (a *Agent) dockerRunnerFor(h *runtime.Handle) runtime.DockerRunner {
@@ -387,20 +392,43 @@ func redactLeaseText(s string) string {
 	return s
 }
 
-func (a *Agent) abandonStarted(_ context.Context, h *runtime.Handle) {
-	a.stopLeaseForwarder()
+// abandonStarted stops a container that failed readiness. It returns true
+// when stop or rm failed and the handle was kept for a later lease_stop
+// or the same lease. A kept handle is not started again in this attempt.
+func (a *Agent) abandonStarted(_ context.Context, h *runtime.Handle) bool {
 	if h == nil {
-		return
+		a.stopLeaseForwarder()
+		return false
 	}
 	stopCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := a.stopHandle(stopCtx, h); err != nil && a.log != nil {
-		a.log.Warn("lease_start cleanup failed", "lease_id", h.LeaseID, "err", err)
+	err := a.stopHandle(stopCtx, h)
+	a.fwdMu.Lock()
+	defer a.fwdMu.Unlock()
+	cur := a.currentLease()
+	same := cur != nil && strings.TrimSpace(cur.LeaseID) == strings.TrimSpace(h.LeaseID)
+	if err != nil {
+		if a.log != nil {
+			a.log.Warn("lease_start cleanup failed", "lease_id", h.LeaseID, "err", err)
+		}
+		a.stopLeaseForwarderLocked()
+		if cur != nil && !same {
+			return false
+		}
+		a.setLease(h)
+		if saveErr := a.saveLease(h); saveErr != nil && a.log != nil {
+			a.log.Warn("lease record not saved", "lease_id", h.LeaseID, "err", saveErr)
+		}
+		return true
 	}
-	if cur := a.currentLease(); cur != nil && strings.TrimSpace(cur.LeaseID) == strings.TrimSpace(h.LeaseID) {
+	if same {
 		a.setLease(nil)
+	}
+	a.stopLeaseForwarderLocked()
+	if same {
 		_ = a.saveLease(nil)
 	}
+	return false
 }
 
 func modelRepairable(job api.Job, reason string) bool {

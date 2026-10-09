@@ -248,6 +248,159 @@ func TestLeaseForwarderRestartsWithoutHealthChange(t *testing.T) {
 	a.stopLeaseForwarder()
 }
 
+func TestEnsureForwarderRebindsTunnelAddress(t *testing.T) {
+	a, hash, listen, hits := newIngressAgent(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	if got := a.leaseStart(context.Background(), ingressJob("lease-rebind", hash)); !got.Passed {
+		t.Fatal(got)
+	}
+	if !a.forwarderAlive() {
+		t.Fatal("listener was not up")
+	}
+	h := a.currentLease()
+	if h == nil {
+		t.Fatal("missing lease")
+	}
+	h.PublishAddr = listen
+	next := freeLocalPort(t)
+	a.cfg.ListenPort = next
+	want := net.JoinHostPort("127.0.0.1", next)
+	a.ensureLeaseForwarder(context.Background())
+	if a.currentLease().PublishAddr != want {
+		t.Fatalf("publish %q want %s", a.currentLease().PublishAddr, want)
+	}
+	if conn, err := net.DialTimeout("tcp", listen, 200*time.Millisecond); err == nil {
+		conn.Close()
+		t.Fatal("old tunnel address still accepting")
+	}
+	resp, err := http.Get("http://" + want + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || hits.Load() < 3 {
+		t.Fatalf("rebound health %d hits %d", resp.StatusCode, hits.Load())
+	}
+	a.stopLeaseForwarder()
+}
+
+func TestLeaseStartCleanupFailureKeepsHandle(t *testing.T) {
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	a.cfg.LeaseReadyWait = 200 * time.Millisecond
+	a.modelFit = func(context.Context, int64) error { return nil }
+	body, err := os.ReadFile(a.cfg.GGUFPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fetches atomic.Int32
+	a.fetchWeights = func(_ context.Context, dest, _, _ string) error {
+		fetches.Add(1)
+		return os.WriteFile(dest, body, 0o600)
+	}
+	docker := &scriptedDocker{ip: "172.18.0.2", logsErr: true, stopErr: errors.New("stop timed out")}
+	docker.onInspect = func(d *scriptedDocker) {
+		if d.runs != 1 {
+			return
+		}
+		_ = filepath.Walk(filepath.Dir(a.cfg.GGUFPath), func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && strings.HasSuffix(path, ".gguf") {
+				_ = os.Remove(path)
+			}
+			return nil
+		})
+	}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	job := ingressJob("lease-keep", hash)
+	job.SourceRef = "bartowski/model@" + strings.Repeat("b", 40) + "/model.gguf"
+	job.SizeBytes = int64(len(body))
+	got := a.leaseStart(context.Background(), job)
+	if got.Passed || docker.runs != 1 || fetches.Load() != 1 {
+		t.Fatalf("result=%+v runs=%d fetches=%d", got, docker.runs, fetches.Load())
+	}
+	h := a.currentLease()
+	if h == nil || h.LeaseID != "lease-keep" || strings.TrimSpace(h.ContainerID) == "" {
+		t.Fatalf("handle %+v", h)
+	}
+	raw, err := os.ReadFile(filepath.Join(a.cfg.StateDir, leaseFile))
+	if err != nil || !strings.Contains(string(raw), "lease-keep") || !strings.Contains(string(raw), h.ContainerID) {
+		t.Fatalf("lease file err=%v body=%s", err, raw)
+	}
+	again := a.leaseStart(context.Background(), job)
+	if !again.Passed || docker.runs != 1 {
+		t.Fatalf("retry %+v runs %d", again, docker.runs)
+	}
+	docker.mu.Lock()
+	docker.stopErr = nil
+	docker.mu.Unlock()
+	stopped := a.leaseStop(context.Background(), api.Job{Kind: api.KindLeaseStop, LeaseID: "lease-keep"})
+	if !stopped.Passed {
+		t.Fatalf("stop %+v", stopped)
+	}
+	assertLeaseClean(t, a, listen, docker)
+}
+
+func TestEnsureForwarderDoesNotOutliveLeaseStop(t *testing.T) {
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	if got := a.leaseStart(context.Background(), ingressJob("lease-race", hash)); !got.Passed {
+		t.Fatal(got)
+	}
+	a.stopLeaseForwarder()
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	started := make(chan struct{})
+	var startOnce sync.Once
+	a.workloadState = func(context.Context, string) (runtime.WorkloadState, error) {
+		startOnce.Do(func() { close(started) })
+		<-release
+		return runtime.WorkloadState{Running: true, IP: "172.18.0.2"}, nil
+	}
+	done := make(chan struct{})
+	go func() {
+		a.ensureLeaseForwarder(context.Background())
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("forwarder restart did not reach inspect")
+	}
+	stopped := a.leaseStop(context.Background(), api.Job{Kind: api.KindLeaseStop, LeaseID: "lease-race"})
+	releaseOnce.Do(func() { close(release) })
+	if !stopped.Passed {
+		t.Fatalf("stop %+v", stopped)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("forwarder restart did not finish")
+	}
+	if a.currentLease() != nil || a.forwarderAlive() {
+		t.Fatal("listener or lease survived lease_stop")
+	}
+	if conn, err := net.DialTimeout("tcp", listen, 200*time.Millisecond); err == nil {
+		conn.Close()
+		t.Fatal("listener still accepting after lease_stop")
+	}
+}
+
 func TestRedactLeaseTextBoundsAndSecrets(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 50; i++ {
@@ -275,6 +428,7 @@ type scriptedDocker struct {
 	runs      int
 	inspects  int
 	exitAfter int
+	stopErr   error
 	onInspect func(*scriptedDocker)
 }
 
@@ -316,7 +470,14 @@ func (d *scriptedDocker) run(_ context.Context, _ string, args ...string) ([]byt
 			return []byte("configured logging driver does not support reading"), errors.New("exit status 1")
 		}
 		return []byte(d.logs), nil
-	case "stop", "rm":
+	case "stop":
+		if d.stopErr != nil {
+			return []byte("stop failed"), d.stopErr
+		}
+		d.removed = true
+		d.status = "exited"
+		return []byte("cid-lease"), nil
+	case "rm":
 		d.removed = true
 		d.status = "exited"
 		return []byte("cid-lease"), nil
