@@ -711,6 +711,10 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 // Only the workload measured by this execution may receive its score.
 // Never resolve a mutable tag or expand one sample across the catalog pack.
 func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Result) error {
+	// Private validation evidence belongs to its scoped admission result only.
+	if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
+		return nil
+	}
 	if !res.Passed || !res.Measured || !res.WorkloadVerified || res.ImageHash == "" {
 		return nil
 	}

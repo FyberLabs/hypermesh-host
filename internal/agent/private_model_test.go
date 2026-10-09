@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
@@ -250,5 +251,18 @@ func TestRunningPrivateLeaseRetainsAuthorizationAcrossRestartAndChangedRetries(t
 	legacy.PrivateRevisionID = ""
 	if a.authorizeLeaseRetry(context.Background(), job, &legacy) == nil {
 		t.Fatal("accepted missing provenance")
+	}
+}
+
+func TestPrivateLabMeasurementsNeverPublishCatalogScorecards(t *testing.T) {
+	job, _ := privateFixture(t, []byte("GGUFweights"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("private lab measurement reached public catalog scorecard API")
+	}))
+	defer server.Close()
+	a := newTestAgent(t, server.URL, t.TempDir(), "", "", "")
+	result := pathb.Result{Passed: true, Measured: true, WorkloadVerified: true, ImageHash: job.FileHash}
+	if err := a.reportScorecard(context.Background(), job, result); err != nil {
+		t.Fatal(err)
 	}
 }
