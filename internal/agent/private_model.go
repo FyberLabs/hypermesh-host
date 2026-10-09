@@ -42,7 +42,7 @@ func modelConfigurationHash(c *api.ModelConfiguration) (string, error) {
 }
 
 func validatePrivateGrant(grant api.ModelDownloadGrant, job api.Job, account, tenant string, now time.Time) error {
-	tenant = strings.ToLower(tenant)
+	tenant = strings.ToLower(strings.TrimSpace(tenant))
 	fail := func() error { return fmt.Errorf("private model grant binding invalid") }
 	revision, err := privateRevision(job.SourceRef)
 	if err != nil || !blobAccountName.MatchString(account) || !modelRevisionID.MatchString(tenant) {
@@ -177,7 +177,7 @@ func (a *Agent) modelSettings(job api.Job) (jinja, contextTokens, timeout string
 // private source reference. Never acknowledge changed or unproven private state.
 func (a *Agent) authorizeLeaseRetry(ctx context.Context, job api.Job, existing *runtime.Handle) error {
 	incomingPrivate := strings.HasPrefix(job.SourceRef, privateModelPrefix)
-	if existing.PrivateRevisionID == "" && !incomingPrivate && !strings.HasPrefix(existing.CatalogID, "private-") {
+	if existing.PrivateRevisionID == "" && !incomingPrivate {
 		return nil
 	}
 	revision, err := privateRevision(job.SourceRef)

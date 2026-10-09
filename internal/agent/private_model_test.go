@@ -399,7 +399,15 @@ func TestPrivateWriteRestoresProvenanceAfterIncomingCacheEviction(t *testing.T) 
 	if marked, err := a.checkPrivateCacheBinding(job, dest); err != nil || !marked {
 		t.Fatal("eviction lost incoming provenance", err)
 	}
-	if err = validatePrivateGrant(grant, job, "modeltest", strings.ToUpper(testTenant), time.Now()); err != nil {
+	if err = validatePrivateGrant(grant, job, "modeltest", "  "+strings.ToUpper(testTenant)+"  ", time.Now()); err != nil {
 		t.Fatal("accepted tenant casing disabled private delivery", err)
+	}
+}
+
+func TestPublicCatalogPrivatePrefixDoesNotRequirePrivateGrant(t *testing.T) {
+	a := &Agent{}
+	handle := &runtime.Handle{CatalogID: "private-public-name"}
+	if err := a.authorizeLeaseRetry(context.Background(), api.Job{CatalogID: handle.CatalogID}, handle); err != nil {
+		t.Fatal("Public catalog prefix inferred private provenance", err)
 	}
 }
