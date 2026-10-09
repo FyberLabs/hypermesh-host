@@ -42,6 +42,7 @@ func modelConfigurationHash(c *api.ModelConfiguration) (string, error) {
 }
 
 func validatePrivateGrant(grant api.ModelDownloadGrant, job api.Job, account, tenant string, now time.Time) error {
+	tenant = strings.ToLower(tenant)
 	fail := func() error { return fmt.Errorf("private model grant binding invalid") }
 	revision, err := privateRevision(job.SourceRef)
 	if err != nil || !blobAccountName.MatchString(account) || !modelRevisionID.MatchString(tenant) {
@@ -142,6 +143,7 @@ func (a *Agent) fetchPrivateModel(ctx context.Context, job api.Job, dest string)
 	if err != nil {
 		return err
 	}
+	lim.BeforeWrite = a.privateWriteGuard(job, dest, lim.BeforeWrite)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	defer transport.CloseIdleConnections()
@@ -192,4 +194,15 @@ func (a *Agent) authorizeLeaseRetry(ctx context.Context, job api.Job, existing *
 		return fmt.Errorf("private model grant unavailable")
 	}
 	return nil
+}
+
+func (a *Agent) privateWriteGuard(job api.Job, dest string, before func() error) func() error {
+	return func() error {
+		if before != nil {
+			if err := before(); err != nil {
+				return err
+			}
+		}
+		return a.rememberPrivateCache(job, dest)
+	}
 }

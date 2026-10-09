@@ -31,7 +31,7 @@ func (a *Agent) privateBinding(job api.Job) (privateCacheBinding, error) {
 	if err != nil || configErr != nil || hash != job.ModelConfigurationSHA256 {
 		return privateCacheBinding{}, fmt.Errorf("private cache runtime binding invalid")
 	}
-	return privateCacheBinding{Tenant: a.cfg.TenantID, Revision: revision, Backend: job.Backend,
+	return privateCacheBinding{Tenant: strings.ToLower(a.cfg.TenantID), Revision: revision, Backend: job.Backend,
 		Runtime: job.Runtime, Image: job.ImageDigest, ConfigurationSHA256: hash, SizeBytes: job.SizeBytes}, nil
 }
 
