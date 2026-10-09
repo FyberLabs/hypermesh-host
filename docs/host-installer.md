@@ -393,8 +393,11 @@ does not complete an operating mode. Physical acceptance remains pending.
 ## Signed operator CLI release payload
 
 Implemented in the release publisher: alongside the agent, publish
-`hypermesh-host_<version>_linux_arm64` and
-`hypermesh-host_<version>_linux_amd64`. Both binaries are included in the same
+`hypermesh-deploy_<version>_linux_arm64` and
+`hypermesh-deploy_<version>_linux_amd64`. These transport names remain unchanged
+for compatibility with existing verifiers. The verifier saves the executable as
+`hypermesh-host`, and guided setup installs it at `/usr/local/bin/hypermesh-host`.
+Both binaries are included in the same
 GPG-signed checksums, blob release directory, channel artifact manifest, and
 GitHub release. Existing production releases retain their original signed
 artifact set when retried; adding the CLI requires a new version.
