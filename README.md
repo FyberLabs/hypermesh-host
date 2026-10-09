@@ -331,3 +331,7 @@ and discovers the immutable release URL through hyperme.sh. It still verifies
 the bundled signing trust, metadata and artifact hashes before publishing files.
 Existing downloads require `--overwrite`; unpublished production never selects
 test. Explicit pinning flags remain supported. See [the installation guide](docs/first-install-guide.md).
+
+Private uploaded-model delivery is an opt-in capability; see
+[the grant, version and runtime configuration contract](deploy/private-model-delivery.md).
+It requires the corresponding control-plane implementation and acceptance evidence.

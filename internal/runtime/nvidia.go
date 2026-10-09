@@ -47,7 +47,7 @@ const ContainerGGUFPath = "/models/model.gguf"
 // ImageDigest must be repo@digest (the fixed job field). No extra CP fields.
 type Spec struct {
 	// SingleSlot reserves the approved context for one preflight sequence.
-	SingleSlot bool
+	SingleSlot  bool
 	LeaseID     string
 	CatalogID   string
 	ImageDigest string
@@ -83,6 +83,12 @@ type Handle struct {
 	FileHash string `json:"file_hash,omitempty"`
 	// Backend is the path that started this handle (omitempty for old lease.json).
 	Backend string `json:"backend,omitempty"`
+	// Private provenance survives restart; same-lease retries must match and
+	// reauthorize this exact runtime binding before acknowledging it.
+	PrivateRevisionID          string `json:"private_revision_id,omitempty"`
+	PrivateRuntime             string `json:"private_runtime,omitempty"`
+	PrivateConfigurationSHA256 string `json:"private_configuration_sha256,omitempty"`
+	PrivateSizeBytes           int64  `json:"private_size_bytes,omitempty"`
 }
 
 // NVIDIA talks to docker with --runtime=nvidia.
