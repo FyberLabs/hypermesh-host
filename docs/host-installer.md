@@ -1034,7 +1034,7 @@ individual requests have 15-second whole-response deadlines and 1 MiB limits,
 with a 25-minute command bound covering login and approval. Transient API errors
 stop with retained state; rerun the exact command to reauthenticate and recover.
 Redirects are refused. Every returned request, tenant, hardware report, key
-fingerprint, approval path and device identity must match the local request.
+fingerprint, approval record and device identity must match the local request.
 Tenant UUIDs are canonicalized to lowercase on the wire, and configured API URL
 path prefixes are preserved, matching the installed agent plan.
 
@@ -1221,9 +1221,9 @@ overwrite. Physical AGX/N5 acceptance remains pending. Repair/uninstall,
 tunnel and certification execution, activation, and live
 status presentation remain separate roadmap tasks.
 
-## Completed: authenticated certification program gate
+## Completed: certification-program readiness check
 
-`check-agent` now requires `aiuditor_program_v1` from the plane. Update Panopticon
+`check-agent` now requires capability `aiuditor_program_v1` from the plane. Update the control plane
 before this host release; older planes without that capability cannot pass.
 There are no new installer flags or host-side service credentials. The saved
 device credential stays between the host and plane.
@@ -1234,7 +1234,7 @@ hardware class. Missing/unreachable service, rejected service credentials,
 a witness/wrong writer, an empty suite, malformed membership or crossed
 tenant/class data cannot be replaced by a locally seeded default.
 
-The existing `aiuditor` readiness gate becomes `passed` only for `ready`.
+The certification-program readiness check (gate id `aiuditor`) becomes `passed` only for `ready`.
 All other recognized states become `blocked` with a specific next action:
 
 - Configure the plane's `AIUDITOR_SERVICE_URL` and `AIUDITOR_INTERNAL_TOKEN`.
@@ -1479,7 +1479,7 @@ macOS and additional workload operating modes remain deferred as approved.
 
 ### Completed: pinned certification workload execution (2026-10-01)
 
-Catalog-scoped `path_b` and `compact_cert` jobs now require the plane's
+Catalog-scoped certification jobs and `compact_cert` jobs now require the plane's
 explicit catalog ID, OCI `repo@sha256`, GGUF `file_hash`, and NVIDIA runtime.
 The agent hashes the selected cached/configured model before and after the
 sample, starts that exact image with that catalog alias on loopback, and removes
@@ -1491,7 +1491,7 @@ the existing approved `lab_pull`/model-cache path must supply the pinned file.
 One measured execution produces at most one catalog scorecard. A mutable image
 tag, the default Llama catalog, and an unrelated running endpoint are no longer
 used to manufacture benchmark identity. Compact certification reports failure
-if the plane does not accept its scorecard. An unscoped legacy `path_b` job
+if the plane does not accept its scorecard. An unscoped legacy certification job
 retains its telemetry behavior but cannot publish a catalog benchmark.
 
 Deploy the matching Panopticon job response extension before this host release.
@@ -1509,15 +1509,15 @@ runtime correctly. Selling remains a separate controlled owner action.
 
 ### Completed: approved local workload preflight (2026-10-01)
 
-The Linux NVIDIA installer now exposes the pinned runner without starting the
+The Linux NVIDIA installer now exposes the digest-locked runner without starting the
 agent or requiring enrollment. This is an operator-facing stage for a **local,
 reviewed model**; authenticated acquisition now has its own reviewed flow in
 [authenticated certification](authenticated-certification.md). It does not replace the public website's eventual guided flow.
 
 1. Finish the prerequisite plan and place the reviewed GGUF in that plan's
    models directory. Obtain the model SHA-256 and OCI runtime digest from the
-   reviewed catalog/release metadata. Do not derive a trusted pin from an
-   untrusted download and treat that as verification.
+   reviewed catalog/release metadata. Do not treat a hash from an
+   untrusted download as that reviewed digest.
 2. Generate a read-only workload plan (no Docker invocation or download):
 
    ```sh

@@ -81,8 +81,8 @@ func maintenanceSellAfter(ctx context.Context)string{
  }
 }
 // maintenanceHoldReleased decides whether resume may proceed without the
-// matching hold. Only a missing marker on a resume that already reached the
-// resuming checkpoint counts as released; any other hold problem stops.
+// matching maintenance marker. Only a missing marker on a resume that already
+// reached the resuming checkpoint counts as released; any other marker problem stops.
 func maintenanceHoldReleased(holdErr error,markerMissing bool,state string)(bool,error){
  if holdErr==nil{return false,nil}
  if markerMissing&&supportOneOf(state,"resuming","complete"){return true,nil}
@@ -191,7 +191,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   return noMaintenanceContainers(ctx)
  }
  sellAfter:=""
- // A retry after the hold was released skips the paused-hold checks: the
+ // A retry after the maintenance pause was released skips those checks: the
  // marker is only removed after they passed, and the agent may since have
  // restored selling or the owner's pause.
  released:=false
@@ -236,7 +236,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   }
   if err==nil{err=recoverySync("/var/lib/hypermesh")}
   if err==nil{j.State="complete";j.RecordedAt=time.Now().UTC();err=save(j)}
-  // With the hold released the agent restores a kept owner pause or sells.
+  // With the maintenance pause released the agent restores a kept owner pause or sells.
   if err==nil{sellAfter=maintenanceSellAfter(ctx)}
  }else{
   d:=maintenanceDeps{

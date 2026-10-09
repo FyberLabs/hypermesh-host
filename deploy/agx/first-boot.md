@@ -65,7 +65,7 @@ sudo systemctl enable --now hypermesh-agent
 sudo systemctl status hypermesh-wg hypermesh-agent
 ```
 
-Optional witness sidecar (loopback only, hydrate, cannot fulfill): [aiuditor-witness.service](aiuditor-witness.service). Enable it only after parent token and tenant exist. Not this Go agent.
+Optional safety-screening witness sidecar (loopback only, hydrate, cannot fulfill requests): [aiuditor-witness.service](aiuditor-witness.service). Enable it only after the parent token and tenant exist. Not this Go agent.
 
 ### Control plane
 
@@ -125,7 +125,7 @@ Build the on-box image after overlay: [workload/README.md](workload/README.md). 
 
 ### thin-v1
 
-The lab soak job (`path_b`) collects image hash, uptime, and thermal readings. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a pinned probe and requires a real choice. If that endpoint is down, `path_b` still passes the hardware telemetry part so enrollment is not blocked before `lease_start`, and records that inference was skipped.
+The host certification job for the plane-brokered lease collects image hash, uptime, and thermal readings. If `http://127.0.0.1:8080/v1/chat/completions` answers, this box POSTs a fixed probe and requires a real choice. If that endpoint is down, certification still passes the hardware telemetry part so enrollment is not blocked before `lease_start`, and records that inference was skipped.
 
 `instance_check` must hit that endpoint and fail if there is no real completion. That is the “container answers” gate. It still needs the GGUF-backed image running.
 

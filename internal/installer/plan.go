@@ -40,13 +40,13 @@ func runPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	mode := flags.String("memory-mode", "", "uma or discrete")
 	directory := flags.String("model-dir", "", "existing model-cache directory")
 	allocation := flags.Int64("uma-gib", 0, "optional diagnostic allocation in GiB; omit for minimum-only installation")
-	address := flags.String("aiuditor-check-url", "", "explicit HTTPS readiness URL; no credentials or query parameters")
+	address := flags.String("aiuditor-check-url", "", "readiness URL; HTTPS, no credentials or query parameters")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp { return 0 }
 		return 2
 	}
 	if flags.NArg() != 0 || validateEndpoint(*address) != nil {
-		fmt.Fprintln(diagnostic, "provide --aiuditor-check-url as an HTTPS URL without credentials, query or fragment; positional arguments are not accepted")
+		fmt.Fprintln(diagnostic, "provide the readiness URL with --aiuditor-check-url as HTTPS without credentials, query or fragment; positional arguments are not accepted")
 		return 2
 	}
 	var resourceJSON bytes.Buffer

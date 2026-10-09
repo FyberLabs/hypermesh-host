@@ -327,7 +327,7 @@ func nextSynthJob(issued map[string]bool, results []synthResult, sawLoaded bool,
 	case !issued[start.JobID]:
 		return start, true
 	case !has[start.JobID] || !sawLoaded:
-		// Hold lease_stop until a heartbeat carries the running digest.
+		// Wait to run lease_stop until a heartbeat carries the running digest.
 		return api.Job{}, false
 	case !issued[stop.JobID]:
 		return stop, true

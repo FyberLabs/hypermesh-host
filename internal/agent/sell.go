@@ -14,7 +14,7 @@ import (
 
 const (
 	sellFile = "sell.json"
-	// sellOwnerFile keeps the posture to restore after a maintenance hold:
+	// sellOwnerFile keeps the posture to restore after a maintenance pause:
 	// the owner's pause, or selling when there was none.
 	sellOwnerFile = "sell-owner.json"
 )
@@ -31,13 +31,13 @@ const (
 )
 
 // SellPosture is the host-local sell state. It is separate from
-// path_b_state on the control plane.
+// the control-plane certification state (JSON field path_b_state).
 //
 // A paused posture with no source and no until predates sources. Earlier
 // installers wrote it at activation as the exact compact bytes in
 // activationLegacyPause, which the agent itself never produces; that pause is
 // cleared. Any other sourceless indefinite pause was written by the agent for
-// an owner, a control-plane job or a maintenance hold and is kept as an owner
+// an owner, a control-plane job or a maintenance pause and is kept as an owner
 // pause, since its origin cannot be told apart.
 type SellPosture struct {
 	SellState api.SellState `json:"sell_state"`
@@ -86,7 +86,7 @@ func (a *Agent) sellLog() *slog.Logger {
 	return slog.Default()
 }
 
-// loadKeptSell reads the posture kept beside a maintenance hold: an owner
+// loadKeptSell reads the posture kept beside a maintenance pause: an owner
 // pause, or selling when no owner pause was in effect.
 func (a *Agent) loadKeptSell() (SellPosture, bool) {
 	b, err := os.ReadFile(a.sellOwnerPath())
@@ -127,8 +127,8 @@ func ownerPauseIntent(p SellPosture, raw []byte) (SellPosture, bool) {
 	return SellPosture{SellState: api.SellPaused, Source: SellSourceOwner}, true
 }
 
-// settleSourcelessPause runs outside a maintenance hold on a paused posture
-// with no source and no until. A posture kept beside a released hold is
+// settleSourcelessPause runs outside a maintenance pause on a paused posture
+// with no source and no until. A posture kept beside a released maintenance pause is
 // restored; the pause earlier installers wrote at activation returns to
 // selling; anything else is kept and labeled as an owner pause.
 // Caller must hold sellMu.
@@ -185,7 +185,7 @@ func (a *Agent) effectiveSellLocked() SellPosture {
 	if p.installerShaped() {
 		p = a.settleSourcelessPause(raw)
 	} else if _, err := os.Lstat(a.sellOwnerPath()); err == nil {
-		// A kept owner pause only applies while sell.json is the hold's pause.
+		// A kept owner pause only applies while sell.json is the maintenance pause.
 		_ = os.Remove(a.sellOwnerPath())
 	}
 	if p.SellState == "" || p.SellState == api.SellNA {
@@ -281,7 +281,7 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 	}
 	next := SellPosture{SellState: api.SellPaused, Until: storeUntil, Source: SellSourceOwner}
 	if a.maintenanceHeld() {
-		// sell.json keeps the hold's pause; the owner pause is restored on release.
+		// sell.json keeps the maintenance pause; the owner pause is restored on release.
 		if err := writeJSON0600(a.sellOwnerPath(), next); err != nil {
 			a.sellLog().Warn("sell pause not saved", "err", err)
 			return jobOutcome{
@@ -316,7 +316,7 @@ func (a *Agent) sellPause(job api.Job) jobOutcome {
 }
 
 // sellResume clears any pause so the host sells again. It is the inverse of
-// sellPause and takes the same device check. A maintenance hold is not lifted
+// sellPause and takes the same device check. A maintenance pause is not lifted
 // here; only the installer resume operation releases it.
 func (a *Agent) sellResume(deviceID string) jobOutcome {
 	a.sellMu.Lock()

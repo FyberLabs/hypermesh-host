@@ -51,7 +51,7 @@ func parseInstalledPackages(text string) (map[string]string, error) {
 		}
 		status := fields[2]
 		if status == "rc " || status == "un " || status == "pn " { continue }
-		// Hold is fine; this policy never changes an existing package.
+		// An already-installed package is left unchanged.
 		if (status != "ii " && status != "hi ") || !setupVersionRE.MatchString(fields[1]) {
 			return nil, fmt.Errorf("package database is not fully configured; repair dpkg state before planning")
 		}

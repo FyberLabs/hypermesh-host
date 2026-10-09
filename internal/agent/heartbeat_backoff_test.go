@@ -467,7 +467,7 @@ func TestImmediateBeatAfterBackoffWindow(t *testing.T) {
 
 // TestQueuedWakeDoesNotSkipRetryAfter runs the real waitHeartbeat timer.
 // A job-loop success during the in-flight beat queues a wake before the
-// 503 Retry-After hold exists. That token must not start the next beat.
+// 503 Retry-After backoff exists. That token must not start the next beat.
 func TestQueuedWakeDoesNotSkipRetryAfter(t *testing.T) {
 	var mu sync.Mutex
 	var calls int
@@ -482,7 +482,7 @@ func TestQueuedWakeDoesNotSkipRetryAfter(t *testing.T) {
 		mu.Unlock()
 		if n <= 2 {
 			if n == 2 && a != nil {
-				// The previous hold has expired by the time this request
+				// The previous backoff has expired by the time this request
 				// is in flight, which is when a job pull can queue a wake.
 				time.Sleep(30 * time.Millisecond)
 				a.notePlaneReachable()

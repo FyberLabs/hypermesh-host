@@ -111,7 +111,7 @@ Panopticon owns this route. This repo only calls it.
 
 The signature and the SHA-256 in `checksums.txt` are the trust anchor. The plane's `sha256` has to match that signed file. A mismatch is a reject.
 
-1. `GET` the path above with the device credential.
+1. `GET` that URL with the device credential.
 2. Download `checksums.txt` and `checksums.txt.sig` (or `.asc`) from the SAS URLs. The download sends no `Authorization` header. The read stops at `size`.
 3. `gpg --status-fd 1 --verify` with the keys in `/etc/hypermesh/update-pubkey.asc`. The status must contain `GOODSIG` and a `VALIDSIG` line whose fingerprint is listed in `HYPERMESH_UPDATE_FINGERPRINTS`. A key that is only in the pubkey file is not enough. `EXPKEYSIG`, `REVKEYSIG`, `EXPSIG`, `BADSIG`, and `ERRSIG` reject the signature, including when `VALIDSIG` is also present. An expired or revoked key is rejected. A zero exit code without `VALIDSIG` rejects.
 4. Download `release.json`. Its SHA-256 must be in the signed checksum file, and its channel, version, commit, and `build` must match the plane's 200 body. The host uses that signed `build` for the newer-than-current check.

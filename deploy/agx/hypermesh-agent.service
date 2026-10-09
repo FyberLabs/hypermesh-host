@@ -16,7 +16,7 @@ Environment=HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf
 # variable uses that formula in the agent.
 EnvironmentFile=-/etc/hypermesh/agent.env
 # Rolls back a failed self-update. Install deploy/lib/update-rollback
-# at this path before enabling the unit. It does not restart
+# in this location before enabling the unit. It does not restart
 # hypermesh-wg and it does not reboot.
 ExecStartPre=/usr/local/lib/hypermesh/update-rollback
 ExecStart=/usr/local/bin/hypermesh-agent

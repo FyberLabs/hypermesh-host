@@ -12,7 +12,7 @@ Build on **this Super J4012**, against the **one** Seeed pin you flashed (JP6.2 
 
 **Do not** copy an AGX-built image onto this box. The AGX JetPack image is JP 7.2.1 / 39.2.1 on AGX Orin. That is a different pin and a different module.
 
-If you chose Seeed JP7.2.0 / 39.2.0 and a JP6 recipe will not run: **stop**. Do not silently run a JP7 image next to a JP6 one. Do not silently dual-pin with NVIDIA / AGX 7.2.1 / 39.2.1.
+If you chose Seeed JP7.2.0 / 39.2.0 and a JP6 recipe will not run: **stop**. Do not silently run a JP7 image next to a JP6 one. Do not keep the NVIDIA AGX 7.2.1 / 39.2.1 image as a second build for this box.
 
 The AGX recipe in `deploy/agx/workload/` is the JP7 starting point (Ubuntu 24.04, CUDA 13 SBSA NGC base, SM 8.7, `llama-server` on :8080). Rebuild it **here**. On Seeed JP6.2 / 36.4.3, treat that Dockerfile as a recipe to adapt on-box — do not assume CUDA 13 / 24.04 still applies.
 

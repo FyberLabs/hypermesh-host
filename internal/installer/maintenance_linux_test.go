@@ -39,10 +39,10 @@ func TestMaintenanceRecoversInterruptedStopWithoutOwnerSocket(t *testing.T){
 
 func TestMaintenanceHoldReleasedOnlyAfterResumeCheckpoint(t *testing.T){
  hold:=fmt.Errorf("matching maintenance pause required")
- if released,err:=maintenanceHoldReleased(nil,false,"stopped");released||err!=nil{t.Fatal("present hold treated as released")}
+ if released,err:=maintenanceHoldReleased(nil,false,"stopped");released||err!=nil{t.Fatal("present marker treated as released")}
  for _,state:=range []string{"resuming","complete"}{
-  if released,err:=maintenanceHoldReleased(hold,true,state);!released||err!=nil{t.Fatal("released hold blocks retry",state)}
+  if released,err:=maintenanceHoldReleased(hold,true,state);!released||err!=nil{t.Fatal("released marker blocks retry",state)}
  }
- if _,err:=maintenanceHoldReleased(hold,true,"stopped");err==nil{t.Fatal("missing hold accepted before resume began")}
- if _,err:=maintenanceHoldReleased(hold,false,"resuming");err==nil{t.Fatal("mismatched hold accepted")}
+ if _,err:=maintenanceHoldReleased(hold,true,"stopped");err==nil{t.Fatal("missing marker accepted before resume began")}
+ if _,err:=maintenanceHoldReleased(hold,false,"resuming");err==nil{t.Fatal("mismatched marker accepted")}
 }

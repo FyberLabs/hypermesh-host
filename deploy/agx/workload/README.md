@@ -44,7 +44,7 @@ This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L
 
 **Do not build this on x86 and pretend it is a Jetson image.** The NGC CUDA tag is multi-arch; an x86 build is the wrong arch.
 
-**Do not keep or dual-pin a JP6 image for this box.** `ubuntu:22.04` / `l4t-jetpack` / JetPack 6.2.3 / L4T 36.5.2 is not the AGX default (`l4t-jetpack` is gone in 7.x). If a leftover JP6 image will not run here: **stop**.
+**Do not keep a second JP6 image for this box.** `ubuntu:22.04` / `l4t-jetpack` / JetPack 6.2.3 / L4T 36.5.2 is not the AGX default (`l4t-jetpack` is gone in 7.x). If a leftover JP6 image will not run here: **stop**.
 
 ### FROM (default)
 

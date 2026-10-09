@@ -1428,7 +1428,7 @@ func (a *Agent) leaseModelPath(job api.Job) (gguf, pinID string, havePin bool, r
 // A non-empty file_hash is always checked. An empty file_hash with a
 // pending pin is checked against that pin's sha256. An empty file_hash
 // with no pin reaches here only after the catalog check: the file is
-// the one admitted for this catalog, or HYPERMESH_GGUF_PATH because the
+// the one admitted for this catalog, or the HYPERMESH_GGUF_PATH file when the
 // cache is empty. The start proceeds and a warning is logged. A later
 // change will require file_hash once the plane sends it.
 func (a *Agent) leaseHashCheck(job api.Job, hash, pinID string, havePin bool) (pathb.Result, bool) {
