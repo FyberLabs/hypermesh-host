@@ -33,6 +33,7 @@ type Facts struct {
 }
 
 type Profile struct {
+    MemoryEncryption *MemoryEncryption `json:"memory_encryption,omitempty"`
     Fingerprint string `json:"fingerprint"`
     Family string `json:"family"`
     Facts Facts `json:"facts"`
@@ -162,7 +163,9 @@ func Detect(ctx context.Context) Profile {
         f.Metal=runtime.GOARCH=="arm64"
         f.AvailableBytes=appleAvailable(output(ctx,"vm_stat"))
     }
-    return Recommend(f)
+    p := Recommend(f)
+    p.MemoryEncryption = inspectMemoryEncryption(runtime.GOOS, runtime.GOARCH, read("/proc/cpuinfo"))
+    return p
 }
 
 func amdMemory() int64 {

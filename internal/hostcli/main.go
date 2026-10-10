@@ -16,6 +16,7 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/deploy"
 	"github.com/FyberLabs/hypermesh-host/internal/hardware"
 	"github.com/FyberLabs/hypermesh-host/internal/installer"
+	"github.com/FyberLabs/hypermesh-host/internal/protection"
 )
 
 func Main() {
@@ -39,6 +40,7 @@ func Main() {
  }
  if os.Args[1] == "advanced-help" { advancedUsage(); return }
  name := os.Args[1]
+ if name == "protection" { os.Exit(protection.Run(os.Args[2:],os.Stdout,os.Stderr)) }
  if name=="plan-installer-update"||name=="update-installer"||name=="rollback-installer"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanInstallerUpdate;if name=="update-installer"{run=installer.RunUpdateInstaller};if name=="rollback-installer"{run=installer.RunRollbackInstaller};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="plan-maintenance"||name=="maintain-agent"||name=="resume-agent"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanMaintenance;if name=="maintain-agent"{run=installer.RunMaintainAgent};if name=="resume-agent"{run=installer.RunResumeAgent};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
  if name=="sell"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);code:=installer.RunSell(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
@@ -260,6 +262,8 @@ Commands:
                    --model-dir PATH --memory-mode discrete
   inspect   report hardware fingerprint, memory budget and preflight recommendations.
             --benchmark --model /path/model.gguf runs an installed llama-bench.
+  protection  prepare or validate memory-protection evidence for independent review.
+              Use protection --help; no firmware changes or qualification authority.
 
 Host classes:
   agx    preflight, configure, and connect an AGX. Stops on the first failure.
