@@ -16,6 +16,45 @@ cat /etc/nv_tegra_release
 
 Expect R39 / REVISION 2.1.
 
+## Soak preflight
+
+This repository owns the AGX soak pins and the portable check migrated from
+infra. After applying the overlay and before building or running the soak:
+
+```bash
+sudo python3 deploy/agx/agx-preflight.py --write /var/lib/hypermesh/agx-preflight.json
+```
+
+Run it from a checkout of the reviewed hypermesh-host release on the AGX itself.
+It prints JSON and exits 0 only when every required fact matches; exit 3 means
+missing, mismatched, or unproven facts. It reads local files and commands and
+does not change firmware, power modes, packages, or Docker configuration.
+The pins match `hypermesh-host agx`: L4T R39.2.1, CUDA 13.2.1, kernel 6.8,
+Ubuntu 24.04.5, aarch64, nvpmodel 2 / 30W, headless boot, and stopped clocks.
+Both preflight paths require `/proc/meminfo` `MemTotal` within the documented
+56–66 GiB range for the 64 GB AGX; matching software on a 32 GB module cannot
+pass. Docker's configured `runtimes.nvidia.path` must resolve to the installed
+executable found as `nvidia-container-runtime`, including valid symlink aliases.
+An installed wrapper with Docker pointing at `runc` or a missing executable
+does not pass. Both paths query `docker info` through the local
+`unix:///var/run/docker.sock` socket and validate the daemon's effective runtime
+map. A stopped daemon, an inaccessible socket, or editing `daemon.json` without
+applying the configuration cannot produce a passing report.
+CUDA is read from toolkit `version.json` or `version.txt`; NVCC component build
+numbers do not identify the toolkit maintenance release. The clock check requires
+every online CPU and the GPU to have distinct minimum/maximum scaling limits,
+with EMC `mrq_rate_locked` and `bwmgr_halt` both 0. It reads the documented
+Orin sysfs/debugfs controls; missing files or permission failures remain unknown
+and fail the preflight. `jetson_clocks --show` displays settings, not a running
+service status, and instantaneous frequency at maximum does not imply locking.
+See NVIDIA's [clock control documentation](https://docs.nvidia.com/jetson/archives/r39.2/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html#maximizing-jetson-orin-series-performance).
+CUDA 13.0.0 is a rescue option and does not pass the soak check. The report
+does not certify model execution, memory protection, or a completed soak.
+
+Infra retains its existing copy until this replacement is deployed and checked
+on pan-test. Remove the infra script and inventory preflight block in a separate
+infra PR after that check; merging this PR alone does not prove deployment.
+
 ## Flash (only if the box is not already 7.2.1)
 
 Use NVIDIA SDK Manager or `Linux_for_Tegra` for `jetson-agx-orin-devkit`. Super J4012 uses Seeed’s image, not this XML.

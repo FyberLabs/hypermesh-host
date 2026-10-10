@@ -27,6 +27,7 @@ const (
 
 func goodFacts() Facts {
 	return Facts{
+        MemoryBytes: 64 << 30,
 		Arch:          pinArch,
 		L4T:           pinL4T,
 		Kernel:        "6.8.12-tegra",
@@ -311,6 +312,7 @@ func TestCollectParsesAGXPins(t *testing.T) {
 	write(cuda, `{"cuda":{"version":"13.2.1"}}`)
 	write(docker, `{"runtimes":{"nvidia":{"path":"nvidia-container-runtime"}}}`)
 	facts := Collect(context.Background(), Source{
+        ReadFile: dynamicClockFiles(nil),
 		Tegra:      tegra,
 		OSRelease:  osrel,
 		Kernel:     kernel,
@@ -318,7 +320,9 @@ func TestCollectParsesAGXPins(t *testing.T) {
 		DockerJSON: docker,
 		Output: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			switch name {
-			case "uname":
+			case "docker":
+                return []byte(`{"nvidia":{"path":"nvidia-container-runtime"}}`), nil
+            case "uname":
 				return []byte("aarch64\n"), nil
 			case "systemctl":
 				return []byte("multi-user.target\n"), nil
@@ -332,7 +336,7 @@ func TestCollectParsesAGXPins(t *testing.T) {
 		},
 		LookPath: func(name string) (string, error) {
 			switch name {
-			case "tegrastats", "docker", "wg":
+			case "tegrastats", "docker", "wg", "nvidia-container-runtime":
 				return "/usr/bin/" + name, nil
 			default:
 				return "", os.ErrNotExist
@@ -667,4 +671,16 @@ func TestConnectStartsAgentBeforeDiscovery(t *testing.T) {
             return nil
         }}
     if err:=connect(context.Background(),opt);err!=nil {t.Fatal(err)}
+}
+
+func TestCUDACompilerBannerPreservesPatch(t *testing.T) {
+	for _, tc := range []struct{ text, want string }{
+		{"Cuda compilation tools, release 13.2, V13.2.78", ""},
+		{"Cuda compilation tools, release 13.2", ""},
+		{"CUDA Version 13.2.1", "13.2.1"},
+	} {
+		if got := cudaFromText(tc.text); got != tc.want {
+			t.Fatalf("cudaFromText(%q) = %q, want %q", tc.text, got, tc.want)
+		}
+	}
 }

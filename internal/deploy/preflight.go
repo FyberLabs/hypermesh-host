@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +31,7 @@ const (
 // Facts is one reading of the box. Tests fill this in. CollectHost reads
 // the live files and commands.
 type Facts struct {
+	MemoryBytes   int64
 	Arch          string
 	L4T           string
 	Kernel        string
@@ -52,6 +55,9 @@ func CheckAGX(f Facts) error {
 	var bad []string
 	if f.Arch != pinArch {
 		bad = append(bad, fmt.Sprintf("arch: got %q, want %s", f.Arch, pinArch))
+	}
+	if f.MemoryBytes < 56<<30 || f.MemoryBytes > 66<<30 {
+		bad = append(bad, fmt.Sprintf("AGX memory: got %d bytes, want 56–66 GiB for 64 GB module", f.MemoryBytes))
 	}
 	if f.L4T != pinL4T {
 		bad = append(bad, fmt.Sprintf("l4t: got %q, want %s", f.L4T, pinL4T))
@@ -208,6 +214,14 @@ func Collect(ctx context.Context, s Source) Facts {
 	if b, err := s.read(s.path(s.OSRelease, "/etc/os-release")); err == nil {
 		f.Ubuntu = ubuntuPoint(string(b))
 	}
+	if b, err := s.read("/proc/meminfo"); err == nil {
+		if m := regexp.MustCompile(`(?m)^MemTotal:\s+([0-9]+)\s+kB\s*$`).FindStringSubmatch(string(b)); m != nil {
+			kb, err := strconv.ParseInt(m[1], 10, 64)
+			if err == nil && kb <= (1<<63-1)/1024 {
+				f.MemoryBytes = kb * 1024
+			}
+		}
+	}
 	f.CUDA = s.cuda(ctx)
 	if out, err := s.output(ctx, "systemctl", "get-default"); err == nil {
 		f.DefaultTarget = strings.TrimSpace(string(out))
@@ -218,9 +232,8 @@ func Collect(ctx context.Context, s Source) Facts {
 	}
 	f.JetsonClocks = s.clocks(ctx)
 	f.Tegrastats = s.look("tegrastats")
-	f.Docker = s.look("docker")
+	f.Docker, f.NvidiaRuntime = s.dockerState(ctx)
 	f.WG = s.look("wg")
-	f.NvidiaRuntime = s.nvidiaRuntime()
 	return f
 }
 
@@ -240,38 +253,107 @@ func (s Source) cuda(ctx context.Context) string {
 			return v
 		}
 	}
-	if out, err := s.output(ctx, "nvcc", "--version"); err == nil {
-		return cudaFromText(string(out))
-	}
 	return ""
 }
 
-func (s Source) nvidiaRuntime() bool {
-	if s.look("nvidia-container-runtime") {
-		return true
-	}
-	b, err := s.read(s.path(s.DockerJSON, "/etc/docker/daemon.json"))
+func (s Source) dockerState(ctx context.Context) (bool, bool) {
+	b, err := s.output(ctx, "docker", "--host=unix:///var/run/docker.sock", "info", "--format", "{{json .Runtimes}}")
 	if err != nil {
-		return false
+		return false, false
 	}
-	return strings.Contains(string(b), `"nvidia"`)
+	var runtimes map[string]struct{ Path string }
+	if json.Unmarshal(b, &runtimes) != nil || runtimes == nil {
+		return false, false
+	}
+	return true, s.runtimeMatches(runtimes["nvidia"].Path)
 }
 
+func (s Source) runtimeMatches(configured string) bool {
+	look := s.LookPath
+	if look == nil {
+		look = exec.LookPath
+	}
+	installed, err := look("nvidia-container-runtime")
+	if err != nil || installed == "" {
+		return false
+	}
+	if configured == "" {
+		return false
+	}
+	resolved, err := look(configured)
+	if err != nil || resolved == "" {
+		return false
+	}
+	canonical := func(path string) string {
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			return real
+		}
+		return filepath.Clean(path)
+	}
+	return canonical(installed) == canonical(resolved)
+}
+
+// Clock state is read from control limits, not instantaneous frequency or
+// invented --show status phrases. Missing controls cannot pass the preflight.
 func (s Source) clocks(ctx context.Context) string {
-	out, err := s.output(ctx, "jetson_clocks", "--show")
-	text := string(out)
-	if err != nil && strings.TrimSpace(text) == "" {
+	if _, err := s.output(ctx, "jetson_clocks", "--show"); err != nil {
 		return ""
 	}
-	lower := strings.ToLower(text)
-	switch {
-	case strings.Contains(lower, "not running"), strings.Contains(lower, "inactive"):
-		return clocksStopped
-	case strings.Contains(lower, "already running"), strings.Contains(lower, "is running"):
+	online, err := s.read("/sys/devices/system/cpu/online")
+	if err != nil {
+		return ""
+	}
+	readInt := func(path string) (int64, error) {
+		b, err := s.read(path)
+		if err != nil {
+			return 0, err
+		}
+		return strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	}
+	cpus := map[int]bool{}
+	for _, part := range strings.Split(strings.TrimSpace(string(online)), ",") {
+		ends := strings.Split(part, "-")
+		if len(ends) > 2 {
+			return ""
+		}
+		first, e1 := strconv.Atoi(ends[0])
+		last, e2 := strconv.Atoi(ends[len(ends)-1])
+		if e1 != nil || e2 != nil || first < 0 || last < first || last > 255 {
+			return ""
+		}
+		for cpu := first; cpu <= last; cpu++ {
+			cpus[cpu] = true
+		}
+	}
+	locked := false
+	checkLimits := func(base string) bool {
+		lo, e1 := readInt(base + "min_freq")
+		hi, e2 := readInt(base + "max_freq")
+		if e1 != nil || e2 != nil || lo < 0 || hi <= 0 || lo > hi {
+			return false
+		}
+		locked = locked || lo == hi
+		return true
+	}
+	for cpu := range cpus {
+		if !checkLimits(fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cpufreq/scaling_", cpu)) {
+			return ""
+		}
+	}
+	if !checkLimits("/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/") {
+		return ""
+	}
+	for _, path := range []string{"/sys/kernel/debug/bpmp/debug/clk/emc/mrq_rate_locked", "/sys/kernel/debug/bpmp/debug/bwmgr/bwmgr_halt"} {
+		value, err := readInt(path)
+		if err != nil || (value != 0 && value != 1) {
+			return ""
+		}
+		locked = locked || value == 1
+	}
+	if locked {
 		return clocksRunning
-	default:
-		return ""
 	}
+	return clocksStopped
 }
 
 var (
