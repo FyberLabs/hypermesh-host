@@ -95,9 +95,13 @@ sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:ll
 Do **not** `COPY model.gguf` into the image. The host default is **`/var/lib/hypermesh/models/model.gguf`** when `HYPERMESH_GGUF_PATH` is unset. An explicit path is kept. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` after `stat` says it is a regular file. Missing or a directory POSTs `passed=false` so Docker cannot create a directory mount. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
 
 ```bash
-# Manual run (same jail the host program adds).
+# Manual run (same jail the host program adds). Save it as a script and run it:
+# it stops before docker run if the tunnel address is missing.
+set -euo pipefail
 # TUNNEL_ADDRESS is the host part of the allocated tunnel client_address: the address on dev hypermesh, without the prefix length.
 TUNNEL_ADDRESS="$(ip -4 -o addr show dev hypermesh | awk 'NR==1 { sub(/\/.*/, "", $4); print $4 }')"
+# An empty value would make the publish argument -p :8080:8080, which listens on all interfaces.
+: "${TUNNEL_ADDRESS:?no IPv4 address on dev hypermesh: bring the tunnel up first}"
 sudo docker network create --driver bridge --internal hypermesh-workload 2>/dev/null || true
 sudo docker run --runtime=nvidia --platform linux/arm64 \
   -p "${TUNNEL_ADDRESS}:8080:8080" \
