@@ -40,20 +40,35 @@ type leaseForwarder struct {
 	wg     sync.WaitGroup
 }
 
-func startLeaseForwarder(listen, dial string) (*leaseForwarder, error) {
-	return startLeaseForwarderLimit(listen, dial, forwardMaxConns, forwardIdleTimeout)
+// startLeaseForwarder listens on listen, bound to the network device iface,
+// and forwards to dial. An empty iface is refused.
+func startLeaseForwarder(listen, dial, iface string) (*leaseForwarder, error) {
+	if iface == "" {
+		return nil, errors.New("lease ingress device is not set")
+	}
+	ln, err := listenOnDevice(listen, iface)
+	if err != nil {
+		return nil, err
+	}
+	return newLeaseForwarder(ln, listen, dial, forwardMaxConns, forwardIdleTimeout), nil
 }
 
+// startLeaseForwarderLimit is the plain-listener form with explicit limits,
+// for tests that exercise the copy loop without a network device.
 func startLeaseForwarderLimit(listen, dial string, maxConns int, idle time.Duration) (*leaseForwarder, error) {
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return nil, err
+	}
+	return newLeaseForwarder(ln, listen, dial, maxConns, idle), nil
+}
+
+func newLeaseForwarder(ln net.Listener, listen, dial string, maxConns int, idle time.Duration) *leaseForwarder {
 	if maxConns < 1 {
 		maxConns = forwardMaxConns
 	}
 	if idle <= 0 {
 		idle = forwardIdleTimeout
-	}
-	ln, err := net.Listen("tcp", listen)
-	if err != nil {
-		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &leaseForwarder{
@@ -67,7 +82,7 @@ func startLeaseForwarderLimit(listen, dial string, maxConns int, idle time.Durat
 		conns:  map[net.Conn]struct{}{},
 	}
 	go f.accept()
-	return f, nil
+	return f
 }
 
 func (f *leaseForwarder) accept() {
@@ -281,6 +296,16 @@ func (f *leaseForwarder) Close() {
 	f.wg.Wait()
 }
 
+// leaseIngressIface is the WireGuard device lease ingress binds to.
+const leaseIngressIface = "hypermesh"
+
+func (a *Agent) ingressDevice() string {
+	if a.ingressIface != "" {
+		return a.ingressIface
+	}
+	return leaseIngressIface
+}
+
 func (a *Agent) startLeaseForwarder(listen, dial string) error {
 	a.fwdMu.Lock()
 	defer a.fwdMu.Unlock()
@@ -292,7 +317,7 @@ func (a *Agent) startLeaseForwarderLocked(listen, dial string) error {
 		a.fwd.Close()
 		a.fwd = nil
 	}
-	fwd, err := startLeaseForwarder(listen, dial)
+	fwd, err := startLeaseForwarder(listen, dial, a.ingressDevice())
 	if err != nil {
 		return err
 	}

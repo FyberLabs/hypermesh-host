@@ -166,6 +166,7 @@ func TestLeaseStartUnreachableIngress(t *testing.T) {
 func TestLeaseStartRedownloadsMissingModelThenStarts(t *testing.T) {
 	a, cache := newCacheAgent(t)
 	a.leaseReady = nil
+	a.ingressIface = "lo"
 	a.modelFit = func(context.Context, int64) error { return nil }
 	port := freeLocalPort(t)
 	a.cfg.ListenPort = port
@@ -518,6 +519,8 @@ func newIngressAgent(t *testing.T, handler http.HandlerFunc) (*Agent, string, st
 	}
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, uptime, "", "")
 	a.leaseReady = nil
+	// Tests listen on loopback, so the device bind is to lo.
+	a.ingressIface = "lo"
 	port := freeLocalPort(t)
 	a.cfg.ListenPort = port
 	a.bindIP = "127.0.0.1/32"

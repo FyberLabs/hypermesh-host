@@ -82,7 +82,10 @@ type Agent struct {
 	containerHealth func(containerIP string) string
 	// workloadState overrides docker inspect during ingress. Tests set it.
 	workloadState func(ctx context.Context, containerID string) (runtime.WorkloadState, error)
-	fwdMu sync.Mutex
+	// ingressIface is the device lease ingress binds to. Empty uses hypermesh.
+	// Tests set it to lo.
+	ingressIface string
+	fwdMu        sync.Mutex
 	fwd   *leaseForwarder
 	// fetchWeights downloads a pinned artifact for lab_pull. Nil uses
 	// the allowlisted HTTP fetcher. Tests stub this — never hit the network.
