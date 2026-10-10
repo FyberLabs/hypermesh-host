@@ -1,4 +1,4 @@
-// Package catalog holds in-tree product 2 catalog ids.
+// Package catalog holds the in-tree catalog ids.
 //
 // A catalog row is not certified until a soak hash exists. Do not advertise
 // tokens/sec for any id here.

@@ -24,7 +24,7 @@ support logs or delete it to retry setup. Diagnostics redact machine tokens.
 - Server retirement and bans still apply to unexpired tokens. Identity alone
   does not permit workloads or selling; approvals remain server decisions.
 
-Deploy Panopticon's machine-identity migration, service and edge routes first.
+Deploy the control plane's machine-identity migration, service and edge routes first.
 An older installed agent retains access to the read-only signed-update endpoint
 so it can fetch the new agent automatically; other host operations require the
 signing identity after binding. Retirement still revokes update access.

@@ -381,7 +381,7 @@ func (c Config) PublishPort() string {
 // GGUFHostPath is the host weights file for docker -v ...:/models/model.gguf:ro.
 // Empty means lease_start must refuse. FromEnv does not return empty:
 // an unset HYPERMESH_GGUF_PATH is DefaultModelPath. An explicit value,
-// including a cottage path, is returned unchanged.
+// including a path under a home directory, is returned unchanged.
 func (c Config) GGUFHostPath() string {
 	return strings.TrimSpace(c.GGUFPath)
 }

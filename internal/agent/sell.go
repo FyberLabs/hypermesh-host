@@ -31,7 +31,7 @@ const (
 )
 
 // SellPosture is the host-local sell state. It is separate from
-// the control-plane certification state (JSON field path_b_state).
+// the control-plane certification state.
 //
 // A paused posture with no source and no until predates sources. Earlier
 // installers wrote it at activation as the exact compact bytes in
@@ -54,7 +54,7 @@ func (p SellPosture) installerShaped() bool {
 }
 
 // jobOutcome is the host-local job result. Sell fields are only POSTed for sell_pause.
-// Egress fields are POSTed for path_b lab soaks (admission sandbox).
+// Egress fields are POSTed for lab soaks (admission sandbox).
 type jobOutcome struct {
 	pathb.Result
 	SellState    api.SellState

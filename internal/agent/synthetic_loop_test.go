@@ -33,7 +33,7 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	var results []synthResult
 	var dockerCalls [][]string
 	var sawOmitempty, sawLoaded, ownerUp bool
-	pathbJob := api.Job{JobID: "syn-pathb", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"}
+	pathbJob := api.Job{JobID: "syn-lab", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"}
 	startJob := api.Job{
 		JobID: "syn-start", Kind: api.KindLeaseStart, DeviceID: testDevice,
 		LeaseID: "lease-syn", CatalogID: "llama-3.1-8b-q4",
@@ -104,7 +104,7 @@ func TestSyntheticAgentLoop(t *testing.T) {
 		issued[next.JobID] = true
 		writeJSON(w, http.StatusOK, next)
 	})
-	for _, id := range []string{"syn-pathb", "syn-start", "syn-stop"} {
+	for _, id := range []string{"syn-lab", "syn-start", "syn-stop"} {
 		jobID := id
 		mux.HandleFunc("/api/v1/hypermesh/agent/jobs/"+jobID+"/result", func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer "+testSecret {
@@ -183,15 +183,15 @@ func TestSyntheticAgentLoop(t *testing.T) {
 	for _, r := range results {
 		byID[r.ID] = r
 	}
-	pathbRes, ok := byID["syn-pathb"]
+	pathbRes, ok := byID["syn-lab"]
 	if !ok {
-		t.Fatal("missing path_b result")
+		t.Fatal("missing lab soak result")
 	}
 	if !pathbRes.Body.Passed || strings.TrimSpace(pathbRes.Body.ImageHash) == "" {
-		t.Fatalf("path_b must pass with non-empty image_hash: %+v", pathbRes.Body)
+		t.Fatalf("lab soak must pass with non-empty image_hash: %+v", pathbRes.Body)
 	}
 	if pathbRes.Body.ImageHash != "sha256:fixture" {
-		t.Fatalf("path_b must use host/telem hash, not invent: %q", pathbRes.Body.ImageHash)
+		t.Fatalf("lab soak must use host/telem hash, not invent: %q", pathbRes.Body.ImageHash)
 	}
 
 	startRes, ok := byID["syn-start"]
@@ -221,10 +221,10 @@ func TestSyntheticAgentLoop(t *testing.T) {
 		if strings.Contains(s, "sell_state") || strings.Contains(s, "reason_code") {
 			t.Fatalf("%s result shape must stay {passed, image_hash?}: %s", r.ID, s)
 		}
-		if r.ID != "syn-pathb" && strings.Contains(s, "egress_") {
+		if r.ID != "syn-lab" && strings.Contains(s, "egress_") {
 			t.Fatalf("%s must not carry egress fields: %s", r.ID, s)
 		}
-		if r.ID != "syn-pathb" && strings.Contains(s, `"reason"`) {
+		if r.ID != "syn-lab" && strings.Contains(s, `"reason"`) {
 			t.Fatalf("%s result shape must stay {passed, image_hash?}: %s", r.ID, s)
 		}
 		if strings.Contains(s, "ghcr.io") {

@@ -173,7 +173,7 @@ func TestDeployCommandOrder(t *testing.T) {
 		"HYPERMESH_TENANT_ID=" + testTenant,
 		"HYPERMESH_ENROLL_TOKEN=one-time-token",
 		"HYPERMESH_STATE_DIR=/var/lib/hypermesh",
-		"HYPERMESH_GGUF_PATH=/home/chris/hypermesh/workload/model.gguf",
+		"HYPERMESH_GGUF_PATH=/home/operator/hypermesh/workload/model.gguf",
 		"HYPERMESH_WG_USERSPACE=1",
 	} {
 		if !strings.Contains(text, line) {
@@ -605,12 +605,12 @@ func TestConfigureDefaultsModelPathAndDirectory(t *testing.T) {
 }
 
 func TestRenderAgentEnvKeepsExplicitGGUFPath(t *testing.T) {
-	const cottage = "/home/chris/hypermesh/workload/model.gguf"
-	body, err := RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "/var/lib/hypermesh", cottage, "", false)
+	const homeModel = "/home/operator/hypermesh/workload/model.gguf"
+	body, err := RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "/var/lib/hypermesh", homeModel, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body, "HYPERMESH_GGUF_PATH="+cottage+"\n") {
+	if !strings.Contains(body, "HYPERMESH_GGUF_PATH="+homeModel+"\n") {
 		t.Fatalf("explicit path lost:\n%s", body)
 	}
 	body, err = RenderAgentEnv("https://api.test.hyperme.sh", testTenant, "tok", "", "", "", false)
@@ -633,7 +633,7 @@ func readyOptions(t *testing.T, root string, lab *planeLab, units *[][]string) O
 		TenantID:        testTenant,
 		Serial:          labSerial,
 		EnrollToken:     "one-time-token",
-		GGUFPath:        "/home/chris/hypermesh/workload/model.gguf",
+		GGUFPath:        "/home/operator/hypermesh/workload/model.gguf",
 		Root:            root,
 		Run: func(_ context.Context, name string, args ...string) error {
 			*units = append(*units, append([]string{name}, args...))

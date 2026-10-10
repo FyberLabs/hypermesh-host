@@ -2,7 +2,7 @@
 
 Orin NX 16GB, Seeed Super J401 / reComputer Super J4012. Flash Seeed’s Super image, then install the same Hypermesh host as the AGX.
 
-Enroll and update: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Flash: [first-boot.md](first-boot.md). Public page: https://hyperme.sh/hosts.
+Enroll and update: https://hyperme.sh/hosts. Flash: [first-boot.md](first-boot.md).
 
 AGX uses `deploy/agx/` (NVIDIA JetPack 7.2.1 / L4T 39.2.1). This directory does not change that flash.
 

@@ -74,7 +74,7 @@ type Collector interface {
 	Collect(ctx context.Context) (telem.Snapshot, error)
 }
 
-// Runner executes thin-v1 for lab soak (path_b) or instance_check jobs.
+// Runner executes thin-v1 for lab soak or instance_check jobs.
 type Runner struct {
 	// Model is the exact catalog alias served by a certification container.
 	Model     string
@@ -96,7 +96,7 @@ type Runner struct {
 // Run collects host facts, then optionally probes the local completions
 // endpoint.
 //
-// path_b (lab soak): telemetry is required. If this box rebooted since the
+// lab soak: telemetry is required. If this box rebooted since the
 // last successful lab soak, POST passed=false (host log reason: reboot). A down
 // endpoint still passes so enroll and green are not deadlocked before
 // lease_start; inference is recorded as skipped. First run (no prior

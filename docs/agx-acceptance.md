@@ -1,7 +1,7 @@
 # AGX physical acceptance
 
 Implementation and simulated CI are separate from hardware acceptance. Use a
-test-channel build containing this lifecycle change, with Panopticon's paired
+test-channel build containing this lifecycle change, with the control plane's paired
 onboarding/certification and public-release APIs deployed. Do not run this on a
 leased host. Keep the host paused throughout acceptance.
 

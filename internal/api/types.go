@@ -16,7 +16,7 @@ const (
 	PathDeviceEnrollToken = Prefix + "/devices/%s/enroll-token"
 	// PathUpdates is GET /api/v1/hypermesh/agent/updates/{channel}.
 	// channel is "test" or "prod". This is the host proposal for the
-	// plane (Panopticon builds the route). One constant, one path.
+	// plane, which builds the route. One constant, one path.
 	PathUpdates         = Prefix + "/agent/updates/%s"
 	HeaderTenantID      = "X-Tenant-ID"
 	HeaderAuthorization = "Authorization"
@@ -130,7 +130,7 @@ type HostHealth struct {
 }
 
 // PathBState is the control-plane certification state for the
-// plane-brokered lease path (JSON field path_b_state).
+// plane-brokered lease path.
 type PathBState string
 
 const (
@@ -140,7 +140,7 @@ const (
 )
 
 // SellState is host-reported sell posture. It is separate from
-// path_b_state.
+// certification state.
 type SellState string
 
 const (
@@ -233,7 +233,7 @@ type ScorecardReport struct {
 }
 
 // JobResultRequest is POST /agent/jobs/{job_id}/result.
-// Sell fields are omitempty so lease_start / lease_stop / lab soak (path_b)
+// Sell fields are omitempty so lease_start / lease_stop / lab soak
 // do not leak them. sell_pause must set SellState. passed=true
 // with sell_state=n/a is invalid on the control plane.
 // EgressOk / EgressReason are host observations for lab quarantine

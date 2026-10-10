@@ -30,7 +30,7 @@ var (
 	// ErrNotAllocated means the session is not status=allocated.
 	ErrNotAllocated = errors.New("hypermesh tunnel: session is not allocated")
 	// ErrMissingPrivateKey means Apply was given no local host private key.
-	// The control plane does not send one (Panopticon #128).
+	// The control plane does not send one.
 	ErrMissingPrivateKey = errors.New("hypermesh tunnel: local WireGuard private key missing")
 )
 

@@ -2,7 +2,7 @@
 
 The agent checks for a new binary on a channel set in `/etc/hypermesh/agent.env` (mode 0600). An empty `HYPERMESH_UPDATE_CHANNEL` does not check. The check does not restart `hypermesh-wg` and does not reboot. The host has no GitHub token.
 
-`design/test-reliability.md` (hypermesh-docs pull request 54, adopted 2026-09-26) says the test channel tracks `main` and the prod channel tracks tagged releases. Hosts do not download those bytes from GitHub. The release workflow puts them in a private Azure Blob container. The control plane mints a short-lived read URL. The agent asks the plane with the same device credential it already uses.
+The test channel tracks `main` and the prod channel tracks tagged releases. Hosts do not download those bytes from GitHub. The release workflow puts them in a private Azure Blob container. The control plane mints a short-lived read URL. The agent asks the plane with the same device credential it already uses.
 
 ## Channels
 
@@ -105,7 +105,7 @@ A download that 404s does not install. The agent tries again on the next check. 
 
 `401` and `403` match the other agent routes. The agent does not install.
 
-Panopticon owns this route. This repo only calls it.
+The control plane owns this route. This repo only calls it.
 
 ## Verification
 

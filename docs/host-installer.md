@@ -322,7 +322,7 @@ machine with a placeholder device is part of onboarding.
 The approval must identify the pending installation and its reported host name
 and hardware summary. A standard identity-provider device login establishes
 the user's identity; it does not by itself approve hardware claims or grant
-ownership of an arbitrary organization. Panopticon must validate tenant
+ownership of an arbitrary organization. The control plane must validate tenant
 membership and derive the authorized host organization on the server before
 creating the dashboard entry. If the identity-provider approval page cannot
 show the enrollment details, the application must provide that confirmation
@@ -381,7 +381,7 @@ Implementation and acceptance tasks:
 - [ ] Complete ARM download from hyperme.sh through browser approval to enroll
   the AGX against the rebuilt test plane; repeat acceptance on the N5 MAX.
 
-These tasks span the host installer/agent, Panopticon authorization, lease and
+These tasks span the host installer/agent, control-plane authorization, lease and
 metering services, pricing, and hyperme.sh interfaces. An installer flag alone
 does not complete an operating mode. Physical acceptance remains pending.
 
@@ -945,15 +945,14 @@ intervals, deadline-bounded trickle responses, timeout backoff, redirects,
 untrusted discovery, malformed/oversized responses and credential redaction.
 These are protocol tests, not a live Keycloak or physical-host acceptance run.
 
-**Control-plane progress:** identity-bound organization ownership is merged and
-deployed in [Panopticon #287](https://github.com/FyberLabs/panopticon/pull/287).
-[Panopticon #288](https://github.com/FyberLabs/panopticon/pull/288) implements the
-durable registration API and dashboard approval described below and is merged.
+**Control-plane progress:** identity-bound organization ownership is deployed in
+the control plane, which also implements the
+durable registration API and dashboard approval described below.
 The CLI integration below uses that API; deployment verification remains separate.
 
 ## Automatic registration integration status
 
-Implemented and merged in Panopticon #288:
+Implemented in the control plane:
 
 - A durable registration request binds the verified owner, selected tenant,
   actual reported host name, hardware report, WireGuard public key and hash of
@@ -970,8 +969,7 @@ Implemented and merged in Panopticon #288:
 - PostgreSQL concurrency/recovery tests and dashboard approval tests cover the
   server contract. These are not physical-host acceptance.
 
-The API contract and recovery rules are maintained in
-[Panopticon's host registration document](https://github.com/FyberLabs/panopticon/blob/main/products/hypermesh/docs/host-registration.md).
+The API contract and recovery rules are maintained with the control plane's host registration API.
 The registration API currently requires a platform-configured hardware class;
 a reported hardware profile does not create or certify a new class.
 
@@ -1092,8 +1090,7 @@ device identity under the shared installer lock, verifies installed payloads,
 inactive units and key/state files, then reruns current hardware, resource and
 approved prerequisite checks. It never rotates keys or writes enrollment state.
 
-The plane must implement
-[the onboarding protocol](https://github.com/FyberLabs/panopticon/pull/289).
+The plane must implement the onboarding protocol.
 The CLI sends a freshly generated 32-byte nonce and the saved registration/device
 IDs to `POST /api/v1/hypermesh/agent/onboarding/check`, authenticated with the
 saved device secret. No browser login or copied UUID is required for this check.
@@ -1138,8 +1135,8 @@ Tests cover TLS device authentication and fresh nonces, protocol and response
 binding, unknown/omitted fields, old-plane/error behavior, local-before-remote
 gating, cancellation and failed persistence, private journals, identity-file
 preservation and the impossibility of promoting a snapshot into activation.
-The companion product change is limited to Hypermesh paths so Panopticon CI
-selects the Hypermesh-family suites. Physical AGX/N5 acceptance remains pending.
+The companion control-plane change is limited to Hypermesh paths so CI
+selects only the Hypermesh test suites. Physical AGX/N5 acceptance remains pending.
 
 Next complete task: an approved, recoverable onboarding execution path for
 heartbeat/tunnel checks and certification execution while keeping
@@ -1494,7 +1491,7 @@ used to manufacture benchmark identity. Compact certification reports failure
 if the plane does not accept its scorecard. An unscoped legacy certification job
 retains its telemetry behavior but cannot publish a catalog benchmark.
 
-Deploy the matching Panopticon job response extension before this host release.
+Deploy the matching control-plane job response extension before this host release.
 It adds current catalog `file_hash`, `size_bytes` and the admitted Jetson backend
 to authenticated dispatch. Null source pins stay null; populate reviewed catalog
 metadata rather than filling in a seed hash. This is a dispatch snapshot, not an
@@ -1775,7 +1772,7 @@ other hardware-backend certification. Those remain separate acceptance/future wo
 The wizard delegates hardware, ownership, certification and mutation decisions
 to the existing validated operations; its progress cursor never authorizes selling.
 Unsupported hardware and inconsistent existing installations stop for recovery.
-Deploy the Panopticon host-installation metadata endpoint before publishing the
+Deploy the control plane's host-installation metadata endpoint before publishing the
 new guided website instructions. Use a host release containing this guide.
 
 ### AGX guided reboot correction (implementation complete; physical retest pending)
@@ -1818,7 +1815,7 @@ AGX reached installed-awaiting-enrollment but failed before device authorization
 - [x] Display **Hypermesh host setup** through the server client declaration; request basic identity and email without profile, user-role or offline scopes.
 - [x] Preserve browser host approval, original-owner checks and the later certification/activation gates.
 
-Deploy the Panopticon realm reconciliation and setup-only authentication endpoints before
+Deploy the control plane's realm reconciliation and setup-only authentication endpoints before
 this installer release. Existing registered host credentials and WireGuard keys
 remain unchanged. An interrupted login starts a fresh device grant with the new
 client; no manual identity reset is needed. Confirm consent and enrollment on
@@ -1991,4 +1988,4 @@ holding the retired enrollment cannot recreate its identity. A model host that
 never created a checkpoint (an older enroll-token install) also binds a signing
 key after re-enrollment; supervisor hosts keep their enrollment secret. Binding/renewal keeps a 15-second maximum HTTP timeout
 even when the installer injects a zero-timeout client, and preserves shorter client
-timeouts. The matching Panopticon and the certification program support must deploy before this build.
+timeouts. The matching control-plane build and the certification program support must deploy before this build.

@@ -1,20 +1,20 @@
 # Hypermesh host
 
-Host software for certified Jetson boxes. We enroll **NVIDIA AGX Orin 64GB** and **Seeed Super J4012**. Product name is **Hypermesh** or **Hyperme.sh**. This repo is not the control plane and does not live in FyberLabs/panopticon.
+Host software for certified Jetson boxes. We enroll **NVIDIA AGX Orin 64GB** and **Seeed Super J4012**. Product name is **Hypermesh** or **Hyperme.sh**. This repo is not the control plane.
 
-This box enrolls, heartbeats, applies the allocated WireGuard session, and runs jobs against Panopticon `products/hypermesh` (path prefix `/api/v1/hypermesh`).
+This box enrolls, heartbeats, applies the allocated WireGuard session, and runs jobs against the Hypermesh control plane (path prefix `/api/v1/hypermesh`).
 
 ## Status
 
 HTTP matches the agent API (Bearer after enroll, tunnel get/ack, lease_start / lease_stop / sell_pause). A local owner unix socket is available when the control plane is unreachable. It does not enqueue control-plane jobs. Catalog id `llama-3.1-8b-q4` is included and uncertified. Empty or bare `image_digest` on lease_start POSTs `passed=false` (not a running instance; CP must not go active). `lease_start` also fails closed without a tunnel address, without a regular-file `HYPERMESH_GGUF_PATH`, or when a different lease is already running. Success `image_hash` is the GGUF sha256 (not the OCI pin). Result POST retries.
 
-Default control plane: **`https://api.test.hyperme.sh`** (deployed test Panopticon). Unit tests compile against `httptest` and do not need that host.
+Default control plane: **`https://api.test.hyperme.sh`** (deployed test control plane). Unit tests compile against `httptest` and do not need that host.
 
 ## Build and test
 
 The `hypermesh-host protection` command prepares and checks firmware, memory-domain and model/runtime evidence for independent review. See [memory protection qualification](docs/memory-protection-qualification.md) for hardware configuration, baseline/protected testing and optional host-selection requirements. It does not grant qualification or enable protected placement.
 
-`hypermesh-host inspect` includes read-only `memory_encryption` diagnostics for AMD Memory Guard/TSME. Linux's `sme` CPU flag is recorded as capability evidence; `tsme_state` remains `unknown` because it does not prove firmware enablement. Verify the current BIOS setting and vendor support before making a protection claim. TSME covers system DRAM and does not establish GPU VRAM protection, privileged-host isolation or remote attestation. See the [design and rollout roadmap](https://github.com/FyberLabs/hypermesh-docs/blob/main/design/amd-memory-guard.md).
+`hypermesh-host inspect` includes read-only `memory_encryption` diagnostics for AMD Memory Guard/TSME. Linux's `sme` CPU flag is recorded as capability evidence; `tsme_state` remains `unknown` because it does not prove firmware enablement. Verify the current BIOS setting and vendor support before making a protection claim. TSME covers system DRAM and does not establish GPU VRAM protection, privileged-host isolation or remote attestation.
 
 Go 1.22+.
 
@@ -41,7 +41,7 @@ The signing key is read after that login from Key Vault `kv-fyber-hmhost` in res
 
 Default `go test ./...` / `go build` is the AGX image: `hip-rocm` and `llama-cpp-vulkan` (and `llama-cpp-cpu` on Linux) stay exact stubs. ROCm / darwin scaffolds are build-tagged; see `deploy/rocm/` and `deploy/mac/`.
 
-Tests use `net/http/httptest` fixtures of those agent API shapes. They do not need a live Panopticon.
+Tests use `net/http/httptest` fixtures of those agent API shapes. They do not need a live control plane.
 
 ## Run against the test control plane
 
@@ -187,7 +187,7 @@ Every hosted artifact container (lab soak or renter `lease_start`) runs on the i
 
 ## Enroll and update
 
-Tenant id and token from [host enroll](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll). Full steps for both boxes: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Public page: https://hyperme.sh/hosts.
+Tenant id and token from [host enroll](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll). Full steps for both boxes: https://hyperme.sh/hosts.
 
 ### NVIDIA AGX Orin 64GB
 
@@ -201,7 +201,7 @@ AGX 64GB nvpmodel default is **30W (id 2)**. GPU path is `--runtime=nvidia`.
 
 Orin NX 16GB. Seeed Super mfi — **JP6.2 / 36.4.3** or **JP7.2.0 / 39.2.0**, pick one. Not the AGX 7.2.1 image.
 
-Flash and install: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). Super flash notes: [seeed-host-process.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012).
+Flash and install: [deploy/seeed-j4012/first-boot.md](deploy/seeed-j4012/first-boot.md). Workload: [deploy/seeed-j4012/workload/README.md](deploy/seeed-j4012/workload/README.md) (build on the J4012).
 
 nvpmodel is the NX Super table (`MAXN_SUPER`). Confirm ids on that image.
 

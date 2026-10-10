@@ -115,7 +115,7 @@ func TestSellPauseAppliesAndHeartbeatReports(t *testing.T) {
 			sawPausedHB = true
 		}
 		if string(hb.SellState) == "green" || string(hb.SellState) == "never-run" {
-			t.Fatalf("must not copy path_b_state into sell_state: %+v", hb)
+			t.Fatalf("must not copy certification state into sell_state: %+v", hb)
 		}
 	}
 	if !sawPausedHB {
@@ -335,7 +335,7 @@ func TestSellPauseResultJSONIncludesSellStateNeverTrueNA(t *testing.T) {
 	}
 }
 
-func TestPathBUnchangedAndNotUsedAsSell(t *testing.T) {
+func TestLabSoakUnchangedAndNotUsedAsSell(t *testing.T) {
 	var mu sync.Mutex
 	var posted map[string]any
 	var hb api.HeartbeatRequest
@@ -404,22 +404,22 @@ func TestPathBUnchangedAndNotUsedAsSell(t *testing.T) {
 	defer mu.Unlock()
 	passed, _ := posted["passed"].(bool)
 	if !passed {
-		t.Fatalf("path_b should still pass telem: %v", posted)
+		t.Fatalf("lab soak should still pass telem: %v", posted)
 	}
 	hash, _ := posted["image_hash"].(string)
 	if strings.TrimSpace(hash) == "" {
-		t.Fatalf("path_b passed=true must include image_hash: %v", posted)
+		t.Fatalf("lab soak passed=true must include image_hash: %v", posted)
 	}
 	for _, extra := range []string{"sell_state", "until"} {
 		if _, ok := posted[extra]; ok {
-			t.Fatalf("path_b result must not include %s: %v", extra, posted)
+			t.Fatalf("lab soak result must not include %s: %v", extra, posted)
 		}
 	}
 	if hb.SellState != api.SellSelling {
-		t.Fatalf("path_b must not invent paused sell_state, heartbeat %+v", hb)
+		t.Fatalf("lab soak must not invent paused sell_state, heartbeat %+v", hb)
 	}
 	if a.effectiveSell().SellState != api.SellSelling {
-		t.Fatalf("path_b must not change sell posture: %+v", a.effectiveSell())
+		t.Fatalf("lab soak must not change sell posture: %+v", a.effectiveSell())
 	}
 }
 
