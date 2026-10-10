@@ -47,7 +47,8 @@ func TestMeasurementsRequireValidAdapterOutputAndRespectTimeout(t *testing.T) {
 		name, body string
 		ok         bool
 	}{
-		{"valid", "sleep 0.05\nprintf '%s' '{\"generated_tokens\":10,\"inference_seconds\":0.01}'\n", true},
+		{"valid", "sleep 0.05\nprintf '%s' '{\"generated_tokens\":128,\"inference_seconds\":0.01}'\n", true},
+		{"mismatch", "printf '%s' '{\"generated_tokens\":10,\"inference_seconds\":0.01}'\n", false},
 		{"zero", "printf '%s' '{\"generated_tokens\":0,\"inference_seconds\":0.01}'\n", false},
 		{"unknown", "printf '%s' '{\"generated_tokens\":10,\"inference_seconds\":0.01,\"qualified\":true}'\n", false},
 		{"trailing", "printf '%s' '{\"generated_tokens\":10,\"inference_seconds\":0.01} {}'\n", false},
@@ -58,7 +59,7 @@ func TestMeasurementsRequireValidAdapterOutputAndRespectTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			m, peak, _, err := measure(ctx, adapter, model, Binding{ContextTokens: 4096})
-			if tc.ok && (err != nil || peak <= 0 || m.GeneratedTokens != 10) {
+			if tc.ok && (err != nil || peak <= 0 || m.GeneratedTokens != 128) {
 				t.Fatalf("metrics=%+v peak=%d err=%v", m, peak, err)
 			}
 			if !tc.ok && err == nil {
@@ -111,5 +112,27 @@ func TestRunnerProducesThreeHashBoundMeasurementArtifacts(t *testing.T) {
 	}
 	if err := VerifyArtifacts(Report{Samples: samples}, dir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunnerAcceptsFirmwareOverrideOnDeviceTreeHosts(t *testing.T) {
+	model := adapterFixture(t, "public fixture content\n")
+	adapter := adapterFixture(t, "sleep 0.05\nprintf '%s' '[{\"model_filename\":\"/proc/self/fd/4\",\"n_prompt\":0,\"n_gen\":128,\"n_depth\":3968,\"n_gpu_layers\":0,\"no_kv_offload\":true,\"avg_ns\":10000000,\"samples_ns\":[10000000]}]'\n")
+	modelContent, _ := os.ReadFile(model.Name())
+	runtimeContent, _ := os.ReadFile(adapter.Name())
+	args := []string{"--model-file", model.Name(), "--runtime-file", adapter.Name(), "--model-sha256", sum(string(modelContent)), "--runtime-sha256", sum(string(runtimeContent)), "--phase", "baseline", "--artifact-dir", t.TempDir()}
+	observe := func() Binding { return Binding{BootID: "boot", Hardware: "testboard"} }
+	var output, diag bytes.Buffer
+	if code := runMeasure(args, &output, &diag, observe); code == 0 {
+		t.Fatal("accepted missing firmware identity")
+	}
+	output.Reset()
+	diag.Reset()
+	if code := runMeasure(append(args, "--firmware-id", "r36.4"), &output, &diag, observe); code != 0 {
+		t.Fatalf("code=%d: %s", code, diag.String())
+	}
+	var samples []Sample
+	if err := json.Unmarshal(output.Bytes(), &samples); err != nil || len(samples) != 3 || samples[0].Binding.Firmware != "r36.4" {
+		t.Fatalf("%v %+v", err, samples)
 	}
 }

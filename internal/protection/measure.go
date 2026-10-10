@@ -80,10 +80,11 @@ func measure(ctx context.Context, executable, model *os.File, b Binding) (Measur
 
 func measureProtocol(ctx context.Context, executable, model *os.File, b Binding, protocol string, generated int) (Measurement, int64, time.Duration, error) {
 	request, _ := json.Marshal(struct {
-		Schema    string  `json:"schema"`
-		ModelPath string  `json:"model_path"`
-		Binding   Binding `json:"binding"`
-	}{"hypermesh-measure-request-v1", "/proc/self/fd/4", b})
+		Schema          string  `json:"schema"`
+		ModelPath       string  `json:"model_path"`
+		GeneratedTokens int     `json:"generated_tokens"`
+		Binding         Binding `json:"binding"`
+	}{"hypermesh-measure-request-v1", "/proc/self/fd/4", generated, b})
 	cmd := exec.CommandContext(ctx, "/proc/self/fd/3")
 	if protocol == "llama-bench" {
 		cmd.Args = append(cmd.Args, "-m", "/proc/self/fd/4", "-p", "0", "-n", strconv.Itoa(generated), "-d", strconv.Itoa(b.ContextTokens-generated), "-ngl", "0", "-nkvo", "1", "-r", "1", "-o", "json")
@@ -131,6 +132,9 @@ func measureProtocol(ctx context.Context, executable, model *os.File, b Binding,
 			err = errors.New("trailing adapter output")
 		}
 	}
+	if err == nil && m.GeneratedTokens != int64(generated) {
+		err = errors.New("generated token count differs from request")
+	}
 	if err != nil || m.GeneratedTokens <= 0 || m.InferenceSeconds <= 0 || math.IsNaN(m.InferenceSeconds) || math.IsInf(m.InferenceSeconds, 0) || m.InferenceSeconds > elapsed.Seconds() {
 		return m, 0, elapsed, errors.New("invalid workload measurement")
 	}
@@ -159,6 +163,7 @@ func runMeasure(args []string, out, diagnostic io.Writer, observe func() Binding
 	contextTokens := f.Int("context-tokens", 4096, "requested model context size")
 	timeout := f.Duration("timeout", 10*time.Minute, "maximum time for each sample, at most 1 hour")
 	dir := f.String("artifact-dir", "", "private evidence directory")
+	firmware := f.String("firmware-id", "", "operator-observed firmware identity when the platform does not expose DMI; not verification")
 	if err := f.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -185,7 +190,14 @@ func runMeasure(args []string, out, diagnostic io.Writer, observe func() Binding
 		fmt.Fprintln(diagnostic, err)
 		return 1
 	}
-	b := observe()
+	observeBound := func() Binding {
+		current := observe()
+		if current.Firmware == "" {
+			current.Firmware = *firmware
+		}
+		return current
+	}
+	b := observeBound()
 	b.ModelSHA256 = *modelPin
 	b.RuntimeSHA256 = *runtimePin
 	b.Backend = "cpu"
@@ -218,7 +230,7 @@ func runMeasure(args []string, out, diagnostic io.Writer, observe func() Binding
 			fmt.Fprintln(diagnostic, err)
 			return 1
 		}
-		current := observe()
+		current := observeBound()
 		if current.BootID != b.BootID || current.Hardware != b.Hardware || current.Firmware != b.Firmware {
 			fmt.Fprintln(diagnostic, "platform drift during measurement")
 			return 1

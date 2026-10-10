@@ -230,6 +230,8 @@ evidence, repeat with `--phase protected` and the same pins/context. Merge the t
 sample arrays into the dossier's `samples`; preserve each baseline boot ID and
 use the current protected boot for protected samples. Set expiry from the oldest
 capture. The phase is only an operator label, never an enablement decision.
+On device-tree hosts without DMI, pass the same operator-observed `--firmware-id`
+that the main `protection` command accepts; it is a label, not verification.
 
 Use a reviewed, statically linked llama-bench build supporting JSON, context-depth
 and CPU-only options. Each sample starts a fresh process with `-p 0 -n N -d
@@ -257,12 +259,13 @@ backend is supported by this runner; UMA/discrete GPU need separate adapters.
 
 For an existing independently reviewed lab adapter, `--protocol adapter` sends
 one JSON object on stdin with schema `hypermesh-measure-request-v1`, `model_path`
-(`/proc/self/fd/4`) and the full `binding`. The adapter must load that public model,
-exercise the requested context on CPU, and emit a single JSON object containing
-positive `generated_tokens` and `inference_seconds`. Its timing is producer
+(`/proc/self/fd/4`), the requested `generated_tokens` and the full `binding`. The
+adapter must load that public model, exercise the requested context on CPU, and
+emit a single JSON object whose `generated_tokens` equals the requested count and
+whose `inference_seconds` is positive. Its timing is producer
 reported, while the runner collects process peak RSS. Pin the adapter and review
 all delegated runtime dependencies; an adapter pin does not bind those dependencies.
-Unknown output fields, trailing data, impossible timing and nonzero exit fail.
+Unknown output fields, trailing data, a different token count, impossible timing and nonzero exit fail.
 This protocol is for trusted lab integration, not automatic qualification.
 
 The control-plane approval registry and durable lease-policy contract are
