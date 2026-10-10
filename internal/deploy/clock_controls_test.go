@@ -12,6 +12,9 @@ func dynamicClockFiles(changes map[string]string) func(string) ([]byte, error) {
 		if value, ok := changes[path]; ok {
 			return []byte(value), nil
 		}
+		if path == "/proc/meminfo" {
+			return []byte("MemTotal: 67108864 kB"), nil
+		}
 		if path == "/sys/devices/system/cpu/online" {
 			return []byte("0-1,3"), nil
 		}

@@ -27,6 +27,7 @@ const (
 
 func goodFacts() Facts {
 	return Facts{
+        MemoryBytes: 64 << 30,
 		Arch:          pinArch,
 		L4T:           pinL4T,
 		Kernel:        "6.8.12-tegra",
@@ -333,7 +334,7 @@ func TestCollectParsesAGXPins(t *testing.T) {
 		},
 		LookPath: func(name string) (string, error) {
 			switch name {
-			case "tegrastats", "docker", "wg":
+			case "tegrastats", "docker", "wg", "nvidia-container-runtime":
 				return "/usr/bin/" + name, nil
 			default:
 				return "", os.ErrNotExist

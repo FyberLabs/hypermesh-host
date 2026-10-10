@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ const (
 // Facts is one reading of the box. Tests fill this in. CollectHost reads
 // the live files and commands.
 type Facts struct {
+	MemoryBytes   int64
 	Arch          string
 	L4T           string
 	Kernel        string
@@ -53,6 +55,9 @@ func CheckAGX(f Facts) error {
 	var bad []string
 	if f.Arch != pinArch {
 		bad = append(bad, fmt.Sprintf("arch: got %q, want %s", f.Arch, pinArch))
+	}
+	if f.MemoryBytes < 56<<30 || f.MemoryBytes > 66<<30 {
+		bad = append(bad, fmt.Sprintf("AGX memory: got %d bytes, want 56–66 GiB for 64 GB module", f.MemoryBytes))
 	}
 	if f.L4T != pinL4T {
 		bad = append(bad, fmt.Sprintf("l4t: got %q, want %s", f.L4T, pinL4T))
@@ -209,6 +214,14 @@ func Collect(ctx context.Context, s Source) Facts {
 	if b, err := s.read(s.path(s.OSRelease, "/etc/os-release")); err == nil {
 		f.Ubuntu = ubuntuPoint(string(b))
 	}
+	if b, err := s.read("/proc/meminfo"); err == nil {
+		if m := regexp.MustCompile(`(?m)^MemTotal:\s+([0-9]+)\s+kB\s*$`).FindStringSubmatch(string(b)); m != nil {
+			kb, err := strconv.ParseInt(m[1], 10, 64)
+			if err == nil && kb <= (1<<63-1)/1024 {
+				f.MemoryBytes = kb * 1024
+			}
+		}
+	}
 	f.CUDA = s.cuda(ctx)
 	if out, err := s.output(ctx, "systemctl", "get-default"); err == nil {
 		f.DefaultTarget = strings.TrimSpace(string(out))
@@ -245,14 +258,39 @@ func (s Source) cuda(ctx context.Context) string {
 }
 
 func (s Source) nvidiaRuntime() bool {
-	if s.look("nvidia-container-runtime") {
-		return true
+	look := s.LookPath
+	if look == nil {
+		look = exec.LookPath
+	}
+	installed, err := look("nvidia-container-runtime")
+	if err != nil || installed == "" {
+		return false
 	}
 	b, err := s.read(s.path(s.DockerJSON, "/etc/docker/daemon.json"))
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(b), `"nvidia"`)
+	var config struct {
+		Runtimes map[string]struct{ Path string }
+	}
+	if json.Unmarshal(b, &config) != nil {
+		return false
+	}
+	configured := config.Runtimes["nvidia"].Path
+	if configured == "" {
+		return false
+	}
+	resolved, err := look(configured)
+	if err != nil || resolved == "" {
+		return false
+	}
+	canonical := func(path string) string {
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			return real
+		}
+		return filepath.Clean(path)
+	}
+	return canonical(installed) == canonical(resolved)
 }
 
 // Clock state is read from control limits, not instantaneous frequency or

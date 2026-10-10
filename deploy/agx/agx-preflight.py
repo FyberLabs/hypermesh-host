@@ -40,6 +40,8 @@ CUDA_RESCUE = "13.0.0"
 KERNEL_PREFIX = "6.8"
 UBUNTU = "24.04.5"
 ARCH = "aarch64"
+MEMORY_MIN_BYTES = 56 * (1 << 30)
+MEMORY_MAX_BYTES = 66 * (1 << 30)
 NVPMODEL_ID = 2
 POWER_MODE = "30W"
 DEFAULT_TARGET = "multi-user.target"
@@ -191,7 +193,7 @@ def parse_os_release(text: str | None) -> str | None:
     return None
 
 
-def nvidia_runtime_configured(daemon_json: str | None, runtime_bin: str | None) -> bool:
+def nvidia_runtime_configured(daemon_json: str | None, runtime_bin: str | None, which: Which = _which) -> bool:
     if not runtime_bin or not daemon_json:
         return False
     try:
@@ -200,7 +202,10 @@ def nvidia_runtime_configured(daemon_json: str | None, runtime_bin: str | None) 
         return False
     runtimes = data.get("runtimes") if isinstance(data, dict) else None
     entry = runtimes.get("nvidia") if isinstance(runtimes, dict) else None
-    return isinstance(entry, dict) and isinstance(entry.get("path"), str) and bool(entry["path"].strip())
+    if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+        return False
+    configured = which(entry["path"])
+    return bool(configured) and os.path.realpath(configured) == os.path.realpath(runtime_bin)
 
 
 def _check(checks: list[dict[str, Any]], name: str, ok: bool, detail: str) -> None:
@@ -218,6 +223,9 @@ def evaluate(facts: dict[str, Any]) -> dict[str, Any]:
         arch == ARCH,
         f"uname -m is {arch!r}; soak host is {ARCH}",
     )
+    memory = facts.get("memory_bytes")
+    _check(checks, "agx_memory", type(memory) is int and MEMORY_MIN_BYTES <= memory <= MEMORY_MAX_BYTES,
+           f"MemTotal is {memory!r} bytes; AGX 64 GB range is 56–66 GiB")
     l4t = facts.get("l4t")
     _check(
         checks,
@@ -373,7 +381,9 @@ def collect_facts(
     boot = read_text(BOOT_CONTROL)
     daemon = read_text(DOCKER_DAEMON)
     runtime_bin = which("nvidia-container-runtime")
+    memory_match = re.search(r"^MemTotal:\s+([0-9]+)\s+kB\s*$", read_text("/proc/meminfo") or "", re.M)
     return {
+        "memory_bytes": int(memory_match.group(1)) * 1024 if memory_match else None,
         "arch": machine,
         "kernel": release,
         "l4t": parse_l4t(read_text(NV_TEGRA_RELEASE)),
@@ -392,7 +402,7 @@ def collect_facts(
         "jetson_clocks": clock_lock_state(read_text) if clocks_bin and clocks_code == 0 else None,
         "tegrastats": which("tegrastats") is not None,
         "docker": which("docker") is not None,
-        "nvidia_runtime": nvidia_runtime_configured(daemon, runtime_bin),
+        "nvidia_runtime": nvidia_runtime_configured(daemon, runtime_bin, which),
         "wireguard_tools": which("wg") is not None,
         "llama_bench": which("llama-bench") is not None,
     }

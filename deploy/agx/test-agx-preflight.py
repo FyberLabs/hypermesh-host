@@ -12,7 +12,7 @@ spec.loader.exec_module(preflight)
 
 
 def ready():
-    return dict(arch=preflight.ARCH, kernel='6.8.12-tegra', l4t=preflight.L4T,
+    return dict(memory_bytes=64 << 30, arch=preflight.ARCH, kernel='6.8.12-tegra', l4t=preflight.L4T,
                 ubuntu=preflight.UBUNTU, cuda=preflight.CUDA,
                 default_target=preflight.DEFAULT_TARGET,
                 packages={name: True for name in preflight.INSTALLED_PACKAGES},
@@ -54,12 +54,31 @@ class PreflightTests(unittest.TestCase):
         self.assertIsNone(preflight.parse_cuda_text('release 13.2', '{bad', None))
 
     def test_runtime_binary_does_not_prove_configuration(self):
-        config = json.dumps({'runtimes': {'nvidia': {'path': 'nvidia-container-runtime'}}})
-        self.assertFalse(preflight.nvidia_runtime_configured(None, '/bin/nvidia-container-runtime'))
-        self.assertFalse(preflight.nvidia_runtime_configured(config, None))
-        for entry in [None, {}, {"path": ""}]:
-            self.assertFalse(preflight.nvidia_runtime_configured(json.dumps({'runtimes': {'nvidia': entry}}), '/bin/nvidia-container-runtime'))
-        self.assertTrue(preflight.nvidia_runtime_configured(config, '/bin/nvidia-container-runtime'))
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / 'nvidia-container-runtime'
+            runtime.write_text('#!/bin/sh\n')
+            runtime.chmod(0o755)
+            alias = Path(tmp) / 'alias'
+            alias.symlink_to(runtime)
+            def which(name):
+                if name == 'nvidia-container-runtime':
+                    return str(runtime)
+                return preflight._which(name)
+            def check(entry, binary=str(runtime)):
+                return preflight.nvidia_runtime_configured(json.dumps({'runtimes': {'nvidia': entry}}), binary, which)
+            for path in [str(runtime), str(alias), 'nvidia-container-runtime']:
+                self.assertTrue(check({'path': path}))
+            for entry in [None, {}, {'path': ''}, {'path': 'runc'}, {'path': '/stale/nvidia-container-runtime'}, {'path': '/bin/sh'}]:
+                self.assertFalse(check(entry))
+            self.assertFalse(check({'path': str(runtime)}, None))
+            self.assertFalse(preflight.nvidia_runtime_configured(None, str(runtime), which))
+
+    def test_memory_range(self):
+        for memory in [32 << 30, 16 << 30, 0, None, '68719476736', (56 << 30) - 1, (66 << 30) + 1]:
+            self.assertFalse(preflight.evaluate(ready() | {'memory_bytes': memory})['ok'])
+        for memory in [56 << 30, 64 << 30, 66 << 30]:
+            self.assertTrue(preflight.evaluate(ready() | {'memory_bytes': memory})['ok'])
 
     def test_failed_commands_do_not_supply_evidence(self):
         def run(cmd):

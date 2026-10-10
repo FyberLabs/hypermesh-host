@@ -31,6 +31,12 @@ missing, mismatched, or unproven facts. It reads local files and commands and
 does not change firmware, power modes, packages, or Docker configuration.
 The pins match `hypermesh-host agx`: L4T R39.2.1, CUDA 13.2.1, kernel 6.8,
 Ubuntu 24.04.5, aarch64, nvpmodel 2 / 30W, headless boot, and stopped clocks.
+Both preflight paths require `/proc/meminfo` `MemTotal` within the documented
+56–66 GiB range for the 64 GB AGX; matching software on a 32 GB module cannot
+pass. Docker's configured `runtimes.nvidia.path` must resolve to the installed
+executable found as `nvidia-container-runtime`, including valid symlink aliases.
+An installed wrapper with Docker pointing at `runc` or a missing executable
+does not pass.
 CUDA is read from toolkit `version.json` or `version.txt`; NVCC component build
 numbers do not identify the toolkit maintenance release. The clock check requires
 every online CPU and the GPU to have distinct minimum/maximum scaling limits,
