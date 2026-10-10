@@ -64,6 +64,29 @@ type Agent struct {
 	// certReadyWait bounds how long init waits for the cert container
 	// to answer. Zero uses three minutes. Tests set a short wait.
 	certReadyWait time.Duration
+	// leaseReady, when set, replaces the WireGuard TCP forwarder and the
+	// llama-server /health wait. Tests that are not about ingress set this
+	// so a missing tunnel address does not fail the start. Nil uses the
+	// real listener and /health checks.
+	leaseReady func(ctx context.Context, h *runtime.Handle) error
+	// leaseReadyEvery is the /health poll interval. Zero uses 1s.
+	leaseReadyEvery time.Duration
+	// leaseProbeTimeout bounds one /health request. Zero uses 1s.
+	leaseProbeTimeout time.Duration
+	// forwarderEvery is how often a dropped listener is started again.
+	// Zero uses 5s. A failure is logged and does not change heartbeat health.
+	forwarderEvery time.Duration
+	// bridgeDial overrides the container dial address. Tests set it.
+	bridgeDial func(containerIP string) string
+	// containerHealth overrides the container /health URL. Tests set it.
+	containerHealth func(containerIP string) string
+	// workloadState overrides docker inspect during ingress. Tests set it.
+	workloadState func(ctx context.Context, containerID string) (runtime.WorkloadState, error)
+	// ingressIface is the device lease ingress binds to. Empty uses hypermesh.
+	// Tests set it to lo.
+	ingressIface string
+	fwdMu        sync.Mutex
+	fwd   *leaseForwarder
 	// fetchWeights downloads a pinned artifact for lab_pull. Nil uses
 	// the allowlisted HTTP fetcher. Tests stub this — never hit the network.
 	fetchWeights func(ctx context.Context, dest, sourceRef, pin string) error
@@ -222,10 +245,12 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// Heartbeat and jobs are separate loops. A lab_pull of a multi-gigabyte
 	// GGUF must not stall the heartbeat ticker: the plane drops a host
-	// whose heartbeat is older than 180s. Shutdown waits for the in-flight
-	// call on each loop, which stops when ctx is cancelled.
+	// whose heartbeat is older than 180s. The lease listener is checked on
+	// its own loop and started again if it drops. That check does not change
+	// heartbeat health. Shutdown waits for the in-flight call on each loop,
+	// which stops when ctx is cancelled.
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		a.heartbeatLoop(ctx)
@@ -233,6 +258,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		a.jobLoop(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		a.forwarderLoop(ctx)
 	}()
 	wg.Wait()
 	return ctx.Err()
@@ -1072,51 +1101,93 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: "no tunnel address"}
 	}
 	if existing := a.localLease(); existing != nil && strings.TrimSpace(existing.LeaseID) != "" {
-		if strings.TrimSpace(existing.LeaseID) != strings.TrimSpace(job.LeaseID) {
+		if existing.Serving() && strings.TrimSpace(existing.LeaseID) != strings.TrimSpace(job.LeaseID) {
 			a.log.Info("lease_start refused", "reason", "lease already running", "lease_id", job.LeaseID, "local_lease_id", existing.LeaseID)
 			return pathb.Result{Passed: false, Reason: "lease already running"}
 		}
-		if err := a.authorizeLeaseRetry(ctx, job, existing); err != nil {
-			return pathb.Result{Reason: err.Error()}
+		if !existing.Serving() {
+			// A start that never became ready. Stop its container before a
+			// new start. It must not be acknowledged as a running lease.
+			if res, ok := a.recoverUnreadyLease(existing); !ok {
+				return res
+			}
+		} else {
+			if err := a.authorizeLeaseRetry(ctx, job, existing); err != nil {
+				return pathb.Result{Reason: err.Error()}
+			}
+			return a.leaseStartAlready(existing)
 		}
-		return a.leaseStartAlready(existing)
 	}
+	var last pathb.Result
+	for attempt := 1; attempt <= leaseModelAttempts; attempt++ {
+		res, retry := a.leaseStartAttempt(ctx, job)
+		if !retry || attempt == leaseModelAttempts {
+			if retry {
+				res = finishRepairFailure(res)
+				a.log.Info("lease_start failed", "reason", res.Reason, "lease_id", job.LeaseID)
+			}
+			return res
+		}
+		last = res
+		a.log.Info("lease_start model retry", "lease_id", job.LeaseID, "attempt", attempt, "reason", res.Reason)
+	}
+	return last
+}
+
+// leaseStartAttempt mounts the weights, starts the container, and waits
+// until llama-server /health answers on the container and through the
+// WireGuard listener. retry is set when the weights file is missing or
+// its hash does not match and source_ref can download it again.
+func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Result, bool) {
 	if job.SourceRef != "" {
 		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
-			return pathb.Result{Reason: err.Error()}
+			return pathb.Result{Reason: err.Error()}, false
 		}
 		if job.SizeBytes <= 0 {
-			return pathb.Result{Reason: "model download requires expected size"}
+			return pathb.Result{Reason: "model download requires expected size"}, false
 		}
 		pulled := a.labPull(ctx, artifactPullJob(job))
 		if !pulled.Passed {
-			return pulled
+			if modelRepairable(job, pulled.Reason) {
+				return pulled, true
+			}
+			return pulled, false
 		}
 	}
 	gguf, pinID, havePin, refuse := a.leaseModelPath(job)
 	if refuse.Reason != "" {
-		return refuse
+		if modelRepairable(job, refuse.Reason) {
+			return refuse, true
+		}
+		return refuse, false
 	}
 	if err := a.authorizePrivateCacheFile(ctx, job, gguf); err != nil {
-		return pathb.Result{Reason: err.Error()}
+		return pathb.Result{Reason: err.Error()}, false
 	}
 	hash, err := runtime.HashGGUFFile(gguf)
 	if err != nil {
 		reason := leaseStartFailReason(err)
 		a.log.Info("lease_start refused", "reason", reason, "lease_id", job.LeaseID)
-		return pathb.Result{Passed: false, Reason: reason}
+		res := pathb.Result{Passed: false, Reason: reason}
+		if modelRepairable(job, reason) {
+			return res, true
+		}
+		return res, false
 	}
 	if res, ok := a.leaseHashCheck(job, hash, pinID, havePin); !ok {
-		return res
+		if modelRepairable(job, res.Reason) {
+			return res, true
+		}
+		return res, false
 	}
 	if job.SourceRef != "" {
 		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
-			return pathb.Result{Reason: err.Error()}
+			return pathb.Result{Reason: err.Error()}, false
 		}
 	}
 	jinja, contextTokens, timeout, err := a.modelSettings(job)
 	if err != nil {
-		return pathb.Result{Reason: "private model configuration binding invalid"}
+		return pathb.Result{Reason: "private model configuration binding invalid"}, false
 	}
 	path, _ := runtime.ResolveBackend(job.Backend)
 	h, err := a.starterFor(path).Start(ctx, runtime.Spec{
@@ -1136,7 +1207,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 	if err != nil {
 		reason := leaseStartFailReason(err)
 		a.log.Info("lease_start failed", "reason", reason, "lease_id", job.LeaseID)
-		return pathb.Result{Passed: false, Reason: reason}
+		return pathb.Result{Passed: false, Reason: reason}, false
 	}
 	h.FileHash = hash
 	if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
@@ -1146,18 +1217,42 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		h.PrivateSizeBytes = job.SizeBytes
 		h.Backend = job.Backend
 	}
+	// The container exists from here on. Record it now so a restart during the
+	// readiness wait, a lease_stop, or a retry can find and remove it.
+	a.recordStarting(h)
+	if strings.TrimSpace(h.FileHash) == "" {
+		a.abandonStarted(ctx, h)
+		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
+		return pathb.Result{Passed: false, Reason: "no image_hash"}, false
+	}
+	if a.leaseReady != nil {
+		if err := a.leaseReady(ctx, h); err != nil {
+			a.abandonStarted(ctx, h)
+			a.log.Info("lease_start failed", "reason", err.Error(), "lease_id", job.LeaseID)
+			return pathb.Result{Passed: false, Reason: err.Error()}, false
+		}
+	} else if err := a.openLeaseIngress(ctx, h, path); err != nil {
+		kept := a.abandonStarted(ctx, h)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return pathb.Result{Reason: "lease_start canceled"}, false
+		}
+		res := pathb.Result{Passed: false, Reason: err.Error()}
+		if !kept && a.modelStillBroken(job, gguf) {
+			return res, true
+		}
+		a.log.Info("lease_start failed", "reason", res.Reason, "lease_id", job.LeaseID)
+		return res, false
+	}
+	if !a.markServing(h) {
+		// lease_stop removed the container while the wait was ending.
+		a.stopLeaseForwarder()
+		a.log.Info("lease_start failed", "reason", "lease stopped during start", "lease_id", job.LeaseID)
+		return pathb.Result{Passed: false, Reason: "lease stopped during start"}, false
+	}
 	a.clearPendingModel(job.CatalogID)
 	a.touchModelUse(hash)
-	if strings.TrimSpace(h.FileHash) == "" {
-		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
-		return pathb.Result{Passed: false, Reason: "no image_hash"}
-	}
-	a.setLease(h)
-	if err := a.saveLease(h); err != nil {
-		a.log.Warn("lease record not saved", "err", err)
-	}
 	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.LogLabel(job.Backend), "runner", runnerLog(path))
-	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}
+	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}, false
 }
 
 // leaseStartAlready is a same-lease remint or PostResult retry. Do not
@@ -1178,6 +1273,9 @@ func (a *Agent) leaseStartAlready(h *runtime.Handle) pathb.Result {
 		}
 	}
 	a.touchModelUse(hash)
+	if a.leaseReady == nil {
+		a.ensureLeaseForwarder(context.Background())
+	}
 	a.log.Info("lease_start already running", "lease_id", h.LeaseID)
 	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}
 }
@@ -1273,7 +1371,7 @@ func (a *Agent) leaseStop(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: "runtime stop failed"}
 	}
 	a.clearPendingForLease(job, h)
-	a.setLease(nil)
+	a.dropCurrentLease()
 	_ = a.saveLease(nil)
 	// Host WireGuard peer stays up. Teardown only on GET revoked or 204.
 	a.log.Info("lease_stop", "lease_id", job.LeaseID)
@@ -1424,6 +1522,7 @@ func (a *Agent) resetEnrollmentWork(ctx context.Context, device string) error {
         var handle runtime.Handle
         if err:=json.Unmarshal(raw,&handle);err!=nil {return fmt.Errorf("invalid old lease state: %w",err)}
         if err:=a.stopHandle(ctx,&handle);err!=nil {return err}
+        a.dropCurrentLease()
     } else if !os.IsNotExist(err) {return err}
     if err:=a.tunnels.Teardown(ctx);err!=nil {return err}
     for _,name:=range []string{leaseFile,sellFile,"boot.json"} {

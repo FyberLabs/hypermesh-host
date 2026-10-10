@@ -9,13 +9,17 @@ import (
 
 // WorkloadNetworkName is the dedicated Docker bridge for lease containers.
 // It is created --internal so the workload has no default route to the host
-// LAN or public internet. Ingress stays host-side docker-proxy on the
-// WireGuard client address only (-p <wg-ip>:8080:8080).
+// LAN or public internet. Docker does not publish host ports for a container
+// whose only network is internal: there is no docker-proxy and no NAT rule
+// for -p <wg-ip>:8080:8080. The agent listens on the WireGuard address and
+// forwards TCP to the container address on this bridge. Do not attach a
+// second network.
 const WorkloadNetworkName = "hypermesh-workload"
 
 // JailArgs are docker run flags for every hosted artifact container
-// (lab or renter). Agent and witness stay on host network and reach the
-// workload via the overlay publish address, same as the gateway door.
+// (lab or renter). The agent stays on the host network. It reaches the
+// container at its bridge address, and the gateway reaches the container
+// through the agent's listener on the WireGuard address.
 //
 // Guarantees:
 //   - not --network=host (no LAN/host namespace)
@@ -43,8 +47,9 @@ func workloadNetworkInspectArgs() []string {
 func workloadNetworkCreateArgs() []string {
 	// --internal: no default route off the overlay to the host LAN / public
 	// internet. ICC and masquerade stay off so containers cannot hairpin to
-	// each other or SNAT onto a host path. Agent and door still reach the
-	// workload via docker-proxy on the WireGuard publish address.
+	// each other or SNAT onto a host path. -p does not open a host listener
+	// on an internal-only network. The agent forwards from the WireGuard
+	// address to the container address on this bridge.
 	return []string{
 		"network", "create",
 		"--driver", "bridge",
