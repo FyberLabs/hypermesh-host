@@ -805,3 +805,27 @@ func TestHealthProbeDoesNotFollowRedirects(t *testing.T) {
 		t.Fatal("lease kept")
 	}
 }
+
+// A lease_stop that finishes while the readiness wait is ending must win: the
+// start fails, and the stopped container's record is not written back.
+func TestLeaseStopDuringStartIsNotUndone(t *testing.T) {
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	var stopped atomic.Bool
+	a.leaseReady = func(ctx context.Context, _ *runtime.Handle) error {
+		got := a.leaseStop(ctx, api.Job{Kind: api.KindLeaseStop, LeaseID: "lease-race"})
+		stopped.Store(got.Passed)
+		return nil
+	}
+	got := a.leaseStart(context.Background(), ingressJob("lease-race", hash))
+	if !stopped.Load() {
+		t.Fatal("lease_stop did not run during the wait")
+	}
+	if got.Passed || !strings.Contains(got.Reason, "stopped during start") {
+		t.Fatalf("result %+v", got)
+	}
+	assertLeaseClean(t, a, listen, docker)
+}

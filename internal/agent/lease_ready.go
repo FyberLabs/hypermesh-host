@@ -431,12 +431,26 @@ func (a *Agent) recordStarting(h *runtime.Handle) {
 	}
 }
 
-// markServing publishes h as the running lease once readiness passed.
-func (a *Agent) markServing(h *runtime.Handle) {
-	h.State = ""
+// markServing publishes h as the running lease once readiness passed. It
+// does so under the forwarder lock and only while the starting record this
+// start made is still the current lease. A lease_stop that overlapped the
+// end of the wait has already removed the container and the record, and
+// must not be undone. It returns false in that case and writes nothing.
+func (a *Agent) markServing(h *runtime.Handle) bool {
 	a.fwdMu.Lock()
+	defer a.fwdMu.Unlock()
+	cur := a.currentLease()
+	if cur == nil || cur.State != runtime.HandleStarting ||
+		strings.TrimSpace(cur.LeaseID) != strings.TrimSpace(h.LeaseID) ||
+		strings.TrimSpace(cur.ContainerID) != strings.TrimSpace(h.ContainerID) {
+		return false
+	}
+	h.State = ""
 	a.setLease(h)
-	a.fwdMu.Unlock()
+	if err := a.saveLease(h); err != nil && a.log != nil {
+		a.log.Warn("lease record not saved", "err", err)
+	}
+	return true
 }
 
 // recoverUnreadyLease stops the container of a lease that was recorded

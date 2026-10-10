@@ -1243,12 +1243,14 @@ func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Resul
 		a.log.Info("lease_start failed", "reason", res.Reason, "lease_id", job.LeaseID)
 		return res, false
 	}
+	if !a.markServing(h) {
+		// lease_stop removed the container while the wait was ending.
+		a.stopLeaseForwarder()
+		a.log.Info("lease_start failed", "reason", "lease stopped during start", "lease_id", job.LeaseID)
+		return pathb.Result{Passed: false, Reason: "lease stopped during start"}, false
+	}
 	a.clearPendingModel(job.CatalogID)
 	a.touchModelUse(hash)
-	a.markServing(h)
-	if err := a.saveLease(h); err != nil {
-		a.log.Warn("lease record not saved", "err", err)
-	}
 	a.log.Info("lease_start container", "lease_id", job.LeaseID, "catalog_id", job.CatalogID, "backend", runtime.LogLabel(job.Backend), "runner", runnerLog(path))
 	return pathb.Result{Passed: true, ImageHash: hash, Reason: "lease_start"}, false
 }

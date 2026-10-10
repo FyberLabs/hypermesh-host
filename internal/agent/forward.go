@@ -339,12 +339,15 @@ func (a *Agent) stopLeaseForwarderLocked() {
 	}
 }
 
-// dropCurrentLease clears the in-memory lease and its listener under the
-// forwarder lock so a recovery tick cannot bind a new listener afterward.
+// dropCurrentLease clears the in-memory lease, its listener and the lease
+// record under the forwarder lock, so a recovery tick cannot bind a new
+// listener afterward and a start that finishes later cannot write its
+// record over this removal.
 func (a *Agent) dropCurrentLease() {
 	a.fwdMu.Lock()
 	a.setLease(nil)
 	a.stopLeaseForwarderLocked()
+	_ = a.saveLease(nil)
 	a.fwdMu.Unlock()
 }
 
