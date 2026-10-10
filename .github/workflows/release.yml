@@ -29,7 +29,11 @@ permissions:
 jobs:
   release:
     name: release
-    runs-on: [self-hosted, linux, x64]
+    # GitHub-hosted runner. The image ships azure-cli 2.90.0 and gpg.
+    # The storage account and the signing vault accept public-endpoint
+    # traffic and are gated by RBAC, so no private network is needed.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     # This job uses repository variables. It does not use a GitHub
     # Environment. Federated credentials are ref-based:
     #   test: repo:FyberLabs/hypermesh-host:ref:refs/heads/main
@@ -48,7 +52,7 @@ jobs:
           fetch-depth: 0
 
       # The flag checker validates commands against azure-cli 2.90.0.
-      # An older CLI on this runner is a different flag set.
+      # An older CLI is a different flag set.
       - name: Require azure-cli 2.90.0
         run: |
           set -euo pipefail

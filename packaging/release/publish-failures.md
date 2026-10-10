@@ -10,7 +10,7 @@ The uploader now distinguishes an existing artifact (keep), an absent artifact
 function with cloud commands stubbed, without publishing artifacts.
 
 CI and release also use job-local Go build/module caches and disable setup-go
-cache restoration. Concurrent self-hosted jobs previously restored the shared
+cache restoration. Concurrent jobs on a shared runner previously restored the shared
 cache while Go vet read it, producing missing runtime/debug cache files.
 The observed missing-file error is fixed by removing that shared-cache path;
 successful production publishing still requires a post-merge release run.
