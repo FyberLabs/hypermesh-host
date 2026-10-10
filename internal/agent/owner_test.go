@@ -469,7 +469,7 @@ func TestOwnerStatusJSONNoSecrets(t *testing.T) {
 		t.Fatalf("image_digest %q", body.Lease.ImageDigest)
 	}
 	if !body.PathB.BootIDPresent || body.PathB.BootID != "boot-from-store" {
-		t.Fatalf("path_b %+v", body.PathB)
+		t.Fatalf("lab soak status %+v", body.PathB)
 	}
 	if !body.PathB.CompletionsUp {
 		t.Fatal("completions endpoint was up")
@@ -482,7 +482,7 @@ func TestOwnerStatusJSONNoSecrets(t *testing.T) {
 	}
 }
 
-func TestOwnerStatusHonestPathBWithoutBootOrCompletions(t *testing.T) {
+func TestOwnerStatusHonestLabSoakWithoutBootOrCompletions(t *testing.T) {
 	a := newOwnerTestAgent(t)
 	a.cfg.CompletionsURL = "http://127.0.0.1:1/v1/chat/completions"
 	startTestOwner(t, a)
@@ -511,7 +511,7 @@ func TestOwnerStatusHonestPathBWithoutBootOrCompletions(t *testing.T) {
 		t.Fatalf("default sell %+v", body)
 	}
 	if strings.Contains(string(raw), "path_b_state") {
-		t.Fatalf("must not invent path_b_state: %s", raw)
+		t.Fatalf("must not invent certification state: %s", raw)
 	}
 }
 
@@ -607,7 +607,7 @@ func assertOwnerStatusSafe(t *testing.T, raw []byte) {
 	t.Helper()
 	assertOwnerNoSecrets(t, raw)
 	if strings.Contains(string(raw), "path_b_state") {
-		t.Fatalf("must not invent path_b_state: %s", raw)
+		t.Fatalf("must not invent certification state: %s", raw)
 	}
 }
 

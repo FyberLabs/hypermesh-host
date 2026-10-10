@@ -172,7 +172,7 @@ program review; never copy `review_ready` into a host certification field.
 
 ## Optional host selection
 
-Panopticon accepts `protection_requirements` on lease requests and as repeated
+The control plane accepts `protection_requirements` on lease requests and as repeated
 query parameters on authenticated `GET /api/v1/hypermesh/renter/hosts`:
 
 ```json

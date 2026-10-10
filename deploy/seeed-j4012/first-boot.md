@@ -2,7 +2,7 @@
 
 Seeed Super J4012 (Orin NX 16GB): Seeed’s Super image, then the same Hypermesh host as the AGX. Factory preinstall is later.
 
-Get the tenant id and enroll token from [host enroll](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll). Shared steps: [host-enroll.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/host-enroll.md). Flash detail: [seeed-host-process.md](https://github.com/FyberLabs/hypermesh-docs/blob/main/seeed-host-process.md). Public page: https://hyperme.sh/hosts.
+Get the tenant id and enroll token from [host enroll](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll). Shared steps: https://hyperme.sh/hosts.
 
 Use Seeed Super mfi, not `jetson-agx-orin-devkit` XML.
 

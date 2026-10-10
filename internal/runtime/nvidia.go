@@ -38,7 +38,7 @@ const DefaultListenPort = "8080"
 
 // DefaultGGUFPath is the example host weights path used when a caller
 // omits one. Lease start still requires HYPERMESH_GGUF_PATH to be a real file.
-const DefaultGGUFPath = "/home/chris/hypermesh/workload/model.gguf"
+const DefaultGGUFPath = "/var/lib/hypermesh/models/model.gguf"
 
 // ContainerGGUFPath is where llama-server looks inside the container.
 const ContainerGGUFPath = "/models/model.gguf"

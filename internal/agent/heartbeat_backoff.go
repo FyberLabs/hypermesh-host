@@ -21,7 +21,7 @@ const (
 	// grace (HYPERMESH_HEARTBEAT_GRACE_WAIT_S) so a beat still lands
 	// before placement treats the host as stale. The plane drops a
 	// host whose heartbeat is older than 180s.
-	// Panopticon #256's 503 Retry-After is for placement, lease_start,
+	// The plane's 503 Retry-After is for placement, lease_start,
 	// and chat callers after a restart. It is not sent on heartbeat.
 	// A proxy 503 on POST /agent/heartbeat is still honored, then
 	// clamped into this range. That hint is not the grace window.

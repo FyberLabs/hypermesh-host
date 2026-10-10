@@ -35,14 +35,14 @@ func downRunner(t *testing.T) Runner {
 	}
 }
 
-func TestPathBPassesWithTelemetryWhenEndpointDown(t *testing.T) {
+func TestLabSoakPassesWithTelemetryWhenEndpointDown(t *testing.T) {
 	r := downRunner(t)
 	got := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})
 	if !got.Passed || got.ImageHash != "sha256:abc" {
 		t.Fatalf("%+v", got)
 	}
 	if !strings.Contains(got.Reason, "skipped") {
-		t.Fatalf("path_b should record inference skipped, got %q", got.Reason)
+		t.Fatalf("lab soak should record inference skipped, got %q", got.Reason)
 	}
 	assertNoProbeLeak(t, got.Reason)
 }
@@ -92,7 +92,7 @@ func TestInstanceCheckPassesOnChoice(t *testing.T) {
 	}
 }
 
-func TestPathBMeasuresDecodeOnlyWhenUsageTokensExist(t *testing.T) {
+func TestLabSoakMeasuresDecodeOnlyWhenUsageTokensExist(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Millisecond)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -130,7 +130,7 @@ func TestInstanceCheckFailsOnEmptyChoice(t *testing.T) {
 	assertNoProbeLeak(t, got.Reason)
 }
 
-func TestPathBPassesWhenCompletionsReturnChoice(t *testing.T) {
+func TestLabSoakPassesWhenCompletionsReturnChoice(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
@@ -158,7 +158,7 @@ func TestUnknownSuiteFails(t *testing.T) {
 	}
 }
 
-func TestPackV1AcceptedForCompactCertAndPathB(t *testing.T) {
+func TestPackV1AcceptedForCompactCertAndLabSoak(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Millisecond)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -177,11 +177,11 @@ func TestPackV1AcceptedForCompactCertAndPathB(t *testing.T) {
 	if !compact.Passed || !compact.Measured || compact.Reason != SuitePackV1 {
 		t.Fatalf("compact_cert pack-v1: %+v", compact)
 	}
-	pathB := r.Run(context.Background(), api.Job{
+	labSoak := r.Run(context.Background(), api.Job{
 		Kind: api.KindPathB, SuiteID: SuitePackV1,
 	})
-	if !pathB.Passed || pathB.Reason != SuitePackV1 {
-		t.Fatalf("path_b pack-v1: %+v", pathB)
+	if !labSoak.Passed || labSoak.Reason != SuitePackV1 {
+		t.Fatalf("lab soak pack-v1: %+v", labSoak)
 	}
 }
 
@@ -204,7 +204,7 @@ func TestCompactCertFailsWithoutTimedSample(t *testing.T) {
 	}
 }
 
-func TestTelemetryErrorFailsPathB(t *testing.T) {
+func TestTelemetryErrorFailsLabSoak(t *testing.T) {
 	r := Runner{Collector: fakeCollect{err: errors.New("no /proc")}}
 	got := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})
 	if got.Passed {
@@ -221,7 +221,7 @@ func TestEmptySuiteIDIsThinV1(t *testing.T) {
 	}
 }
 
-func TestPathBFailsWhenBootIDChanges(t *testing.T) {
+func TestLabSoakFailsWhenBootIDChanges(t *testing.T) {
 	r := downRunner(t)
 	r.Store = FileStore{Dir: t.TempDir()}
 	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 40, BootID: "boot-aaa"}}
@@ -234,7 +234,7 @@ func TestPathBFailsWhenBootIDChanges(t *testing.T) {
 	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 3, BootID: "boot-bbb"}}
 	got := r.Run(context.Background(), api.Job{SuiteID: SuiteThinV1, Kind: api.KindPathB})
 	if got.Passed {
-		t.Fatalf("path_b must fail when boot_id changed: %+v", got)
+		t.Fatalf("lab soak must fail when boot_id changed: %+v", got)
 	}
 	if got.Reason != "reboot" {
 		t.Fatalf("host log reason must be reboot, got %q", got.Reason)
@@ -245,7 +245,7 @@ func TestPathBFailsWhenBootIDChanges(t *testing.T) {
 	assertNoProbeLeak(t, got.Reason)
 }
 
-func TestPathBSameBootIDKeepsTelemInference(t *testing.T) {
+func TestLabSoakSameBootIDKeepsTelemInference(t *testing.T) {
 	r := downRunner(t)
 	r.Store = FileStore{Dir: t.TempDir()}
 	r.Collector = fakeCollect{snap: telem.Snapshot{ImageHash: "sha256:abc", UptimeS: 9, BootID: "boot-same"}}
@@ -266,7 +266,7 @@ func TestPathBSameBootIDKeepsTelemInference(t *testing.T) {
 	assertNoProbeLeak(t, got.Reason)
 }
 
-func TestPathBSameBootIDWithCompletions(t *testing.T) {
+func TestLabSoakSameBootIDWithCompletions(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
@@ -294,7 +294,7 @@ func TestPathBSameBootIDWithCompletions(t *testing.T) {
 	assertNoProbeLeak(t, got.Reason)
 }
 
-func TestPathBFirstRunRecordsBootID(t *testing.T) {
+func TestLabSoakFirstRunRecordsBootID(t *testing.T) {
 	dir := t.TempDir()
 	r := downRunner(t)
 	r.Store = FileStore{Dir: dir}
@@ -319,7 +319,7 @@ func TestPathBFirstRunRecordsBootID(t *testing.T) {
 	}
 }
 
-func TestPathBUptimeBackwardsIsReboot(t *testing.T) {
+func TestLabSoakUptimeBackwardsIsReboot(t *testing.T) {
 	now := time.Unix(1_700_000_100, 0)
 	r := downRunner(t)
 	r.Store = FileStore{Dir: t.TempDir()}

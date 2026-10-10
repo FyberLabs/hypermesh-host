@@ -1,6 +1,6 @@
 # Publisher failure regression notes
 
-After #62, the signing key imports without a passphrase as intended.
+The signing key imports without a passphrase.
 The next publish path exposed an exit-status bug: capturing $? after an if
 statement with no else returned the if statement's status, losing the
 blob-existence result. A new artifact was rejected instead of uploaded.

@@ -462,7 +462,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 var errRevokedStop = errors.New("hypermesh: tunnel revoked")
 
 func (a *Agent) syncTunnel(ctx context.Context) error {
-	// Plane contract (panopticon routes.py): Bearer hm_dev_ plus X-Tenant-ID.
+	// Plane contract: Bearer hm_dev_ plus X-Tenant-ID.
 	// POST /agent/tunnel/peer has no device_id. Body is only peer_public_key.
 	// 404 "Tunnel not found" still saved the device key. 409 "Tunnel is revoked"
 	// means do not bring WireGuard up. GET 204 is no tunnel. GET 200
@@ -712,7 +712,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 		a.attachEgressObservation(ctx, &res)
 	}
 	// Compact-cert band check on the plane needs the scorecard before the
-	// job result greens path_b_state. Lab path_b keeps post-then-scorecard.
+	// job result greens certification state. A lab soak keeps post-then-scorecard.
 	if job.Kind == api.KindCompactCert {
 		if err := a.reportScorecard(ctx, *job, res.Result); err != nil {
 			res.Result = pathb.Result{Passed: false, Reason: "cert scorecard not accepted"}
@@ -810,7 +810,7 @@ func (a *Agent) postResult(ctx context.Context, jobID, deviceID string, body api
 }
 
 // attachEgressObservation records a host-namespace egress boolean for lab
-// path_b soaks. Fail closed when observation is unavailable. Does not scan
+// soaks. Fail closed when observation is unavailable. Does not scan
 // or weaken the jail.
 func (a *Agent) attachEgressObservation(ctx context.Context, res *jobOutcome) {
 	run := a.dockerRun
@@ -862,7 +862,7 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 			}
 		}
 		res := a.requireImageHash(job.Kind, a.pathb.Run(ctx, job))
-		// Legacy telemetry-only path_b and instance checks are not catalog benchmarks.
+		// Legacy telemetry-only lab soak and instance checks are not catalog benchmarks.
 		res.Measured = false
 		return jobOutcome{Result: res}
 	case api.KindLabPull:
@@ -889,7 +889,7 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 // labPull fetches a pinned artifact from an allowlisted source onto the host
 // GGUF path (when source_ref is set), then verifies the content hash. Fail
 // closed on untrusted URL, hash mismatch, or missing pin. Does not start a
-// container — the subsequent lab soak / path_b job runs the jailed sample.
+// container — the subsequent lab soak job runs the jailed sample.
 func (a *Agent) labPull(ctx context.Context, job api.Job) pathb.Result {
 	pin := strings.TrimSpace(job.ImageDigest)
 	if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
@@ -1070,7 +1070,7 @@ func labPullFailReason(err error) string {
 	}
 }
 
-// backendStub fails lease_start / path_b / instance_check on a stub or
+// backendStub fails lease_start / lab soak / instance_check on a stub or
 // unknown backend. instance_check must not probe or fake a completion.
 func (a *Agent) backendStub(job api.Job) (pathb.Result, bool) {
 	path, reason := runtime.ResolveBackend(job.Backend)
@@ -1482,7 +1482,7 @@ func (a *Agent) leaseImageDigest() string {
 	return strings.TrimSpace(h.ImageDigest)
 }
 
-// requireImageHash enforces the rule that path_b / instance_check
+// requireImageHash enforces the rule that lab soak / instance_check
 // passed=true must POST a non-empty image_hash. Use telem/host hash, else
 // the running lease ImageDigest. No hash is generated.
 func (a *Agent) requireImageHash(kind api.JobKind, res pathb.Result) pathb.Result {

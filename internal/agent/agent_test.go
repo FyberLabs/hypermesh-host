@@ -50,7 +50,7 @@ func (f *fakeTunnel) Teardown(context.Context) error {
 	return nil
 }
 
-func TestLoopEnrollBearerPersistAndPathB(t *testing.T) {
+func TestLoopEnrollBearerPersistAndLabSoak(t *testing.T) {
 	var mu sync.Mutex
 	var enrolls, heartbeats, pulls, results int
 	var enrollAuth, hbAuth string
@@ -2152,7 +2152,7 @@ func TestLeaseStartResultImageHashIsGGUF(t *testing.T) {
 	}
 }
 
-func TestPathBPassedRequiresNonEmptyImageHash(t *testing.T) {
+func TestLabSoakPassedRequiresNonEmptyImageHash(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
 	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
@@ -2163,17 +2163,17 @@ func TestPathBPassedRequiresNonEmptyImageHash(t *testing.T) {
 	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
 
 	got := a.runJob(context.Background(), api.Job{
-		JobID:    "j-pathb-hash",
+		JobID:    "j-lab-hash",
 		Kind:     api.KindPathB,
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
 	if !got.Passed || strings.TrimSpace(got.ImageHash) == "" {
-		t.Fatalf("path_b passed=true requires non-empty image_hash: %+v", got)
+		t.Fatalf("lab soak passed=true requires non-empty image_hash: %+v", got)
 	}
 }
 
-func TestPathBFailsWhenEmptyTelemAndNoLease(t *testing.T) {
+func TestLabSoakFailsWhenEmptyTelemAndNoLease(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
 	if err := os.WriteFile(uptime, []byte("1 1\n"), 0o644); err != nil {
@@ -2185,20 +2185,20 @@ func TestPathBFailsWhenEmptyTelemAndNoLease(t *testing.T) {
 	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
 
 	got := a.runJob(context.Background(), api.Job{
-		JobID:    "j-pathb-empty",
+		JobID:    "j-lab-empty",
 		Kind:     api.KindPathB,
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
 	if got.Passed || got.Reason != "no image_hash" {
-		t.Fatalf("empty telem + no lease must fail path_b: %+v", got)
+		t.Fatalf("empty telem + no lease must fail lab soak: %+v", got)
 	}
 	if got.ImageHash != "" {
 		t.Fatalf("must not invent image_hash: %+v", got)
 	}
 }
 
-func TestPathBUsesLeaseDigestWhenTelemHashEmpty(t *testing.T) {
+func TestLabSoakUsesLeaseDigestWhenTelemHashEmpty(t *testing.T) {
 	const digest = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
@@ -2212,17 +2212,17 @@ func TestPathBUsesLeaseDigestWhenTelemHashEmpty(t *testing.T) {
 	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
 
 	got := a.runJob(context.Background(), api.Job{
-		JobID:    "j-pathb-lease",
+		JobID:    "j-lab-lease",
 		Kind:     api.KindPathB,
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
 	if !got.Passed || got.ImageHash != digest {
-		t.Fatalf("path_b must use lease ImageDigest when telem hash is empty: %+v", got)
+		t.Fatalf("lab soak must use lease ImageDigest when telem hash is empty: %+v", got)
 	}
 }
 
-func TestStubBackendFailsPathBAndInstanceCheck(t *testing.T) {
+func TestStubBackendFailsLabSoakAndInstanceCheck(t *testing.T) {
 	const completion = "UNIQUE_COMPLETION_STUB"
 	var probes int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2274,7 +2274,7 @@ func TestStubBackendFailsPathBAndInstanceCheck(t *testing.T) {
 	}
 }
 
-func TestPathBOmittedBackendStillRunsThinV1(t *testing.T) {
+func TestLabSoakOmittedBackendStillRunsThinV1(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
@@ -2283,13 +2283,13 @@ func TestPathBOmittedBackendStillRunsThinV1(t *testing.T) {
 	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
 
 	got := a.runJob(context.Background(), api.Job{
-		JobID:    "j-pathb",
+		JobID:    "j-lab",
 		Kind:     api.KindPathB,
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
 	if !got.Passed || strings.TrimSpace(got.ImageHash) == "" {
-		t.Fatalf("omitted backend is cuda-jetson; path_b telem must still pass with image_hash: %+v", got)
+		t.Fatalf("omitted backend is cuda-jetson; lab soak telem must still pass with image_hash: %+v", got)
 	}
 }
 
@@ -2352,7 +2352,7 @@ func TestInstanceCheckPassesOnFakeCompletions(t *testing.T) {
 	}
 }
 
-func TestPathBStillPassesWhenCompletionsDown(t *testing.T) {
+func TestLabSoakStillPassesWhenCompletionsDown(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
@@ -2363,18 +2363,18 @@ func TestPathBStillPassesWhenCompletionsDown(t *testing.T) {
 	a.pathb.HTTP = &http.Client{Timeout: 150 * time.Millisecond}
 
 	got := a.runJob(context.Background(), api.Job{
-		JobID:    "j-pathb",
+		JobID:    "j-lab",
 		Kind:     api.KindPathB,
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
 	if !got.Passed || strings.TrimSpace(got.ImageHash) == "" {
-		t.Fatalf("path_b must still pass telem with image_hash when inference is down: %+v", got)
+		t.Fatalf("lab soak must still pass telem with image_hash when inference is down: %+v", got)
 	}
 	assertNoPromptInLogs(t, logBuf.String(), got.Reason)
 }
 
-func TestPathBFailsWhenBootIDChanged(t *testing.T) {
+func TestLabSoakFailsWhenBootIDChanged(t *testing.T) {
 	dir := t.TempDir()
 	uptime := filepath.Join(dir, "uptime")
 	_ = os.WriteFile(uptime, []byte("1 1\n"), 0o644)
@@ -2389,13 +2389,13 @@ func TestPathBFailsWhenBootIDChanged(t *testing.T) {
 	}
 
 	got := a.runJob(context.Background(), api.Job{
-		JobID:    "j-pathb",
+		JobID:    "j-lab",
 		Kind:     api.KindPathB,
 		DeviceID: testDevice,
 		SuiteID:  "thin-v1",
 	})
 	if got.Passed || got.Reason != "reboot" {
-		t.Fatalf("path_b must fail on reboot: %+v", got)
+		t.Fatalf("lab soak must fail on reboot: %+v", got)
 	}
 	assertNoPromptInLogs(t, logBuf.String(), got.Reason)
 }

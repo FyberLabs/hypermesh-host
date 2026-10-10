@@ -7,10 +7,10 @@ import (
 )
 
 func TestExplicitGGUFPathWins(t *testing.T) {
-	const cottage = "/home/chris/hypermesh/workload/model.gguf"
-	t.Setenv("HYPERMESH_GGUF_PATH", cottage)
+	const homeModel = "/home/operator/hypermesh/workload/model.gguf"
+	t.Setenv("HYPERMESH_GGUF_PATH", homeModel)
 	cfg := FromEnv()
-	if cfg.GGUFHostPath() != cottage {
+	if cfg.GGUFHostPath() != homeModel {
 		t.Fatalf("explicit path %q", cfg.GGUFHostPath())
 	}
 	t.Setenv("HYPERMESH_GGUF_PATH", "")

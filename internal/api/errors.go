@@ -171,8 +171,8 @@ func detailString(payload []byte) string {
 	return s
 }
 
-// peerCode reads the top-level code field. Panopticon #197 (signed off, not
-// merged) uses ApiErrorBody: code is peer_public_key_not_registered and
+// peerCode reads the top-level code field. The control plane's
+// ApiErrorBody carries code, which is peer_public_key_not_registered and
 // detail is a sentence. detail is not the match.
 func peerCode(payload []byte) string {
 	if len(payload) == 0 {

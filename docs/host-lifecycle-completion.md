@@ -48,7 +48,7 @@ The agent updater now retains public signed checksums, detached signature and re
 The website's Linux download selector exposes test and production separately and
 pins an immutable release ID, minimum build and architecture. Unpublished
 production is shown unavailable, never silently replaced by test. Public release
-metadata and short-lived read-only artifact redirects come from Panopticon's
+metadata and short-lived read-only artifact redirects come from the control plane's
 `/api/v1/hypermesh/public/host-releases` API. No device credential is required to
 obtain the first installer; enrollment and mutation APIs remain authenticated.
 
@@ -80,7 +80,7 @@ read-only bounded acceptance collection and channel/download contract tests.
 [AGX acceptance](agx-acceptance.md) provides the executable collector and the
 manual reboot/reconnect, repair and sustained-workload observations still needed.
 
-Deploy Panopticon's companion API before using maintenance resume or the website
+Deploy the control plane's companion API before using maintenance resume or the website
 first-install path. Publish the signed host test release before copying its
 build into an AGX trial. The website verifier and guide are mirrored from this
 repository; future trust/guide changes must update both copies in the same rollout.
@@ -117,7 +117,7 @@ Implemented [host signing identity](machine-identity.md): root-private Ed25519
 keys separate from WireGuard, short-lived tokens, automatic renewal and 30-day
 rotation with a persisted pending key. Installer and running agent share the
 checkpoint; response loss and reboot do not require owner login. The plane
-retires bootstrap bearer access when the key is bound. Companion Panopticon
+retires bootstrap bearer access when the key is bound. The companion control-plane
 migration/service/edge deployment precedes this host release. Physical acceptance
 and the separately documented continuation dashboard/update work remain pending.
 

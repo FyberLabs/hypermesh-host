@@ -105,7 +105,7 @@ esac
 : "${GITHUB_SHA:?}"
 : "${GITHUB_REPOSITORY:?}"
 : "${GH_TOKEN:?}"
-# Infra #143 names. A non-empty repository variable replaces a default.
+# Default resource names. A non-empty repository variable replaces a default.
 : "${HYPERMESH_RELEASE_KV_NAME:=kv-fyber-hmhost}"
 : "${HYPERMESH_RELEASE_GPG_KEY_SECRET:=hypermesh-host-release-gpg-private-key}"
 : "${HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET:=hypermesh-host-release-gpg-passphrase}"

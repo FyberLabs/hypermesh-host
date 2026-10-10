@@ -19,7 +19,7 @@ import (
 const matrixDigest = "example.invalid/hypermesh/workload@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 // TestJobKindFailPassMatrix is the README fail/pass table for
-// path_b (lab soak), instance_check, lease_start, lease_stop, and sell_pause.
+// lab soak, instance_check, lease_start, lease_stop, and sell_pause.
 // Existing *_test.go coverage stays; this file is the single matrix.
 func TestJobKindFailPassMatrix(t *testing.T) {
 	const completion = "UNIQUE_MATRIX_COMPLETION"
@@ -40,9 +40,9 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 
 	cases := []row{
 		{
-			name: "path_b/pass_non_empty_image_hash",
+			name: "lab_soak/pass_non_empty_image_hash",
 			kind: api.KindPathB,
-			job:  api.Job{JobID: "m-pathb-pass", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"},
+			job:  api.Job{JobID: "m-lab-pass", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"},
 			setup: func(t *testing.T, a *Agent) {
 				t.Helper()
 				downCompletions(t, a)
@@ -54,9 +54,9 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			noDocker:    true,
 		},
 		{
-			name: "path_b/reboot_fail",
+			name: "lab_soak/reboot_fail",
 			kind: api.KindPathB,
-			job:  api.Job{JobID: "m-pathb-reboot", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"},
+			job:  api.Job{JobID: "m-lab-reboot", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"},
 			setup: func(t *testing.T, a *Agent) {
 				t.Helper()
 				downCompletions(t, a)
@@ -69,10 +69,10 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			noDocker:   true,
 		},
 		{
-			name: "path_b/stub_backend_exact_reason",
+			name: "lab_soak/stub_backend_exact_reason",
 			kind: api.KindPathB,
 			job: api.Job{
-				JobID: "m-pathb-stub", Kind: api.KindPathB, DeviceID: testDevice,
+				JobID: "m-lab-stub", Kind: api.KindPathB, DeviceID: testDevice,
 				SuiteID: "thin-v1", Runtime: "nvidia", Backend: "llama-cpp-vulkan",
 			},
 			wantPass:   false,
@@ -81,9 +81,9 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			noDocker:   true,
 		},
 		{
-			name: "path_b/empty_telem_no_lease",
+			name: "lab_soak/empty_telem_no_lease",
 			kind: api.KindPathB,
-			job:  api.Job{JobID: "m-pathb-empty", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"},
+			job:  api.Job{JobID: "m-lab-empty", Kind: api.KindPathB, DeviceID: testDevice, SuiteID: "thin-v1"},
 			setup: func(t *testing.T, a *Agent) {
 				t.Helper()
 				a.cfg.ImageHash = ""

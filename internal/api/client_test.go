@@ -281,7 +281,7 @@ func TestSellPauseJobAndResultJSON(t *testing.T) {
 	}
 	for _, leak := range []string{"sell_state", "until", "device_id"} {
 		if strings.Contains(string(leaseRaw), leak) {
-			t.Fatalf("lease/path_b result leaked %s: %s", leak, leaseRaw)
+			t.Fatalf("lease/lab soak result leaked %s: %s", leak, leaseRaw)
 		}
 	}
 
@@ -320,7 +320,7 @@ func TestHeartbeatSellStateJSON(t *testing.T) {
 		t.Fatalf("heartbeat must send sell_state: %s", raw)
 	}
 	if strings.Contains(string(raw), "path_b") {
-		t.Fatalf("heartbeat request must not copy path_b into sell: %s", raw)
+		t.Fatalf("heartbeat request must not copy lab soak into sell: %s", raw)
 	}
 	omitted, err := json.Marshal(HeartbeatRequest{DeviceID: testDevice, UptimeS: 1})
 	if err != nil {
@@ -527,7 +527,7 @@ func TestProposePeerRevokedAndUnauthorized(t *testing.T) {
 
 func TestGetTunnelPeerNotRegistered(t *testing.T) {
 	const code = PeerPublicKeyNotRegistered
-	// Panopticon #197: code is the match. detail is a sentence, not the code.
+	// code is the match. detail is a sentence, not the code.
 	raw := `{"code":"` + code + `","detail":"No host WireGuard public key is registered for this allocated tunnel. POST the public key to /api/v1/hypermesh/agent/tunnel/peer first."}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requireBearer(t, r)

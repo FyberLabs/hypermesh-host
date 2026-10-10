@@ -32,7 +32,7 @@ const MetalRunnerLabel = "metal"
 type Path int
 
 const (
-	// NVIDIAContainer is docker --runtime=nvidia, repo@digest. Phase 1 AGX.
+	// NVIDIAContainer is docker --runtime=nvidia, repo@digest. Used on the AGX.
 	NVIDIAContainer Path = iota
 	// StubFail is a compile-time no-op. POST passed=false. Do not start work.
 	StubFail

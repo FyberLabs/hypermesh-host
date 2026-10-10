@@ -2,7 +2,7 @@
 
 The `qualify-host` command establishes a first measured baseline for an approved
 model and hardware class. Ordinary hosts continue to use guided setup. A program
-operator must authorize the lab run in Panopticon first; the run is bound to this
+operator must authorize the lab run in the control plane first; the run is bound to this
 registered device, tenant, model pins and context for 24 hours.
 
 ```sh
@@ -35,10 +35,9 @@ only when the existing runner provides it. The host stays subject to separate
 intake approval, normal certification, owner approval and activation.
 
 Implementation and automated recovery/protocol tests are complete. Physical AGX
-qualification remains pending deployment of the matching Panopticon API and signed
-host build. The operator procedure is documented in Panopticon's
-`docs/initial-host-qualification.md`. AMD and additional boards need their own
-runtime profiles and physical evidence; this change does not certify them.
+qualification remains pending deployment of the matching control-plane API and signed
+host build. The operator procedure is part of the control plane's operator documentation.
+AMD and additional boards need their own runtime profiles and physical evidence; this change does not certify them.
 
 Each repetition uses its own manifest-bound workload/measurement ID. Replayed
 samples are rejected, including during journal recovery. Reporting advances the

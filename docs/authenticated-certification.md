@@ -6,7 +6,7 @@ HIP, Metal, Renesas and Rockchip runtime certification are not enabled by this c
 
 ## Operator prerequisites
 
-Deploy the paired Panopticon change and database migration before this host
+Deploy the paired control-plane change and database migration before this host
 release. Configure the authenticated certification program with exactly one
 `pack-v1` or `thin-v1` suite member for the tenant/class, and a matching envelope:
 GGUF file SHA-256, NVIDIA runtime, advertised context, positive decode rate and
@@ -59,7 +59,7 @@ Docker's own storage; a separate Docker capacity budget remains future work.
 The installer uses the pinned temporary runtime, exercises the entire advertised
 context and measures a short completion, removes the container, checks fresh
 WireGuard connectivity and repeats local preflight. It saves exact evidence
-before uploading. Panopticon compares it to the frozen class envelope
+before uploading. The control plane compares it to the frozen class envelope
 and atomically records the result. This is a measured short certification, not
 a sustained/soak benchmark or third-party hardware attestation.
 

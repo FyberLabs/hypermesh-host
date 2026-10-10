@@ -25,7 +25,7 @@ func TestAttachEgressObservationFailClosed(t *testing.T) {
 	}
 }
 
-func TestJobResultBodyIncludesEgressForPathB(t *testing.T) {
+func TestJobResultBodyIncludesEgressForLabSoak(t *testing.T) {
 	ok := true
 	body := jobResultBody(api.KindPathB, jobOutcome{
 		Result:       pathb.Result{Passed: true, ImageHash: "sha256:x"},
@@ -33,7 +33,7 @@ func TestJobResultBodyIncludesEgressForPathB(t *testing.T) {
 		EgressReason: runtime.EgressOverlayOnly,
 	})
 	if body.EgressOk == nil || !*body.EgressOk || body.EgressReason != runtime.EgressOverlayOnly {
-		t.Fatalf("path_b body missing egress: %+v", body)
+		t.Fatalf("lab soak body missing egress: %+v", body)
 	}
 	lease := jobResultBody(api.KindLeaseStart, jobOutcome{
 		Result:       pathb.Result{Passed: true, ImageHash: "sha256:x"},
