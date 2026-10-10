@@ -888,3 +888,27 @@ func TestStartingLeaseRebindsWhenTunnelAddressChanges(t *testing.T) {
 	}
 	a.stopLeaseForwarder()
 }
+
+// A canceled final probe cannot erase the last completed direct-health result.
+func TestLeaseHealthDeadlineKeepsCompletedContainerObservation(t *testing.T) {
+	var probes atomic.Int32
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, r *http.Request) {
+		if probes.Add(1) > 1 {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	a.cfg.LeaseReadyWait = 3 * time.Second
+	a.leaseProbeTimeout = 5 * time.Second // Let the shared deadline cancel the second probe.
+	direct := a.bridgeDial
+	a.containerHealth = func(string) string { return "http://" + direct("") + "/health" }
+	a.bridgeDial = func(string) string { return "127.0.0.1:1" }
+	docker := &scriptedDocker{ip: "172.18.0.2", logsErr: true}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	got := a.leaseStart(context.Background(), ingressJob("lease-deadline-observation", hash))
+	if got.Passed || probes.Load() < 2 || !strings.Contains(got.Reason, "ingress unreachable") {
+		t.Fatalf("probes=%d result=%+v", probes.Load(), got)
+	}
+	assertLeaseClean(t, a, listen, docker)
+}

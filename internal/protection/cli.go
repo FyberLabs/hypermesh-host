@@ -23,9 +23,16 @@ func Observe() Binding {
 	return Binding{BootID: local("/proc/sys/kernel/random/boot_id"), Hardware: hardware, Firmware: local("/sys/class/dmi/id/bios_version")}
 }
 
-// Run never changes firmware or starts a workload. It emits a lab evidence
+// Run dispatches read-only probes, explicit lab measurements or evidence validation.
+// The default command never changes firmware or starts a workload. It emits a lab evidence
 // template or evaluates a completed dossier against current local observations.
 func Run(args []string, out, diagnostic io.Writer) int {
+	if len(args) > 0 && args[0] == "probe" {
+		return RunProbe(args[1:], out, diagnostic)
+	}
+	if len(args) > 0 && args[0] == "measure" {
+		return RunMeasure(args[1:], out, diagnostic)
+	}
 	f := flag.NewFlagSet("protection", flag.ContinueOnError)
 	f.SetOutput(diagnostic)
 	mode := f.String("modes", "physical_memory", "comma-separated physical_memory,confidential_execution")

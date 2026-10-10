@@ -264,7 +264,8 @@ Commands:
   inspect   report hardware fingerprint, memory budget and preflight recommendations.
             --benchmark --model /path/model.gguf runs an installed llama-bench.
   protection  prepare or validate memory-protection evidence for independent review.
-              Use protection --help; no firmware changes or qualification authority.
+              Use protection --help, protection probe, or protection measure --help.
+              Measurement explicitly runs pinned lab workloads; no firmware changes or qualification authority.
 
 Host classes:
   agx    preflight, configure, and connect an AGX. Stops on the first failure.
