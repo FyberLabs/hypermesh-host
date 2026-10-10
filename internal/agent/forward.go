@@ -13,9 +13,9 @@ const (
 	// forwardMaxConns caps simultaneous proxied connections so one lease
 	// cannot exhaust the agent process file-descriptor table.
 	forwardMaxConns = 64
-	// forwardIdleTimeout closes a proxied connection that sends or receives
-	// no bytes for this long. Active streams refresh the deadline on each
-	// read and write.
+	// forwardIdleTimeout closes a proxied connection that moves no bytes in
+	// either direction for this long. Traffic in one direction keeps both
+	// sides open.
 	forwardIdleTimeout = 5 * time.Minute
 	forwardAcceptMin   = 5 * time.Millisecond
 	forwardAcceptMax   = time.Second
@@ -182,10 +182,10 @@ func (f *leaseForwarder) pipe(conn net.Conn) {
 		return
 	}
 	defer upstream.Close()
-	_ = conn.SetDeadline(time.Now().Add(f.idle))
-	_ = upstream.SetDeadline(time.Now().Add(f.idle))
-	local := &idleConn{Conn: conn, idle: f.idle}
-	remote := &idleConn{Conn: upstream, idle: f.idle}
+	act := &connActivity{idle: f.idle, a: conn, b: upstream}
+	act.touch()
+	local := &idleConn{Conn: conn, act: act}
+	remote := &idleConn{Conn: upstream, act: act}
 	done := make(chan struct{}, 2)
 	go func() {
 		_, _ = io.Copy(remote, local)
@@ -205,21 +205,41 @@ func (f *leaseForwarder) pipe(conn net.Conn) {
 	_ = upstream.Close()
 }
 
-// idleConn refreshes its read or write deadline on each call so a quiet
-// connection expires and an active stream does not.
+// connActivity is the shared idle clock of one proxied connection. Bytes
+// moving in either direction push the deadline on both sockets, so a long
+// one-way stream is not cut by the copy loop that is waiting on the
+// opposite side. Only a connection with no traffic at all expires.
+type connActivity struct {
+	idle time.Duration
+	a, b net.Conn
+}
+
+func (c *connActivity) touch() {
+	deadline := time.Now().Add(c.idle)
+	_ = c.a.SetDeadline(deadline)
+	_ = c.b.SetDeadline(deadline)
+}
+
+// idleConn reports every transfer to the shared activity clock.
 type idleConn struct {
 	net.Conn
-	idle time.Duration
+	act *connActivity
 }
 
 func (c *idleConn) Read(p []byte) (int, error) {
-	_ = c.Conn.SetReadDeadline(time.Now().Add(c.idle))
-	return c.Conn.Read(p)
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.act.touch()
+	}
+	return n, err
 }
 
 func (c *idleConn) Write(p []byte) (int, error) {
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
-	return c.Conn.Write(p)
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		c.act.touch()
+	}
+	return n, err
 }
 
 // Alive reports that the listener still accepts a connection.
