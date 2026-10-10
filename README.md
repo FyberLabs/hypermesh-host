@@ -94,7 +94,7 @@ Each lease container is started with `--runtime=nvidia`, `--read-only`, `--cap-d
 
 ### Model cache
 
-Models are cached in a `cache` directory next to the file named by `HYPERMESH_GGUF_PATH`, `/var/lib/hypermesh/models/cache` by default. If setup selects another model directory, the cache follows it. Downloads are checked against the filesystem's free space, a 2 GiB floor (`HYPERMESH_DISK_FLOOR_BYTES`) and a cache budget (`HYPERMESH_MODEL_CACHE_MAX_BYTES`). The least recently used models are evicted to make room; the loaded model and models backing a lease are never evicted. See [docs/model-cache.md](docs/model-cache.md).
+Models are cached in a `cache` directory next to the file named by `HYPERMESH_GGUF_PATH`, `/var/lib/hypermesh/models/cache` by default. If setup selects another model directory, the cache follows it. Downloads are checked against the filesystem's free space, a 2 GiB floor (`HYPERMESH_DISK_FLOOR_BYTES`) and a cache budget (`HYPERMESH_MODEL_CACHE_MAX_BYTES`). The least recently used models are evicted to make room. Models backing an active lease, pending workload reservations and owner-pinned models (`pinned_hashes` in the root-owned policy) are protected. The most recently downloaded model is not protected on its own. See [docs/model-cache.md](docs/model-cache.md).
 
 ### Owner controls
 
