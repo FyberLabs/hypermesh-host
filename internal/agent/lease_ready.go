@@ -242,7 +242,13 @@ func (a *Agent) openLeaseIngress(ctx context.Context, h *runtime.Handle, path ru
 func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.Handle, docker bool) error {
 	timeout := a.readyTimeout()
 	interval := a.readyInterval()
-	client := &http.Client{Timeout: a.probeTimeout(), Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
+	// The workload controls /health. A redirect is not a healthy answer and
+	// is never followed, so the privileged agent cannot be sent to another host.
+	client := &http.Client{
+		Timeout:       a.probeTimeout(),
+		Transport:     &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	defer client.CloseIdleConnections()
 	started := time.Now()
 	// The whole wait, including docker inspect and the log tail read, ends

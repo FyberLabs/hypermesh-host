@@ -778,3 +778,30 @@ func TestRestartDuringReadinessWaitRecoversContainer(t *testing.T) {
 		}
 	}
 }
+
+// A workload that answers /health with a redirect is not ready, and the agent
+// does not request the redirect target.
+func TestHealthProbeDoesNotFollowRedirects(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	a, hash, _, _ := newIngressAgent(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/health", http.StatusFound)
+	})
+	a.cfg.LeaseReadyWait = 300 * time.Millisecond
+	docker := &scriptedDocker{ip: "172.18.0.2", logsErr: true}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	got := a.leaseStart(context.Background(), ingressJob("lease-redirect", hash))
+	if got.Passed {
+		t.Fatalf("redirecting /health passed readiness: %+v", got)
+	}
+	if targetHits.Load() != 0 {
+		t.Fatalf("redirect target was requested %d times", targetHits.Load())
+	}
+	if a.currentLease() != nil {
+		t.Fatal("lease kept")
+	}
+}
