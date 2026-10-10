@@ -8,9 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
- "path/filepath"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -19,7 +20,7 @@ const maxAsset = 64 << 20
 
 // Config is one update check. There is no GitHub token on the host.
 type Config struct {
- CurrentChannel string // immutable installed binary origin, not the selected channel
+	CurrentChannel string // immutable installed binary origin, not the selected channel
 	Channel        string
 	CurrentVersion string
 	CurrentCommit  string
@@ -48,6 +49,8 @@ type Hooks struct {
 	Rollback  func(dest, backup string) error
 	ReadFile  func(path string) ([]byte, error)
 	StillBusy func() bool
+	// Log receives retention messages. Nil uses the default logger.
+	Log *slog.Logger
 }
 
 // Tick checks the channel. A verification failure returns a reject
@@ -183,17 +186,19 @@ func tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
 	}
 	install := h.Install
 	if install == nil {
-		install = InstallFile
+		install = installFileKeeping(cfg.MarkerPath, h.Log)
 	}
 	previous := cfg.CurrentVersion
 	if strings.TrimSpace(previous) == "" {
 		previous = cfg.CurrentCommit
 	}
 	// Keep independently verifiable evidence before exposing updated bytes.
- if h.Install==nil {
-  if err:=WriteEvidence(filepath.Dir(cfg.MarkerPath),Evidence{Schema:1,Checksums:sums,Signature:sig,Manifest:manRaw,Binary:binName,SHA256:binArt.SHA256});err!=nil{return Plan{},err}
- }
- backup, err := install(cfg.BinaryPath, bin, previous)
+	if h.Install == nil {
+		if err := WriteEvidence(filepath.Dir(cfg.MarkerPath), Evidence{Schema: 1, Checksums: sums, Signature: sig, Manifest: manRaw, Binary: binName, SHA256: binArt.SHA256}); err != nil {
+			return Plan{}, err
+		}
+	}
+	backup, err := install(cfg.BinaryPath, bin, previous)
 	if err != nil {
 		return Plan{}, err
 	}
