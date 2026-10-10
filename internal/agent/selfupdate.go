@@ -21,7 +21,9 @@ var _ update.IdleGate = (*Agent)(nil)
 // The job loop calls it at the start of a check and again before
 // install and restart. Heartbeat does not call it.
 func (a *Agent) Busy() bool {
- if a.maintenanceHeld(){return true}
+	if a.maintenanceHeld() {
+		return true
+	}
 	h := a.currentLease()
 	if h != nil && strings.TrimSpace(h.LeaseID) != "" {
 		return true
@@ -68,12 +70,17 @@ func (a *Agent) startUpdateWatch(ctx context.Context) {
 		Log: func(msg string, args ...any) {
 			a.log.Warn(msg, args...)
 		},
+		Logger:       a.log,
+		RunningBuild: buildinfo.CurrentBuild(),
 	})
 }
 
 func (a *Agent) maybeSelfUpdate(ctx context.Context) {
- a.maintenanceMu.Lock();defer a.maintenanceMu.Unlock()
- if a.maintenanceHeld(){return}
+	a.maintenanceMu.Lock()
+	defer a.maintenanceMu.Unlock()
+	if a.maintenanceHeld() {
+		return
+	}
 	if strings.TrimSpace(a.cfg.UpdateChannel) == "" {
 		return
 	}
@@ -117,7 +124,7 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 	}
 	plan, err := update.Tick(ctx, update.Config{
 		Channel:        a.cfg.UpdateChannel,
-        CurrentChannel: buildinfo.CurrentChannel(),
+		CurrentChannel: buildinfo.CurrentChannel(),
 		CurrentVersion: buildinfo.CurrentVersion(),
 		CurrentCommit:  buildinfo.Current(),
 		CurrentBuild:   buildinfo.CurrentBuild(),
@@ -132,6 +139,7 @@ func (a *Agent) defaultSelfUpdate(ctx context.Context, busy bool) error {
 	}, update.Hooks{
 		Source:    a.updateSource(),
 		StillBusy: a.Busy,
+		Log:       a.log,
 	})
 	if err != nil {
 		return err

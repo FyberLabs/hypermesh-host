@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -191,9 +193,13 @@ func ReadBadBuild(path string) (int, error) {
 		return 0, err
 	}
 	defer f.Close()
+	return parseBadBuild(f)
+}
+
+func parseBadBuild(r io.Reader) (int, error) {
 	build := 0
 	seen := false
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		line := sc.Text()
 		if line == "" {
@@ -254,14 +260,16 @@ func writeAtomic(path, body string) error {
 
 // WatchConfig drives the in-process rollback watch.
 type WatchConfig struct {
-	MarkerPath  string
-	Interval    time.Duration
-	HeartbeatOK func() uint64
-	Baseline    uint64
-	Now         func() time.Time
-	Rollback    func() error
-	Exit        func(int)
-	Log         func(msg string, args ...any)
+	MarkerPath   string
+	Interval     time.Duration
+	HeartbeatOK  func() uint64
+	Baseline     uint64
+	Now          func() time.Time
+	Rollback     func() error
+	Exit         func(int)
+	Log          func(msg string, args ...any)
+	Logger       *slog.Logger
+	RunningBuild int
 }
 
 // Watch confirms the marker after a heartbeat or restores the backup
@@ -293,6 +301,9 @@ func Watch(ctx context.Context, cfg WatchConfig) {
 			_ = os.Remove(cfg.MarkerPath)
 			if cfg.Log != nil {
 				cfg.Log("update confirmed", "version", m.Version)
+			}
+			if m != nil {
+				pruneAfterConfirm(OSFS, m.Binary, m.Backup, filepathDir(cfg.MarkerPath), cfg.RunningBuild, cfg.Logger)
 			}
 			return true
 		case WatchRollback:

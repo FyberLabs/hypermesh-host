@@ -2,20 +2,37 @@ package update
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
+
+// DirEntry is one name from ReadDir. Name is a base name.
+// ModTime is the file modification time. Mode is the lstat mode,
+// so a symlink is not reported as a regular file.
+type DirEntry struct {
+	Name    string
+	ModTime time.Time
+	Mode    os.FileMode
+}
 
 // FS is the filesystem the installer uses. Tests fake it.
 // WriteNew creates path, writes data, and fsyncs the file.
+// ReadDir lists one directory so retention can order backups by mtime.
 type FS interface {
 	WriteNew(path string, data []byte, mode os.FileMode) error
 	SyncDir(dir string) error
 	Rename(oldpath, newpath string) error
 	Exists(path string) bool
 	Remove(path string) error
+	ReadDir(dir string) ([]DirEntry, error)
 }
+
+// installMu stops retention from removing a file the installer is writing.
+var installMu sync.Mutex
 
 // InstallResult is the backup path, empty when dest did not exist.
 type InstallResult struct {
@@ -25,7 +42,34 @@ type InstallResult struct {
 
 // Install writes payload beside dest, fsyncs, renames the current binary
 // to dest.pre-<previous>, then renames the new file onto dest.
-func Install(fs FS, dest string, payload []byte, previous string) (InstallResult, error) {
+// After that succeeds, older dest.pre-* backups are pruned.
+// keep paths are retained even when they are not among the newest.
+// Pruning never changes the result: a prune error is logged and ignored.
+func Install(fs FS, dest string, payload []byte, previous string, keep ...string) (InstallResult, error) {
+	installMu.Lock()
+	defer installMu.Unlock()
+	return finishInstallLocked(fs, dest, payload, previous, nil, keep...)
+}
+
+func finishInstallLocked(fs FS, dest string, payload []byte, previous string, log *slog.Logger, keep ...string) (InstallResult, error) {
+	res, err := performInstallLocked(fs, dest, payload, previous)
+	if err != nil {
+		return res, err
+	}
+	pins := make([]string, 0, 1+len(keep))
+	if res.Backup != "" {
+		pins = append(pins, res.Backup)
+	}
+	for _, k := range keep {
+		if strings.TrimSpace(k) != "" {
+			pins = append(pins, k)
+		}
+	}
+	pruneAfterInstall(fs, dest, pins, log)
+	return res, nil
+}
+
+func performInstallLocked(fs FS, dest string, payload []byte, previous string) (InstallResult, error) {
 	if fs == nil {
 		return InstallResult{}, fmt.Errorf("hypermesh update: filesystem is required")
 	}
@@ -162,6 +206,26 @@ func (osFS) Exists(path string) bool {
 }
 
 func (osFS) Remove(path string) error { return os.Remove(path) }
+
+func (osFS) ReadDir(dir string) ([]DirEntry, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DirEntry, 0, len(entries))
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, DirEntry{
+			Name:    e.Name(),
+			ModTime: info.ModTime(),
+			Mode:    info.Mode(),
+		})
+	}
+	return out, nil
+}
 
 func (osFS) read(path string) ([]byte, error) { return os.ReadFile(path) }
 

@@ -2454,8 +2454,13 @@ func checksumFile(files map[string][]byte) []byte {
 }
 
 type memFS struct {
-	mu    sync.Mutex
-	files map[string][]byte
+	mu         sync.Mutex
+	files      map[string][]byte
+	mtimes     map[string]time.Time
+	modes      map[string]os.FileMode
+	readDirErr error
+	removeErr  error
+	removeFail map[string]error
 }
 
 func (m *memFS) WriteNew(path string, data []byte, _ os.FileMode) error {
@@ -2464,7 +2469,11 @@ func (m *memFS) WriteNew(path string, data []byte, _ os.FileMode) error {
 	if m.files == nil {
 		m.files = map[string][]byte{}
 	}
+	if m.mtimes == nil {
+		m.mtimes = map[string]time.Time{}
+	}
 	m.files[path] = append([]byte(nil), data...)
+	m.mtimes[path] = time.Now()
 	return nil
 }
 
@@ -2479,6 +2488,16 @@ func (m *memFS) Rename(oldpath, newpath string) error {
 	}
 	delete(m.files, oldpath)
 	m.files[newpath] = b
+	if m.mtimes != nil {
+		m.mtimes[newpath] = m.mtimes[oldpath]
+		delete(m.mtimes, oldpath)
+	}
+	if m.modes != nil {
+		if mode, ok := m.modes[oldpath]; ok {
+			m.modes[newpath] = mode
+			delete(m.modes, oldpath)
+		}
+	}
 	return nil
 }
 
@@ -2492,8 +2511,48 @@ func (m *memFS) Exists(path string) bool {
 func (m *memFS) Remove(path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.removeErr != nil {
+		return m.removeErr
+	}
+	if m.removeFail != nil {
+		if err := m.removeFail[path]; err != nil {
+			return err
+		}
+	}
+	if _, ok := m.files[path]; !ok {
+		return os.ErrNotExist
+	}
 	delete(m.files, path)
+	delete(m.mtimes, path)
+	delete(m.modes, path)
 	return nil
+}
+
+func (m *memFS) ReadDir(dir string) ([]DirEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.readDirErr != nil {
+		return nil, m.readDirErr
+	}
+	dir = filepath.Clean(dir)
+	var out []DirEntry
+	for path := range m.files {
+		if filepath.Clean(filepath.Dir(path)) != dir {
+			continue
+		}
+		mode := os.FileMode(0o644)
+		if m.modes != nil {
+			if got, ok := m.modes[path]; ok {
+				mode = got
+			}
+		}
+		var mt time.Time
+		if m.mtimes != nil {
+			mt = m.mtimes[path]
+		}
+		out = append(out, DirEntry{Name: filepath.Base(path), ModTime: mt, Mode: mode})
+	}
+	return out, nil
 }
 
 func (m *memFS) read(path string) ([]byte, error) {
