@@ -154,7 +154,7 @@ func (a *Agent) ensureLeaseForwarder(ctx context.Context) {
 		return
 	}
 	h := a.currentLease()
-	if h == nil || h.Backend == runtime.BackendLlamaCppCPU {
+	if h == nil || !h.Serving() || h.Backend == runtime.BackendLlamaCppCPU {
 		return
 	}
 	listen := a.leaseListenAddr()
@@ -179,7 +179,7 @@ func (a *Agent) ensureLeaseForwarder(ctx context.Context) {
 	a.fwdMu.Lock()
 	defer a.fwdMu.Unlock()
 	cur := a.currentLease()
-	if cur == nil || strings.TrimSpace(cur.LeaseID) != strings.TrimSpace(h.LeaseID) {
+	if cur == nil || !cur.Serving() || strings.TrimSpace(cur.LeaseID) != strings.TrimSpace(h.LeaseID) {
 		return
 	}
 	if a.forwarderCurrentLocked(listen, dial) {
@@ -411,9 +411,65 @@ func redactLeaseText(s string) string {
 	return s
 }
 
+// recordStarting makes a started container visible in memory and in
+// lease.json before the readiness wait. The published handle is a copy in
+// the starting state, so the caller keeps its own handle to update.
+func (a *Agent) recordStarting(h *runtime.Handle) {
+	rec := *h
+	rec.State = runtime.HandleStarting
+	a.fwdMu.Lock()
+	a.setLease(&rec)
+	a.fwdMu.Unlock()
+	if err := a.saveLease(&rec); err != nil && a.log != nil {
+		a.log.Warn("lease record not saved", "lease_id", h.LeaseID, "err", err)
+	}
+}
+
+// markServing publishes h as the running lease once readiness passed.
+func (a *Agent) markServing(h *runtime.Handle) {
+	h.State = ""
+	a.fwdMu.Lock()
+	a.setLease(h)
+	a.fwdMu.Unlock()
+}
+
+// recoverUnreadyLease stops the container of a lease that was recorded
+// but never became ready, or whose earlier cleanup failed. It returns ok
+// when the container and record are gone and a new start may continue.
+func (a *Agent) recoverUnreadyLease(h *runtime.Handle) (pathb.Result, bool) {
+	stopCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := a.stopHandle(stopCtx, h); err != nil {
+		if a.log != nil {
+			a.log.Warn("lease_start cleanup of earlier attempt failed", "lease_id", h.LeaseID, "err", err)
+		}
+		a.markCleanupFailed(h)
+		return pathb.Result{Passed: false, Reason: "earlier lease_start container could not be removed; fix docker stop and rm for " + strings.TrimSpace(h.Name)}, false
+	}
+	a.dropCurrentLease()
+	_ = a.saveLease(nil)
+	return pathb.Result{}, true
+}
+
+// markCleanupFailed keeps the handle, in the cleanup_failed state, so a
+// later lease_stop or lease_start can remove the container. The handle
+// never counts as a serving lease.
+func (a *Agent) markCleanupFailed(h *runtime.Handle) {
+	rec := *h
+	rec.State = runtime.HandleCleanupFailed
+	a.fwdMu.Lock()
+	a.stopLeaseForwarderLocked()
+	a.setLease(&rec)
+	a.fwdMu.Unlock()
+	if err := a.saveLease(&rec); err != nil && a.log != nil {
+		a.log.Warn("lease record not saved", "lease_id", h.LeaseID, "err", err)
+	}
+}
+
 // abandonStarted stops a container that failed readiness. It returns true
-// when stop or rm failed and the handle was kept for a later lease_stop
-// or the same lease. A kept handle is not started again in this attempt.
+// when stop or rm failed and the handle was kept, in the cleanup_failed
+// state, for a later lease_stop or lease_start. A kept handle is not
+// started again in this attempt and never passes readiness.
 func (a *Agent) abandonStarted(_ context.Context, h *runtime.Handle) bool {
 	if h == nil {
 		a.stopLeaseForwarder()
@@ -422,28 +478,21 @@ func (a *Agent) abandonStarted(_ context.Context, h *runtime.Handle) bool {
 	stopCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	err := a.stopHandle(stopCtx, h)
-	a.fwdMu.Lock()
-	defer a.fwdMu.Unlock()
-	cur := a.currentLease()
-	same := cur != nil && strings.TrimSpace(cur.LeaseID) == strings.TrimSpace(h.LeaseID)
 	if err != nil {
 		if a.log != nil {
 			a.log.Warn("lease_start cleanup failed", "lease_id", h.LeaseID, "err", err)
 		}
-		a.stopLeaseForwarderLocked()
-		if cur != nil && !same {
-			return false
-		}
-		a.setLease(h)
-		if saveErr := a.saveLease(h); saveErr != nil && a.log != nil {
-			a.log.Warn("lease record not saved", "lease_id", h.LeaseID, "err", saveErr)
-		}
+		a.markCleanupFailed(h)
 		return true
 	}
+	a.fwdMu.Lock()
+	cur := a.currentLease()
+	same := cur != nil && strings.TrimSpace(cur.LeaseID) == strings.TrimSpace(h.LeaseID)
 	if same {
 		a.setLease(nil)
 	}
 	a.stopLeaseForwarderLocked()
+	a.fwdMu.Unlock()
 	if same {
 		_ = a.saveLease(nil)
 	}

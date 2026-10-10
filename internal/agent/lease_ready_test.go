@@ -335,9 +335,19 @@ func TestLeaseStartCleanupFailureKeepsHandle(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), "lease-keep") || !strings.Contains(string(raw), h.ContainerID) {
 		t.Fatalf("lease file err=%v body=%s", err, raw)
 	}
+	if h.Serving() || h.State != runtime.HandleCleanupFailed || !strings.Contains(string(raw), `"state": "cleanup_failed"`) {
+		t.Fatalf("kept handle state %q, record %s", h.State, raw)
+	}
+	// A handle whose cleanup failed never passes readiness: the retry must
+	// not post passed=true, must not start a second container, and keeps the
+	// handle for a later stop.
 	again := a.leaseStart(context.Background(), job)
-	if !again.Passed || docker.runs != 1 {
-		t.Fatalf("retry %+v runs %d", again, docker.runs)
+	if again.Passed || docker.runs != 1 || a.currentLease() == nil || a.currentLease().Serving() {
+		t.Fatalf("retry %+v runs %d lease %+v", again, docker.runs, a.currentLease())
+	}
+	a.ensureLeaseForwarder(context.Background())
+	if a.forwarderAlive() {
+		t.Fatal("listener started for a handle that is not serving")
 	}
 	docker.mu.Lock()
 	docker.stopErr = nil
@@ -622,5 +632,149 @@ func TestLeaseStartHungDockerStaysWithinReadyTimeout(t *testing.T) {
 	if conn, err := net.DialTimeout("tcp", listen, 100*time.Millisecond); err == nil {
 		conn.Close()
 		t.Fatal("listener left behind")
+	}
+}
+
+// A same-lease retry after a failed cleanup removes the old container first
+// and then starts a fresh one that has to pass readiness itself.
+func TestLeaseStartRecoversCleanupFailedHandleWithFreshStart(t *testing.T) {
+	var healthy atomic.Bool
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		if healthy.Load() {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	a.cfg.LeaseReadyWait = 200 * time.Millisecond
+	docker := &scriptedDocker{ip: "172.18.0.2", logsErr: true, stopErr: errors.New("stop timed out")}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	job := ingressJob("lease-recover", hash)
+	if got := a.leaseStart(context.Background(), job); got.Passed || docker.runs != 1 {
+		t.Fatalf("first start %+v runs %d", got, docker.runs)
+	}
+	if h := a.currentLease(); h == nil || h.State != runtime.HandleCleanupFailed {
+		t.Fatalf("handle %+v", h)
+	}
+	docker.mu.Lock()
+	docker.stopErr = nil
+	docker.mu.Unlock()
+	healthy.Store(true)
+	got := a.leaseStart(context.Background(), job)
+	if !got.Passed || docker.runs != 2 {
+		t.Fatalf("recovery start %+v runs %d", got, docker.runs)
+	}
+	h := a.currentLease()
+	if h == nil || !h.Serving() || !a.forwarderAlive() {
+		t.Fatalf("handle %+v alive %v", h, a.forwarderAlive())
+	}
+	calls := docker.arg0()
+	stopAt, secondRun, runs := -1, -1, 0
+	for i, c := range calls {
+		switch c {
+		case "stop":
+			if stopAt < 0 {
+				stopAt = i
+			}
+		case "run":
+			runs++
+			if runs == 2 {
+				secondRun = i
+			}
+		}
+	}
+	if stopAt < 0 || secondRun < stopAt {
+		t.Fatalf("old container was not removed before the new start: %v", calls)
+	}
+	if !a.leaseStop(context.Background(), api.Job{Kind: api.KindLeaseStop, LeaseID: "lease-recover"}).Passed {
+		t.Fatal("stop failed")
+	}
+	assertLeaseClean(t, a, listen, docker)
+}
+
+// The container is in memory and in lease.json while the model loads, and
+// the record changes to the serving form only after /health passes.
+func TestLeaseStartRecordsContainerBeforeReadiness(t *testing.T) {
+	a, hash, _, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	var seenMem, seenFile atomic.Bool
+	docker.onInspect = func(*scriptedDocker) {
+		if h := a.currentLease(); h != nil && h.State == runtime.HandleStarting && h.ContainerID == "cid-lease" {
+			seenMem.Store(true)
+		}
+		raw, err := os.ReadFile(filepath.Join(a.cfg.StateDir, leaseFile))
+		if err == nil && strings.Contains(string(raw), `"state": "starting"`) && strings.Contains(string(raw), "cid-lease") {
+			seenFile.Store(true)
+		}
+	}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	if got := a.leaseStart(context.Background(), ingressJob("lease-record", hash)); !got.Passed {
+		t.Fatal(got)
+	}
+	if !seenMem.Load() || !seenFile.Load() {
+		t.Fatalf("container recorded before readiness: memory=%v file=%v", seenMem.Load(), seenFile.Load())
+	}
+	raw, err := os.ReadFile(filepath.Join(a.cfg.StateDir, leaseFile))
+	if err != nil || strings.Contains(string(raw), `"state"`) || !a.currentLease().Serving() {
+		t.Fatalf("serving record err=%v body=%s", err, raw)
+	}
+	a.stopLeaseForwarder()
+}
+
+// An agent that restarts while the model loads leaves the container running
+// and the starting record on disk. The new process can stop it with
+// lease_stop, and a retry of the same lease removes it before starting again.
+func TestRestartDuringReadinessWaitRecoversContainer(t *testing.T) {
+	a, hash, _, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	a.cfg.LeaseReadyWait = 150 * time.Millisecond
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	var snapshot atomic.Value
+	docker.onInspect = func(*scriptedDocker) {
+		if raw, err := os.ReadFile(filepath.Join(a.cfg.StateDir, leaseFile)); err == nil {
+			snapshot.CompareAndSwap(nil, raw)
+		}
+	}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	if got := a.leaseStart(context.Background(), ingressJob("lease-crash", hash)); got.Passed {
+		t.Fatal(got)
+	}
+	raw, _ := snapshot.Load().([]byte)
+	if len(raw) == 0 {
+		t.Fatal("no record on disk during the readiness wait")
+	}
+	for _, retry := range []bool{false, true} {
+		b, bhash, _, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		if err := os.MkdirAll(b.cfg.StateDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.cfg.StateDir, leaseFile), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b.setLease(b.loadLease())
+		bd := &scriptedDocker{ip: "172.18.0.2"}
+		b.runtime = &runtime.NVIDIA{Run: bd.run}
+		if b.currentLease() == nil || b.currentLease().Serving() {
+			t.Fatalf("loaded handle %+v", b.currentLease())
+		}
+		if retry {
+			if got := b.leaseStart(context.Background(), ingressJob("lease-crash", bhash)); !got.Passed || bd.runs != 1 {
+				t.Fatalf("retry %+v runs %d", got, bd.runs)
+			}
+			if !bd.saw("stop") {
+				t.Fatalf("old container was not stopped: %v", bd.arg0())
+			}
+			b.stopLeaseForwarder()
+			continue
+		}
+		got := b.leaseStop(context.Background(), api.Job{Kind: api.KindLeaseStop, LeaseID: "lease-crash"})
+		if !got.Passed || !bd.saw("stop") || !bd.saw("rm") || b.currentLease() != nil {
+			t.Fatalf("stop %+v calls %v", got, bd.arg0())
+		}
 	}
 }

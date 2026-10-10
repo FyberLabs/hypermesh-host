@@ -1101,14 +1101,22 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 		return pathb.Result{Passed: false, Reason: "no tunnel address"}
 	}
 	if existing := a.localLease(); existing != nil && strings.TrimSpace(existing.LeaseID) != "" {
-		if strings.TrimSpace(existing.LeaseID) != strings.TrimSpace(job.LeaseID) {
+		if existing.Serving() && strings.TrimSpace(existing.LeaseID) != strings.TrimSpace(job.LeaseID) {
 			a.log.Info("lease_start refused", "reason", "lease already running", "lease_id", job.LeaseID, "local_lease_id", existing.LeaseID)
 			return pathb.Result{Passed: false, Reason: "lease already running"}
 		}
-		if err := a.authorizeLeaseRetry(ctx, job, existing); err != nil {
-			return pathb.Result{Reason: err.Error()}
+		if !existing.Serving() {
+			// A start that never became ready. Stop its container before a
+			// new start. It must not be acknowledged as a running lease.
+			if res, ok := a.recoverUnreadyLease(existing); !ok {
+				return res
+			}
+		} else {
+			if err := a.authorizeLeaseRetry(ctx, job, existing); err != nil {
+				return pathb.Result{Reason: err.Error()}
+			}
+			return a.leaseStartAlready(existing)
 		}
-		return a.leaseStartAlready(existing)
 	}
 	var last pathb.Result
 	for attempt := 1; attempt <= leaseModelAttempts; attempt++ {
@@ -1209,6 +1217,9 @@ func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Resul
 		h.PrivateSizeBytes = job.SizeBytes
 		h.Backend = job.Backend
 	}
+	// The container exists from here on. Record it now so a restart during the
+	// readiness wait, a lease_stop, or a retry can find and remove it.
+	a.recordStarting(h)
 	if strings.TrimSpace(h.FileHash) == "" {
 		a.abandonStarted(ctx, h)
 		a.log.Info("lease_start refused", "reason", "no image_hash", "lease_id", job.LeaseID)
@@ -1234,7 +1245,7 @@ func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Resul
 	}
 	a.clearPendingModel(job.CatalogID)
 	a.touchModelUse(hash)
-	a.setLease(h)
+	a.markServing(h)
 	if err := a.saveLease(h); err != nil {
 		a.log.Warn("lease record not saved", "err", err)
 	}
