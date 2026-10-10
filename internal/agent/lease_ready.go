@@ -311,12 +311,20 @@ func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.H
 		}
 		if ingressURL != "" && probeCtx.Err() == nil {
 			if containerURL != "" {
-				containerOK = healthReady(probeCtx, client, containerURL)
+				healthy := healthReady(probeCtx, client, containerURL)
+				// A probe canceled by the shared deadline is not a new
+				// observation that the previously healthy model failed.
+				if probeCtx.Err() == nil {
+					containerOK = healthy
+				}
 			} else if !docker {
 				containerOK = true
 			}
-			ingressOK = healthReady(probeCtx, client, ingressURL)
-			if containerOK && ingressOK {
+			healthy := healthReady(probeCtx, client, ingressURL)
+			if probeCtx.Err() == nil {
+				ingressOK = healthy
+			}
+			if probeCtx.Err() == nil && containerOK && ingressOK {
 				load := time.Since(started).Seconds()
 				leaseID := ""
 				if h != nil {
