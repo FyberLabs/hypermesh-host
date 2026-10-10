@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -240,9 +241,6 @@ func (s Source) cuda(ctx context.Context) string {
 			return v
 		}
 	}
-	if out, err := s.output(ctx, "nvcc", "--version"); err == nil {
-		return cudaFromText(string(out))
-	}
 	return ""
 }
 
@@ -257,31 +255,76 @@ func (s Source) nvidiaRuntime() bool {
 	return strings.Contains(string(b), `"nvidia"`)
 }
 
+// Clock state is read from control limits, not instantaneous frequency or
+// invented --show status phrases. Missing controls cannot pass the preflight.
 func (s Source) clocks(ctx context.Context) string {
-	out, err := s.output(ctx, "jetson_clocks", "--show")
-	text := string(out)
-	if err != nil && strings.TrimSpace(text) == "" {
+	if _, err := s.output(ctx, "jetson_clocks", "--show"); err != nil {
 		return ""
 	}
-	lower := strings.ToLower(text)
-	switch {
-	case strings.Contains(lower, "not running"), strings.Contains(lower, "inactive"):
-		return clocksStopped
-	case strings.Contains(lower, "already running"), strings.Contains(lower, "is running"):
+	online, err := s.read("/sys/devices/system/cpu/online")
+	if err != nil {
+		return ""
+	}
+	readInt := func(path string) (int64, error) {
+		b, err := s.read(path)
+		if err != nil {
+			return 0, err
+		}
+		return strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	}
+	cpus := map[int]bool{}
+	for _, part := range strings.Split(strings.TrimSpace(string(online)), ",") {
+		ends := strings.Split(part, "-")
+		if len(ends) > 2 {
+			return ""
+		}
+		first, e1 := strconv.Atoi(ends[0])
+		last, e2 := strconv.Atoi(ends[len(ends)-1])
+		if e1 != nil || e2 != nil || first < 0 || last < first || last > 255 {
+			return ""
+		}
+		for cpu := first; cpu <= last; cpu++ {
+			cpus[cpu] = true
+		}
+	}
+	locked := false
+	checkLimits := func(base string) bool {
+		lo, e1 := readInt(base + "min_freq")
+		hi, e2 := readInt(base + "max_freq")
+		if e1 != nil || e2 != nil || lo < 0 || hi <= 0 || lo > hi {
+			return false
+		}
+		locked = locked || lo == hi
+		return true
+	}
+	for cpu := range cpus {
+		if !checkLimits(fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cpufreq/scaling_", cpu)) {
+			return ""
+		}
+	}
+	if !checkLimits("/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/") {
+		return ""
+	}
+	for _, path := range []string{"/sys/kernel/debug/bpmp/debug/clk/emc/mrq_rate_locked", "/sys/kernel/debug/bpmp/debug/bwmgr/bwmgr_halt"} {
+		value, err := readInt(path)
+		if err != nil || (value != 0 && value != 1) {
+			return ""
+		}
+		locked = locked || value == 1
+	}
+	if locked {
 		return clocksRunning
-	default:
-		return ""
 	}
+	return clocksStopped
 }
 
 var (
-	l4tRelease   = regexp.MustCompile(`R(\d+)`)
-	l4tRevision  = regexp.MustCompile(`REVISION:\s*([0-9.]+)`)
-	cudaRelease  = regexp.MustCompile(`(?i)release\s+([0-9]+\.[0-9]+\.[0-9]+)`)
-	cudaVersion  = regexp.MustCompile(`(?i)cuda version\s+([0-9]+\.[0-9]+\.[0-9]+)`)
-	cudaCompiler = regexp.MustCompile(`\bV([0-9]+\.[0-9]+\.[0-9]+)`)
-	wattsRE      = regexp.MustCompile(`(?i)(\d+)\s*W`)
-	intLine      = regexp.MustCompile(`^-?\d+$`)
+	l4tRelease  = regexp.MustCompile(`R(\d+)`)
+	l4tRevision = regexp.MustCompile(`REVISION:\s*([0-9.]+)`)
+	cudaRelease = regexp.MustCompile(`(?i)release\s+([0-9]+\.[0-9]+\.[0-9]+)`)
+	cudaVersion = regexp.MustCompile(`(?i)cuda version\s+([0-9]+\.[0-9]+\.[0-9]+)`)
+	wattsRE     = regexp.MustCompile(`(?i)(\d+)\s*W`)
+	intLine     = regexp.MustCompile(`^-?\d+$`)
 )
 
 func parseL4T(text string) string {
@@ -329,9 +372,6 @@ func cudaFromJSON(b []byte) string {
 }
 
 func cudaFromText(text string) string {
-	if m := cudaCompiler.FindStringSubmatch(text); m != nil {
-		return m[1]
-	}
 	if m := cudaRelease.FindStringSubmatch(text); m != nil {
 		return m[1]
 	}

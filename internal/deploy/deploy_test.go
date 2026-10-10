@@ -311,6 +311,7 @@ func TestCollectParsesAGXPins(t *testing.T) {
 	write(cuda, `{"cuda":{"version":"13.2.1"}}`)
 	write(docker, `{"runtimes":{"nvidia":{"path":"nvidia-container-runtime"}}}`)
 	facts := Collect(context.Background(), Source{
+        ReadFile: dynamicClockFiles(nil),
 		Tegra:      tegra,
 		OSRelease:  osrel,
 		Kernel:     kernel,
@@ -671,7 +672,7 @@ func TestConnectStartsAgentBeforeDiscovery(t *testing.T) {
 
 func TestCUDACompilerBannerPreservesPatch(t *testing.T) {
 	for _, tc := range []struct{ text, want string }{
-		{"Cuda compilation tools, release 13.2, V13.2.1", "13.2.1"},
+		{"Cuda compilation tools, release 13.2, V13.2.78", ""},
 		{"Cuda compilation tools, release 13.2", ""},
 		{"CUDA Version 13.2.1", "13.2.1"},
 	} {

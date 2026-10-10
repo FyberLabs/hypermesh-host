@@ -47,7 +47,9 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(preflight.evaluate(ready() | {'kernel': '6.80'})['ok'])
 
     def test_cuda_patch_and_fallback(self):
-        self.assertEqual(preflight.parse_cuda_text('release 13.2, V13.2.1', None, None), '13.2.1')
+        self.assertIsNone(preflight.parse_cuda_text('release 13.2, V13.2.78', None, None))
+        self.assertEqual(preflight.parse_cuda_text('release 13.2, V13.2.78', '{"cuda":{"version":"13.2.1"}}', None), '13.2.1')
+        self.assertEqual(preflight.parse_cuda_text('release 13.2, V13.2.78', None, 'CUDA Version 13.2.1'), '13.2.1')
         self.assertEqual(preflight.parse_cuda_text('release 13.2', '{"cuda":{"version":"13.2.1"}}', None), '13.2.1')
         self.assertIsNone(preflight.parse_cuda_text('release 13.2', '{bad', None))
 
@@ -72,6 +74,30 @@ class PreflightTests(unittest.TestCase):
         self.assertIsNone(facts['nvpmodel_id'])
         self.assertIsNone(facts['jetson_clocks'])
         self.assertFalse(preflight.evaluate(facts)['ok'])
+
+    def test_clock_controls(self):
+        def reader(changes):
+            def read(path):
+                if path in changes:
+                    return changes[path]
+                if path.endswith('/online'):
+                    return '0-1,3'
+                if path.endswith('min_freq'):
+                    return '100'
+                if path.endswith('max_freq'):
+                    return '1000'
+                return '0'
+            return read
+        self.assertIs(preflight.clock_lock_state(reader({})), False)
+        for path in ['/sys/devices/system/cpu/cpu1/cpufreq/scaling_min_freq',
+                     '/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/min_freq']:
+            self.assertIs(preflight.clock_lock_state(reader({path: '1000'})), True)
+            self.assertIsNone(preflight.clock_lock_state(reader({path: None})))
+        for path in ['/sys/kernel/debug/bpmp/debug/clk/emc/mrq_rate_locked',
+                     '/sys/kernel/debug/bpmp/debug/bwmgr/bwmgr_halt']:
+            self.assertIs(preflight.clock_lock_state(reader({path: '1'})), True)
+            self.assertIsNone(preflight.clock_lock_state(reader({path: '2'})))
+        self.assertIsNone(preflight.clock_lock_state(reader({'/sys/devices/system/cpu/online': 'bad'})))
 
     def test_cli_exit_codes(self):
         with patch.object(preflight, 'collect_facts', return_value=ready()), patch('sys.stdout'), patch('sys.stderr'):

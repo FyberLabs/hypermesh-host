@@ -31,6 +31,14 @@ missing, mismatched, or unproven facts. It reads local files and commands and
 does not change firmware, power modes, packages, or Docker configuration.
 The pins match `hypermesh-host agx`: L4T R39.2.1, CUDA 13.2.1, kernel 6.8,
 Ubuntu 24.04.5, aarch64, nvpmodel 2 / 30W, headless boot, and stopped clocks.
+CUDA is read from toolkit `version.json` or `version.txt`; NVCC component build
+numbers do not identify the toolkit maintenance release. The clock check requires
+every online CPU and the GPU to have distinct minimum/maximum scaling limits,
+with EMC `mrq_rate_locked` and `bwmgr_halt` both 0. It reads the documented
+Orin sysfs/debugfs controls; missing files or permission failures remain unknown
+and fail the preflight. `jetson_clocks --show` displays settings, not a running
+service status, and instantaneous frequency at maximum does not imply locking.
+See NVIDIA's [clock control documentation](https://docs.nvidia.com/jetson/archives/r39.2/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html#maximizing-jetson-orin-series-performance).
 CUDA 13.0.0 is a rescue option and does not pass the soak check. The report
 does not certify model execution, memory protection, or a completed soak.
 

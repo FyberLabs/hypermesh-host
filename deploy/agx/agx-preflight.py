@@ -14,9 +14,9 @@ Sources:
 
 TensorRT is not required. llama.cpp CUDA decode does not need it.
 Kernel WireGuard is not required (the cottage host WireGuard join uses wireguard-go;
-CONFIG_WIREGUARD stays unset). ``jetson_clocks --show`` must say the
-clocks are not running. A clock dump that does not say that fails closed
-instead of counting as off.
+CONFIG_WIREGUARD stays unset). Clock state comes from online CPU/GPU scaling limits and EMC lock controls.
+Missing or unreadable settings fail closed; current frequency is not evidence
+that clock locking is disabled.
 """
 
 from __future__ import annotations
@@ -101,15 +101,6 @@ def parse_l4t(text: str | None) -> str | None:
 
 
 def parse_cuda_text(nvcc_out: str, version_json: str | None, version_txt: str | None) -> str | None:
-    if nvcc_out:
-        # nvcc's release banner often omits the patch. Prefer the full
-        # compiler version so a matching installation is not rejected.
-        match = re.search(r"V([0-9]+\.[0-9]+\.[0-9]+)", nvcc_out)
-        if match:
-            return match.group(1)
-        match = re.search(r"release\s+([0-9]+\.[0-9]+\.[0-9]+)", nvcc_out)
-        if match:
-            return match.group(1)
     if version_json:
         try:
             data = json.loads(version_json)
@@ -154,17 +145,32 @@ def parse_nvpmodel(raw: str | None) -> tuple[int | None, str | None]:
     return nvp_id, label
 
 
-def parse_jetson_clocks(text: str | None, present: bool) -> bool | None:
-    """True running, False stopped, None when the output does not say."""
-
-    if not present or not text:
+def clock_lock_state(read_text: ReadText) -> bool | None:
+    """True locked, False dynamic, None unproven; never infer from current load."""
+    online = read_text("/sys/devices/system/cpu/online")
+    if not online:
         return None
-    lowered = text.lower()
-    if "already running" in lowered or "jetson_clocks is running" in lowered:
-        return True
-    if "not running" in lowered or "inactive" in lowered:
-        return False
-    return None
+    try:
+        cpus = set()
+        for part in online.split(","):
+            ends = part.strip().split("-")
+            if len(ends) > 2:
+                return None
+            first, last = int(ends[0]), int(ends[-1])
+            if not 0 <= first <= last <= 255:
+                return None
+            cpus.update(range(first, last + 1))
+        bases = [f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_" for cpu in sorted(cpus)]
+        limits = [(int(read_text(base + "min_freq")), int(read_text(base + "max_freq"))) for base in bases]
+        gpu = "/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu/"
+        limits.append((int(read_text(gpu + "min_freq")), int(read_text(gpu + "max_freq"))))
+        emc = int(read_text("/sys/kernel/debug/bpmp/debug/clk/emc/mrq_rate_locked"))
+        halt = int(read_text("/sys/kernel/debug/bpmp/debug/bwmgr/bwmgr_halt"))
+    except (TypeError, ValueError):
+        return None
+    if emc not in (0, 1) or halt not in (0, 1) or any(lo < 0 or hi <= 0 or lo > hi for lo, hi in limits):
+        return None
+    return emc == 1 or halt == 1 or any(lo == hi for lo, hi in limits)
 
 
 def parse_os_release(text: str | None) -> str | None:
@@ -294,7 +300,7 @@ def evaluate(facts: dict[str, Any]) -> dict[str, Any]:
             checks,
             "jetson_clocks",
             False,
-            "jetson_clocks --show did not say whether clocks are off",
+            "CPU/GPU scaling limits or EMC lock controls are unavailable or invalid",
         )
     _check(
         checks,
@@ -360,7 +366,6 @@ def collect_facts(
     nvp_id, power = parse_nvpmodel(nvp_raw)
     clocks_bin = which("jetson_clocks")
     clocks_code, clocks_out, clocks_err = run(["jetson_clocks", "--show"]) if clocks_bin else (127, "", "")
-    clocks_text = (f"{clocks_out}\n{clocks_err}".strip() or None) if clocks_code == 0 else None
     packages: dict[str, bool] = {}
     for name in INSTALLED_PACKAGES:
         status_code, status_out, _ = run(["dpkg-query", "-W", f"-f=${{Status}}", name])
@@ -384,7 +389,7 @@ def collect_facts(
         "nvpmodel_id": nvp_id,
         "power_mode": power,
         "jetson_clocks_present": clocks_bin is not None,
-        "jetson_clocks": parse_jetson_clocks(clocks_text, clocks_bin is not None),
+        "jetson_clocks": clock_lock_state(read_text) if clocks_bin and clocks_code == 0 else None,
         "tegrastats": which("tegrastats") is not None,
         "docker": which("docker") is not None,
         "nvidia_runtime": nvidia_runtime_configured(daemon, runtime_bin),
