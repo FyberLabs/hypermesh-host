@@ -81,8 +81,8 @@ func maintenanceSellAfter(ctx context.Context)string{
  }
 }
 // maintenanceHoldReleased decides whether resume may proceed without the
-// matching hold. Only a missing marker on a resume that already reached the
-// resuming checkpoint counts as released; any other hold problem stops.
+// matching maintenance marker. Only a missing marker on a resume that already
+// reached the resuming checkpoint counts as released; any other marker problem stops.
 func maintenanceHoldReleased(holdErr error,markerMissing bool,state string)(bool,error){
  if holdErr==nil{return false,nil}
  if markerMissing&&supportOneOf(state,"resuming","complete"){return true,nil}
@@ -91,7 +91,7 @@ func maintenanceHoldReleased(holdErr error,markerMissing bool,state string)(bool
 func maintenanceMarkerMatches(sha string)error{
  raw,err:=readSetupRegular("/var/lib/hypermesh/maintenance.json",true)
  var v struct{Schema int `json:"schema"`;PlanSHA256 string `json:"plan_sha256"`;RequestedAt time.Time `json:"requested_at"`}
- if err!=nil||decodeSetupJSON(raw,&v)!=nil||v.Schema!=1||v.PlanSHA256!=sha||v.RequestedAt.IsZero(){return fmt.Errorf("matching maintenance hold required")}
+ if err!=nil||decodeSetupJSON(raw,&v)!=nil||v.Schema!=1||v.PlanSHA256!=sha||v.RequestedAt.IsZero(){return fmt.Errorf("matching maintenance pause required")}
  return nil
 }
 func noMaintenanceContainers(ctx context.Context)error{
@@ -191,7 +191,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   return noMaintenanceContainers(ctx)
  }
  sellAfter:=""
- // A retry after the hold was released skips the paused-hold checks: the
+ // A retry after the maintenance pause was released skips those checks: the
  // marker is only removed after they passed, and the agent may since have
  // restored selling or the owner's pause.
  released:=false
@@ -227,7 +227,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   }
   if err==nil&&!released{
    remote,e:=client.CheckDevice(ctx,identity.Request,identity.DeviceID,identity.DeviceSecret)
-   if e!=nil||remote.PathAState!="accepted"||remote.PathBState!="green"||remote.ScheduleHold==nil||*remote.ScheduleHold||remote.SellState!="paused"||remote.LastHeartbeatAt==nil||time.Since(*remote.LastHeartbeatAt)<0||time.Since(*remote.LastHeartbeatAt)>120*time.Second||remote.CheckedAt.Before(time.Now().Add(-30*time.Second))||remote.CheckedAt.After(time.Now().Add(30*time.Second)){err=fmt.Errorf("fresh plane readiness required before releasing maintenance hold")}
+   if e!=nil||remote.PathAState!="accepted"||remote.PathBState!="green"||remote.ScheduleHold==nil||*remote.ScheduleHold||remote.SellState!="paused"||remote.LastHeartbeatAt==nil||time.Since(*remote.LastHeartbeatAt)<0||time.Since(*remote.LastHeartbeatAt)>120*time.Second||remote.CheckedAt.Before(time.Now().Add(-30*time.Second))||remote.CheckedAt.After(time.Now().Add(30*time.Second)){err=fmt.Errorf("fresh plane readiness required before releasing the maintenance pause")}
   }
   if err==nil{
    if _,e:=os.Lstat("/var/lib/hypermesh/maintenance.json");e==nil{
@@ -236,7 +236,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
   }
   if err==nil{err=recoverySync("/var/lib/hypermesh")}
   if err==nil{j.State="complete";j.RecordedAt=time.Now().UTC();err=save(j)}
-  // With the hold released the agent restores a kept owner pause or sells.
+  // With the maintenance pause released the agent restores a kept owner pause or sells.
   if err==nil{sellAfter=maintenanceSellAfter(ctx)}
  }else{
   d:=maintenanceDeps{
@@ -244,7 +244,7 @@ func runMaintenance(ctx context.Context,args []string,out,diagnostic io.Writer,r
     if err:=installed(ctx);err!=nil{return err}
     var reply struct{Maintenance bool `json:"maintenance"`;SellingAllowed bool `json:"selling_allowed"`}
     if err:=maintenanceOwner(ctx,"POST","/v0/maintenance",map[string]string{"plan_sha256":p.SHA256},&reply);err!=nil{return err}
-    if !reply.Maintenance||reply.SellingAllowed{return fmt.Errorf("agent does not confirm maintenance hold")}
+    if !reply.Maintenance||reply.SellingAllowed{return fmt.Errorf("agent does not confirm the maintenance pause")}
     return maintenanceMarkerMatches(p.SHA256)
    },
    Idle:func(ctx context.Context)error{

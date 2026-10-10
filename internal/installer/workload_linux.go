@@ -59,7 +59,7 @@ func validateWorkloadShape(p workloadPlan,approved string)error{
 }
 func workloadNext(state string)string{
 	switch state{
-	case "verified":return "Dated pinned-model inference and cleanup succeeded. Inspect receipt.context_fit for full-window evidence when requested. This is not sustained benchmarking, AIuditor certification, activation or permission to sell."
+	case "verified":return "Dated model inference and cleanup succeeded. Inspect receipt.context_fit for full-window evidence when requested. This is not sustained benchmarking, certification, activation or permission to sell."
 	case "checking":return "Check may still be running or have been interrupted. Inspect the named temporary container before retrying; do not treat this journal as success."
 	default:return "Workload check failed or is unconfirmed. Inspect model pins, runtime health and temporary containers; preserve installer and enrollment state, then retry the reviewed plan."
 	}

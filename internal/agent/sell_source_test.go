@@ -107,7 +107,7 @@ func TestUpgradeKeepsOwnerPauses(t *testing.T) {
 	})
 	t.Run("indefinite written by the agent", func(t *testing.T) {
 		// An owner command, a control-plane sell_pause job and the old
-		// maintenance hold all wrote this indented shape; keep it.
+		// maintenance pause all wrote this indented shape; keep it.
 		a := newOwnerTestAgent(t)
 		a.now = func() time.Time { return now }
 		writeRawSell(t, a, "{\n  \"sell_state\": \"paused\"\n}\n")
@@ -233,7 +233,7 @@ func TestMaintenanceRestoresSellingOrOwnerPause(t *testing.T) {
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&legacy); err != nil || legacy.SellState != "paused" || legacy.Until != "" {
-			t.Fatalf("hold pause shape changed: %s %v", raw, err)
+			t.Fatalf("maintenance pause shape changed: %s %v", raw, err)
 		}
 		if res := a.sellResume(testDevice); res.Passed || res.Reason != "host maintenance hold" {
 			t.Fatalf("resume during maintenance %+v", res)
@@ -270,7 +270,7 @@ func TestMaintenanceRestoresSellingOrOwnerPause(t *testing.T) {
 			t.Fatalf("pause %+v", out)
 		}
 		if storedSell(t, a).Source != "" {
-			t.Fatal("hold pause shape changed by owner pause")
+			t.Fatal("maintenance pause shape changed by owner pause")
 		}
 		release(t, a)
 		if got := a.effectiveSell(); got.SellState != api.SellPaused || got.Source != SellSourceOwner {
@@ -294,7 +294,7 @@ func TestMaintenancePauseSurvivesConcurrentPostureReads(t *testing.T) {
 		}
 		<-done
 		if got := storedSell(t, a); got.SellState != api.SellPaused || got.Source != "" {
-			t.Fatalf("hold pause settled while entering maintenance: %+v", got)
+			t.Fatalf("maintenance pause settled while entering maintenance: %+v", got)
 		}
 	}
 }

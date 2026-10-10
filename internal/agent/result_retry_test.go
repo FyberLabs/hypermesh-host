@@ -191,7 +191,7 @@ func TestFailedPostResultDoesNotStartSecondContainer(t *testing.T) {
 		t.Fatal("successful start must keep the handle after a failed POST")
 	}
 	if err := a.pullAndRun(context.Background()); err != nil {
-		t.Fatalf("same lease remint must POST without a second start: %v", err)
+		t.Fatalf("same lease retry must POST without a second start: %v", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()

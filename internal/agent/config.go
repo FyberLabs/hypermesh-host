@@ -66,8 +66,7 @@ type Config struct {
 	// GGUFPath is the host file bind-mounted at /models/model.gguf:ro.
 	// FromEnv uses DefaultModelPath when HYPERMESH_GGUF_PATH is unset
 	// or empty. An explicit path is kept as-is. A Config built in tests
-	// with an empty GGUFPath still means "no path" so lease_start refuses
-	// rather than inventing a file.
+	// with an empty GGUFPath still means "no path" so lease_start refuses.
 	GGUFPath string
 	// DiskFloor is HYPERMESH_DISK_FLOOR_BYTES. Empty means 2 GiB must
 	// remain free after a model download. "0" leaves no floor.

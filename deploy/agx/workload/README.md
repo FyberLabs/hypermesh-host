@@ -1,6 +1,6 @@
 # hypermesh-test (build on the AGX)
 
-OCI wrapper that serves OpenAI-shaped `POST /v1/chat/completions` on `0.0.0.0:8080`. The GGUF is **volume-mounted at run**, not baked into the image (AGX64-1 eMMC cannot hold a 4.9G COPY). The host program passes `docker -p <client_address>:8080:8080` on the internal `hypermesh-workload` network (not host network), plus the GGUF bind-mount. That `-p` does not open a host port: Docker does not publish ports for a container whose only network is internal. The agent listens on the WireGuard address and forwards TCP to the container. The customer HTTPS path is `http://<client_address>:8080/v1/chat/completions`.
+OCI wrapper that serves OpenAI-shaped `POST /v1/chat/completions` on `0.0.0.0:8080`. The GGUF is **volume-mounted at run**, not baked into the image (the AGX eMMC cannot store a 4.9G COPY). The host program passes `docker -p <client_address>:8080:8080` on the internal `hypermesh-workload` network (not host network), plus the GGUF bind-mount. That `-p` does not open a host port: Docker does not publish ports for a container whose only network is internal. The agent listens on the WireGuard address and forwards TCP to the container. The customer HTTPS path is `http://<client_address>:8080/v1/chat/completions`.
 
 Target name: **`ghcr.io/fyberlabs/hypermesh-test`**.
 
@@ -36,15 +36,15 @@ The entrypoint stays the same (`llama-server -m /models/model.gguf --host 0.0.0.
 
 The entrypoint does not forward CMD args (`"$@"`). Use env, not extra argv.
 
-This does not publish anything by itself. No CI workflow builds `hypermesh-test`. Rebuild on AGX64-1 as described below, push, then pin the new `repo@digest`.
+This does not publish anything by itself. No CI workflow builds `hypermesh-test`. Rebuild on the AGX as described below, push, then pin the new `repo@digest`.
 
-## Build this on AGX64-1
+## Build this on the AGX
 
 This recipe is for **AGX Orin 64GB** (P3701-0005, SM 8.7) on **JetPack 7.2.1 / L4T R39.2.1 / Ubuntu 24.04.5 / CUDA 13**, after the overlay. **Run** with `--runtime=nvidia` (not `--gpus`). Docker 29 Buildx does not accept `--runtime=nvidia` at **build**; the Dockerfile links CUDA devel stubs instead.
 
 **Do not build this on x86 and pretend it is a Jetson image.** The NGC CUDA tag is multi-arch; an x86 build is the wrong arch.
 
-**Do not keep or dual-pin a JP6 image for this box.** `ubuntu:22.04` / `l4t-jetpack` / JetPack 6.2.3 / L4T 36.5.2 is not the AGX default (`l4t-jetpack` is gone in 7.x). If a leftover JP6 image will not run here: **stop**.
+**Do not keep a second JP6 image for this box.** `ubuntu:22.04` / `l4t-jetpack` / JetPack 6.2.3 / L4T 36.5.2 is not the AGX default (`l4t-jetpack` is gone in 7.x). If a leftover JP6 image will not run here: **stop**.
 
 ### FROM (default)
 
@@ -58,7 +58,7 @@ nvcr.io/nvidia/cuda:13.2.1-devel-ubuntu24.04
 
 Runtime alternative if a later recipe only copies a prebuilt binary: `nvcr.io/nvidia/cuda:13.2.1-runtime-ubuntu24.04`. Not this recipe.
 
-That matches JetPack 7.2 host CUDA **13.2.1**, SBSA / aarch64, Ubuntu 24.04. The tag was **registry-listed** (linux/amd64 + linux/arm64) when this recipe was drafted. It is **not** an on-box pull. Treat the FROM as **unverified-until-AGX-build**. No digest is assumed. Do not quote a Hub listing as `ghcr.io/fyberlabs/hypermesh-test` `repo@digest`. Pin a digest in CI only after a good on-box build.
+That matches JetPack 7.2 host CUDA **13.2.1**, SBSA / aarch64, Ubuntu 24.04. The tag was **registry-listed** (linux/amd64 + linux/arm64) when this recipe was drafted. It is **not** an on-box pull. Treat the FROM as **not yet verified by an on-box build**. No digest is assumed. Do not quote a Hub listing as `ghcr.io/fyberlabs/hypermesh-test` `repo@digest`. Pin a digest in CI only after a good on-box build.
 
 **L4T major MUST match the host (r39).** Orin is **sm_87** (`CMAKE_CUDA_ARCHITECTURES=87`).
 
@@ -67,7 +67,7 @@ If 13.2.1 hits the driver-allowlist gap on-box, keep **13.0.0 only** as the docu
 Plain `cuda:*-ubuntu24.04` does **not** ship Jetson cuDNN / TensorRT. llama.cpp CUDA decode usually does not need TRT. Only add packages from `repo.download.nvidia.com/jetson` r39.2 if a later workload needs them.
 
 ```bash
-# On AGX64-1, after first-boot overlay.
+# On the AGX, after first-boot overlay.
 # Docker 29 Buildx rejects --runtime=nvidia on docker build. Link uses
 # CUDA devel stubs (see Dockerfile). Do not COPY model.gguf. Do not commit it.
 # Tag :llama-v0.5.0 only. :latest is retagged separately, after the
@@ -75,7 +75,7 @@ Plain `cuda:*-ubuntu24.04` does **not** ship Jetson cuDNN / TensorRT. llama.cpp 
 sudo docker build --platform linux/arm64 \
   -t ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0 .
 
-# Pin the sha256 after a good on-box build. The host program will not invent
+# Pin the sha256 after a good on-box build. Record
 # image_hash or a repo@digest.
 sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:llama-v0.5.0
 ```
@@ -92,13 +92,19 @@ sudo docker image inspect --format '{{.Id}}' ghcr.io/fyberlabs/hypermesh-test:ll
 
 ## GGUF is volume-mounted (not COPY)
 
-Do **not** `COPY model.gguf` into the image. The host default is **`/var/lib/hypermesh/models/model.gguf`** when `HYPERMESH_GGUF_PATH` is unset. An explicit path, including a cottage file, is kept. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` after `stat` says it is a regular file. Missing or a directory POSTs `passed=false` so Docker cannot create a directory mount. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
+Do **not** `COPY model.gguf` into the image. The host default is **`/var/lib/hypermesh/models/model.gguf`** when `HYPERMESH_GGUF_PATH` is unset. An explicit path is kept. `lease_start` bind-mounts that host file at `/models/model.gguf:ro` after `stat` says it is a regular file. Missing or a directory POSTs `passed=false` so Docker cannot create a directory mount. **`instance_check` and `POST /v1/chat/completions` still need this image running with that mount.**
 
 ```bash
-# Manual run (same jail the host program adds):
+# Manual run (same jail the host program adds). Save it as a script and run it:
+# it stops before docker run if the tunnel address is missing.
+set -euo pipefail
+# TUNNEL_ADDRESS is the host part of the allocated tunnel client_address: the address on dev hypermesh, without the prefix length.
+TUNNEL_ADDRESS="$(ip -4 -o addr show dev hypermesh | awk 'NR==1 { sub(/\/.*/, "", $4); print $4 }')"
+# An empty value would make the publish argument -p :8080:8080, which listens on all interfaces.
+: "${TUNNEL_ADDRESS:?no IPv4 address on dev hypermesh: bring the tunnel up first}"
 sudo docker network create --driver bridge --internal hypermesh-workload 2>/dev/null || true
 sudo docker run --runtime=nvidia --platform linux/arm64 \
-  -p 10.77.0.2:8080:8080 \
+  -p "${TUNNEL_ADDRESS}:8080:8080" \
   --network hypermesh-workload \
   --read-only --tmpfs /tmp \
   --cap-drop ALL --security-opt no-new-privileges:true \

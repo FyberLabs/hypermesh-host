@@ -126,7 +126,7 @@ func (a *Agent) armHeartbeatHold(d time.Duration) {
 	a.hbHoldUntil = until
 	a.healthMu.Unlock()
 	// A job-loop success during the heartbeat request can queue a wake
-	// before this hold exists. Drop it so that wait does not return
+	// before this backoff exists. Drop it so that wait does not return
 	// immediately and skip Retry-After.
 	a.drainHeartbeatWake()
 }
@@ -180,8 +180,8 @@ func (a *Agent) waitHeartbeat(ctx context.Context, d time.Duration, interrupt bo
 		case <-timer.C:
 			return true
 		case <-wake:
-			// The token may have been queued before the hold was armed.
-			// Keep waiting until the deadline while the hold is active.
+			// The token may have been queued before the backoff was armed.
+			// Keep waiting until the deadline while the backoff is active.
 			if a.heartbeatHoldActive() {
 				continue
 			}

@@ -570,7 +570,7 @@ func (p Provider) discover(ctx context.Context, base, tenant string) (string, st
 	}
 	u, e := url.Parse(renewal)
 	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", "", "", fmt.Errorf("invalid AIuditor renewal endpoint")
+		return "", "", "", fmt.Errorf("invalid credential-service renewal endpoint")
 	}
 	return result.Authority, result.Plane, renewal, nil
 }
@@ -587,10 +587,10 @@ func validAuthority(value string) bool {
 }
 
 // Peer keeps independent keys, rotation journals and credentials for each
-// AIuditor delegation while retaining the same host registration identity.
+// Credential-service delegation while retaining the same host registration identity.
 func (p Provider) Peer(authority string) (Provider, error) {
 	if !validAuthority(authority) {
-		return Provider{}, fmt.Errorf("invalid AIuditor identity")
+		return Provider{}, fmt.Errorf("invalid credential-service identity")
 	}
 	if p.Path == "" {
 		p.Path = DefaultPath
@@ -602,7 +602,7 @@ func (p Provider) Peer(authority string) (Provider, error) {
 }
 
 // ContractToken proves this same host identity for exactly one live contract.
-// The control plane routes only to its configured AIuditors; a job cannot
+// The control plane routes only to its configured credential services; a job cannot
 // supply an arbitrary credential endpoint. The returned token is not persisted.
 func (p Provider) ContractToken(ctx context.Context, base, tenant, device, request, bootstrap, contract string) (string, error) {
 	if contract == "" {

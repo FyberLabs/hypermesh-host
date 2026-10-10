@@ -253,10 +253,11 @@ Commands:
               --wireguard-mode kernel (default) or userspace; only userspace needs wireguard-go.
               --list-profiles lists candidate policies; this command applies nothing.
   download  fetch a signed deploy CLI or agent using independently trusted key material.
-            --artifact deploy (default) or agent; --match-installer pins release identity.
+            --artifact deploy (default) or agent; --match-installer selects this installer's release identity.
             Use download --help for required release, channel and build constraints.
   plan      read-only resource, hardware and HTTPS reachability plan.
-            Resource flags plus --aiuditor-check-url https://HOST/READINESS_PATH
+            Resource flags plus the readiness URL
+            --aiuditor-check-url https://HOST/READINESS_PATH
   check-resources  read-only Linux RAM, accelerator capacity and model-filesystem check.
                    --model-dir PATH --memory-mode uma (minimum-only; no capacity reservation)
                    --model-dir PATH --memory-mode discrete

@@ -3,7 +3,7 @@ package agx
 import _ "embed"
 
 // AgentUnit and WGUnit are the systemd units the enroll path already
-// expects. hypermesh-deploy writes these bytes; it does not invent a
+// expects. hypermesh-deploy writes these bytes and does not add a
 // second unit or a second agent.
 
 //go:embed hypermesh-agent.service

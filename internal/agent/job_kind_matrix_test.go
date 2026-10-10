@@ -251,10 +251,10 @@ func TestJobKindFailPassMatrix(t *testing.T) {
 			noDocker:   true,
 		},
 		{
-			name: "lease_start/same_lease_remint",
+			name: "lease_start/same_lease_retry",
 			kind: api.KindLeaseStart,
 			job: api.Job{
-				JobID: "m-start-remint", Kind: api.KindLeaseStart, DeviceID: testDevice,
+				JobID: "m-start-retry", Kind: api.KindLeaseStart, DeviceID: testDevice,
 				LeaseID: "lease-running", CatalogID: "llama-3.1-8b-q4",
 				ImageDigest: matrixDigest, Runtime: "nvidia",
 			},

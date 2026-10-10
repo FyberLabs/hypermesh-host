@@ -7,22 +7,22 @@ HIP, Metal, Renesas and Rockchip runtime certification are not enabled by this c
 ## Operator prerequisites
 
 Deploy the paired Panopticon change and database migration before this host
-release. Configure the authenticated AIuditor program with exactly one
+release. Configure the authenticated certification program with exactly one
 `pack-v1` or `thin-v1` suite member for the tenant/class, and a matching envelope:
 GGUF file SHA-256, NVIDIA runtime, advertised context, positive decode rate and
 optional thermal baseline. Missing or multi-model programs fail closed.
 
 The platform operator must review catalog model size, hash, immutable runtime
-image digest and context; these must match the AIuditor envelope. Configure the
+image digest and context; these must match the class envelope. Configure the
 catalog's immutable source through the internal authenticated
 `PUT /api/v1/hypermesh/internal/onboarding-models/{catalog_id}` endpoint with
 `{"source_ref":"PUBLISHER/REPOSITORY@40_HEX_COMMIT/path/model.gguf"}`.
 Use the existing internal token and tenant headers through the internal service,
-not a host or browser credential. No source, hash or performance baseline is
-invented from a download. The runtime image must be public or already cached.
+not a host or browser credential. A download does not supply a source, hash,
+or performance baseline. The runtime image must be public or already cached.
 
 Complete the approved prerequisite/agent installation and original-owner
-registration. Resolve intake, holds, leases and pending jobs in the dashboard.
+registration. Resolve intake, scheduling restrictions, leases and pending jobs in the dashboard.
 Activation requires accepted intake; certification can run while intake is pending.
 
 ## Host commands
@@ -59,12 +59,12 @@ Docker's own storage; a separate Docker capacity budget remains future work.
 The installer uses the pinned temporary runtime, exercises the entire advertised
 context and measures a short completion, removes the container, checks fresh
 WireGuard connectivity and repeats local preflight. It saves exact evidence
-before uploading. Panopticon compares it to the frozen AIuditor class envelope
+before uploading. Panopticon compares it to the frozen class envelope
 and atomically records the result. This is a measured short certification, not
 a sustained/soak benchmark or third-party hardware attestation.
 
 Activation requires a fresh browser/device login by the original owner, current
-program/catalog pins, accepted intake, no holds/jobs/leases and a short-lived
+program/catalog pins, accepted intake, no scheduling restrictions, jobs, or leases and a short-lived
 server permit. The installer revalidates installed payloads, identity and systemd
 unit paths. It saves an indefinite paused sell posture before creating the
 activation marker and enabling the agent. It requires 15 seconds of stable running state with the same systemd invocation,
@@ -93,7 +93,7 @@ it contains measured metadata, not model tokens or browser credentials.
 
 Automated tests cover download integrity/deadlines, immutable/idempotent result
 upload, owner and state gates, SQL rollback/concurrency, and startup rollback.
-Physical AGX-1 installation, real AIuditor baseline compatibility, reboot recovery,
+Physical AGX installation, real class baseline compatibility, reboot recovery,
 and model license/source provisioning still require operator acceptance.
 
 ## Read-only certification recovery
@@ -144,13 +144,13 @@ sudo hypermesh-host host-status --plan certification-plan.json
 
 This read-only command combines current local observations and an authenticated
 plane query. It never starts/stops services, reboots, sends a heartbeat, creates
-a WireGuard interface, changes a hold or modifies selling state. It uses the
+a WireGuard interface, changes a scheduling restriction or modifies selling state. It uses the
 saved device credential; no browser login is needed.
 
 The JSON gates report installed-file and systemd configuration integrity, local
 identity, certification history bound to this plan/run/model, activation marker,
 reboot requirement, enabled/running service state, current hardware intake,
-class, certification, schedule hold, AIuditor availability and heartbeat age.
+class, certification, scheduling restriction, certification-program availability and heartbeat age.
 Each blocked gate has a fixed next action. The service must retain the same PID,
 invocation and restart count across the plane observation. No raw service errors,
 keys, device/run IDs, model paths or registry addresses enter the output.
@@ -170,7 +170,7 @@ the diagnostic itself. A fresh heartbeat is not proof of the WireGuard data path
 A green report grants neither activation nor selling permission. It does not
 rerun memory/model workloads, verify free capacity, probe the active tunnel,
 verify package-specific reboot completion, or prove sustained uptime. Inspect
-the dashboard's current lease/hold state before taking corrective action.
+the dashboard's current lease and scheduling-restriction state before taking corrective action.
 For a stopped service or interrupted activation, retain the original plan and
 use certification-status guidance and the controlled activation flow. Do not
 start the agent by creating its activation marker manually.
@@ -188,7 +188,7 @@ journals remain available.
 
 Guided certification archives a failed plan and offers a fresh plan for every
 failure category. Unconfirmed evidence uploads keep the original evidence and
-retry its delivery. Enrollment, device keys, model cache, scheduling holds,
+retry its delivery. Enrollment, device keys, model cache, scheduling restrictions,
 intake and activation checks remain in effect.
 
 For an established class reference, the plane initially accepts measured decode

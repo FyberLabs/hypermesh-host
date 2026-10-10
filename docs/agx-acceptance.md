@@ -16,7 +16,7 @@ retain the exact signed installer, and use the actual model filesystem.
 Before changing prerequisites, confirm SSH access from a second session and a
 physical/serial recovery path. Record the OS/vendor stack and selected UMA
 allocation locally. Required memory, disk and GPU checks must pass as measured.
-Use a real AIuditor baseline and real model/catalog pins, not placeholders.
+Use a measured class baseline and the reviewed model and catalog records.
 
 Install the verified CLI at a root-owned absolute path, preserving its bytes:
 
@@ -77,7 +77,7 @@ Observe an approved workload long enough to check sustained thermal, memory,
 network and disk behavior; record duration and measured results explicitly.
 The acceptance collector intentionally reports `physical_soak_completed=false`.
 No script enables selling. After reviewing the real evidence, the owner may
-separately enable selling and run the gateway smoke against the enrolled name.
+separately enable selling and run the short gateway check against the enrolled name.
 
 Until these steps run on AGX, physical acceptance remains pending. AMD/N5,
 Renesas, Rockchip, macOS and different Jetson classes require their own evidence;

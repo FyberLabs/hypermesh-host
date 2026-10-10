@@ -177,7 +177,7 @@ func TestUserspaceMatchingHandshakeDoesNotReset(t *testing.T) {
 	}
 }
 
-// TestUserspaceApplyInstallsAllowedIPRoute is the AGX64-1 miss: wg-quick
+// TestUserspaceApplyInstallsAllowedIPRoute covers the wg-quick miss: wg-quick
 // routed AllowedIPs, syncconf does not. 0.0.0.0/0 and ::/0 are not installed
 // unless the runner explicitly intends a full tunnel.
 func TestUserspaceApplyInstallsAllowedIPRoute(t *testing.T) {

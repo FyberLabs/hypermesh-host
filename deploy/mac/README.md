@@ -21,8 +21,8 @@ The Metal runner is behind the existing name `llama-cpp-cpu` on `//go:build darw
 
 ## Lab / cert limits
 
-- `image_digest` must still be `repo@digest` (Fyber-published pin). This slice does not pull GHCR and does not invent a GGUF.
-- Start execs `llama-server` (`--host 0.0.0.0 --port 8080`). Metal is the llama.cpp default on Apple Silicon. No CUDA flags. No invented `-ngl` tok/s.
+- `image_digest` must still be `repo@digest` (Fyber-published digest). This runner does not pull GHCR and does not supply a GGUF.
+- Start execs `llama-server` (`--host 0.0.0.0 --port 8080`). Metal is the llama.cpp default on Apple Silicon. No CUDA flags. No `-ngl` tok/s flag.
 - If `llama-server` is not on PATH, start fails honestly. `instance_check` still requires a real completion; the scaffold does not fake one.
 - `go test ./...` on Linux (the AGX image) still stub-fails `llama-cpp-cpu` and `llama-cpp-vulkan` with the exact strings above.
 - Darwin scaffold tests live in `//go:build darwin` files.

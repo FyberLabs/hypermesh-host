@@ -3,7 +3,7 @@
 Status: Linux installation primitives and a default interactive guide are implemented.
 Run the verified executable without arguments to start or resume guided setup.
 The legacy individual commands remain available under `advanced-help`.
-Physical acceptance on AGX-1 and additional hardware remains pending.
+Physical acceptance on the AGX and additional hardware remains pending.
 
 ## Minimum-only installation admission
 
@@ -29,12 +29,11 @@ Existing pre-install sessions upgrade through the signed newer-installer
 recovery path, preserving old evidence and clearing the legacy allocation from
 the new session. No model files or installed identities are removed.
 
-## Scope before AGX-1 acceptance
+## Scope before the AGX acceptance
 
-Approved on 2026-09-30: finish the Linux onboarding and maintenance work before
-the operator attempts the AGX-1 installation. Workload operating modes and
-macOS support are deferred; device authorization is **not** deferred with the
-workload-mode section where it was originally recorded.
+Finish Linux onboarding and maintenance before a physical AGX installation.
+Workload operating modes and macOS support are separate. Device authorization
+is part of onboarding.
 
 Complete and validate each milestone before starting the next:
 
@@ -44,12 +43,12 @@ Complete and validate each milestone before starting the next:
    headless configuration and systemd installation.
 4. Verified installer update, recovery/repair/uninstall, status and redacted
    support bundles.
-5. Device authorization and fresh-key enrollment with authenticated AIuditor
+5. Device authorization and fresh-key enrollment with authenticated certification program
    compatibility, connectivity and benchmark gates before selling.
 6. Independent bootstrap trust and hyperme.sh download integration, then the
    full automated installation/recovery acceptance suite.
 
-Physical AGX-1 installation is the final acceptance run, not something claimed
+Physical AGX installation is the final acceptance run, not something claimed
 complete before the machine is available. N5 MAX and other Linux targets need
 their own measured acceptance; no profile is certified by its product name.
 Website and control-plane dependencies stay on this delivery checklist.
@@ -57,7 +56,7 @@ Website and control-plane dependencies stay on this delivery checklist.
 ## Approved behavior
 
 An operator downloads a signed host installer. Before enrollment or privileged
-changes, it checks internet connectivity to the selected AIuditor, detects
+changes, it checks internet connectivity to the selected readiness service, detects
 CPU/GPU architecture and memory topology, measures resources, and presents an
 installation plan. A familiar model name may select a candidate profile; it
 does not prove compatibility or grant certification.
@@ -86,8 +85,8 @@ Resource minimums use **GiB (2^30 bytes)** consistently:
   its context, runtime buffers, and working memory.
 
 Unknown architecture, unknown capacity, inaccessible cache storage, or failed
-AIuditor connectivity must produce a named blocker and a concrete next action.
-An HTTP response alone is not proof of AIuditor identity: distinguish DNS/TLS
+readiness-service connectivity must produce a named blocker and a concrete next action.
+An HTTP response alone is not proof of readiness-service identity: distinguish DNS/TLS
 reachability from authenticated protocol compatibility and enrollment.
 
 ## Installation stages and approvals
@@ -152,7 +151,7 @@ disabled with consent, not that other services are disabled.
 - [x] Read-only CLI preflight plan with resource/hardware blockers and HTTPS
   endpoint reachability checks.
 - [x] Device-authenticated control-plane protocol and registration identity check, with a redacted readiness snapshot.
-- [x] Authenticated AIuditor tenant/class program membership check through the plane, without local fallback.
+- [x] Authenticated certification program tenant/class program membership check through the plane, without local fallback.
 - [x] Explicit, recoverable one-shot device heartbeat with committed acknowledgment.
 - [x] Explicit inactive WireGuard handshake and gateway overlay data-path probe.
 - [ ] Workload compatibility checks and physical WireGuard acceptance.
@@ -220,7 +219,7 @@ Automated coverage includes command arguments/exit codes/JSON, failed probes,
 disk boundaries, malformed and overflow measurements, multi-GPU summation,
 and a real Linux RAM/filesystem probe that checks no directory was created.
 AGX/N5 physical results remain pending. The next milestone is a read-only
-installation plan with architecture and AIuditor checks; package installation
+installation plan with architecture and certification-program checks; package installation
 and reboot orchestration have not started.
 
 ## Required hardware acceptance
@@ -235,7 +234,7 @@ a profile or test fixture. Select hosts by their reported enrollment name.
 
 For each target run: clean install, no-op rerun, interrupted package step,
 interrupted enrollment, reboot/resume, supported upgrade, declined required
-change, unreachable AIuditor, insufficient RAM/disk, repair, and uninstall.
+change, unreachable readiness service, insufficient RAM/disk, repair, and uninstall.
 Verify a real model workload and confirm selling remains blocked on failures.
 Record OS/firmware/kernel/driver/runtime versions, installer commit, plan,
 redacted logs, and measured results before marking a profile tested.
@@ -258,11 +257,11 @@ Exit 1 means a check failed, and exit 2 means invalid arguments.
 ```bash
 ./hypermesh-host plan --memory-mode uma --uma-gib 40 \
   --model-dir /existing/model/cache \
-  --aiuditor-check-url https://YOUR_AIUDITOR/ITS_READINESS_PATH > preflight.json
+  --aiuditor-check-url https://READINESS_HOST/READINESS_PATH > preflight.json
 ```
 
 Replace the URL with the selected deployment's actual readiness endpoint;
-there is deliberately no invented default path. Requests require trusted TLS,
+there is no default readiness URL. Requests require trusted TLS,
 time out after ten seconds, reject redirects, and require HTTP 2xx. URLs with
 credentials, query parameters or fragments are rejected. Response bodies are
 not stored. The command changes no packages, keys, disks or system services.
@@ -272,7 +271,7 @@ The JSON includes hardware recommendations, resource evidence, blockers,
 accelerator backend is a preliminary signal; it does not certify the GPU
 architecture, driver version or workload compatibility. Missing drivers are
 reported as blockers to investigate before creating a mutation plan.
-Endpoint reachability is not authenticated AIuditor identity. Those checks,
+Endpoint reachability is not authenticated readiness-service identity. Those checks,
 validated profiles, exact change approval and runtime memory validation remain
 explicit pending gates. This plan is diagnostic evidence, not an unattended
 installation approval file.
@@ -282,24 +281,20 @@ URL rejection, trusted/untrusted TLS, HTTP errors, redirects and cancellation.
 Physical AGX 64 and N5 MAX acceptance remains pending. Complete runtime memory
 validation and authenticated discovery before starting installation mutations.
 
-## Planned end-to-end acceptance after roadmap completion
+## End-to-end acceptance
 
-The test Panopticon plane has been rebuilt. Once the host installer roadmap is
-implemented, the operator will download the ARM host package from hyperme.sh,
-run it on the AGX, and enroll it against the test plane as `AGX-1`.
-This requires a website download path, signed ARM installer packaging,
-bootstrap verification/update, approved preflight changes and enrollment to
-work as one flow. The current agent release and diagnostic CLI alone do not
-satisfy this acceptance target.
+Physical acceptance downloads the ARM host package from hyperme.sh, runs it on
+the AGX, and enrolls the host under the name it reports. The flow needs a
+website download path, signed ARM installer packaging, bootstrap
+verification, reviewed preflight changes, and enrollment together. The agent
+release and diagnostic CLI alone are not that acceptance run.
 
-Use the newly reported name for discovery. Update the test smoke host setting
-to `AGX-1` when that host is enrolled; do not retain `agx64-1` as an identity
-assumption or seed a device UUID. Physical enrollment and smoke acceptance
-remain pending that operator run. The N5 MAX is the second hardware target.
+Use the reported host name for discovery. Do not seed a device UUID. Physical
+enrollment remains an operator run. The N5 MAX is the second hardware target.
 
 ## Approved operating modes, billing and device authorization
 
-Status: approved requirements; implementation pending.
+Billing and device authorization below are requirements. Implementation of the billing modes is not finished.
 
 | Mode | Model state | Billing |
 | --- | --- | --- |
@@ -349,7 +344,7 @@ Registration creates an uncertified, unavailable-for-rental dashboard entry.
 Show its current onboarding stage, hardware observations, outstanding checks,
 failure reason and the action needed to proceed. Registration alone does not
 enable selling, mark a hardware class certified or bypass authenticated
-AIuditor, tunnel, benchmark and service-activation gates.
+certification program, tunnel, benchmark and service-activation gates.
 
 Persist enough private local enrollment state to recover an interrupted
 attempt. A lost registration response, process restart or retry must recover
@@ -384,7 +379,7 @@ Implementation and acceptance tasks:
 - [ ] Test pending, denied, expired, cancelled and replayed authorization.
 - [ ] Test restart/resume without duplicate enrollment and keep credentials out of logs.
 - [ ] Complete ARM download from hyperme.sh through browser approval to enroll
-  AGX-1 against the rebuilt test plane; repeat acceptance on the N5 MAX.
+  the AGX against the rebuilt test plane; repeat acceptance on the N5 MAX.
 
 These tasks span the host installer/agent, Panopticon authorization, lease and
 metering services, pricing, and hyperme.sh interfaces. An installer flag alone
@@ -525,7 +520,7 @@ build record.
   delivery contract with the required access policy.
 - [ ] Provision independent bootstrap trust, self-update and reviewed install.
 
-No public storage access or invented service endpoint is assumed. The configured
+No public storage access or extra service endpoint is assumed. The configured
 HTTPS root must serve the existing publisher layout. Discovery fetches files
 only and does not execute the CLI, enroll a host or modify system services.
 
@@ -538,7 +533,7 @@ box arrives; refine profile names from measured hardware.
 
 | Planned target | Intended package family | Validation focus |
 | --- | --- | --- |
-| AGX 64 / AGX-1 | Linux arm64 | JetPack/L4T compatibility, UMA allocation, ARM bootstrap and reenrollment |
+| AGX Orin 64GB | Linux arm64 | JetPack/L4T compatibility, UMA allocation, ARM bootstrap and reenrollment |
 | Seeed J4012 Jetson | Linux arm64 | Actual module/RAM, admission minimums, power/thermal constraints and vendor stack |
 | MINISFORUM N5 MAX, Ryzen AI Max+ 395, 128 GB | Linux amd64 (x86-64) | AMD GPU/runtime, UMA limits, preserve NAS storage and services |
 | Planned 495 system, 192 GB | Linux amd64 if detected x86-64 | Confirm exact processor/GPU and vendor-supported runtime before profile selection |
@@ -663,7 +658,7 @@ exit 1 means blocked and exit 2 means invalid arguments.
 ./hypermesh-host plan-setup --list-profiles
 ./hypermesh-host plan-setup --memory-mode uma --uma-gib 40 \
   --model-dir /existing/model/cache \
-  --aiuditor-check-url https://YOUR_AIUDITOR/ITS_READINESS_PATH \
+  --aiuditor-check-url https://READINESS_HOST/READINESS_PATH \
   --profile auto --headless > setup-plan.json
 ```
 
@@ -831,7 +826,7 @@ preservation, plus exact installer identity and invalid artifact selection.
 The remaining installation task must bind this verified agent, the rollback
 helper, environment configuration and mode-specific systemd units into the
 approved plan and journal. Agent/service installation is still incomplete;
-this acquisition step does not make AGX-1 ready for acceptance.
+this acquisition step does not make the AGX ready for acceptance.
 
 ## Agent first installation
 
@@ -889,7 +884,7 @@ reloaded. Their activation condition requires
 `/var/lib/hypermesh/activation-approved`, which this command never creates.
 Do not manually create it to skip onboarding. Device authorization, fresh-key
 enrollment, authenticated connectivity/benchmark gating and activation remain
-the next task; this stage alone is not an AGX-1 acceptance run.
+the next task; this stage alone is not an AGX acceptance run.
 
 Tests cover kernel/userspace payloads, exact plan binding, unsafe inputs,
 private journal persistence, interruption/retry, changed existing files,
@@ -1039,7 +1034,7 @@ individual requests have 15-second whole-response deadlines and 1 MiB limits,
 with a 25-minute command bound covering login and approval. Transient API errors
 stop with retained state; rerun the exact command to reauthenticate and recover.
 Redirects are refused. Every returned request, tenant, hardware report, key
-fingerprint, approval path and device identity must match the local request.
+fingerprint, approval record and device identity must match the local request.
 Tenant UUIDs are canonicalized to lowercase on the wire, and configured API URL
 path prefixes are preserved, matching the installed agent plan.
 
@@ -1071,8 +1066,8 @@ Preserve private journals locally and never upload them as support logs.
 
 Success is `registered-inactive`: the dashboard device is paused and
 uncertified. No activation marker, service enable/start, certification result or
-selling state is created. The authenticated control-plane and AIuditor program checks are implemented below.
-WireGuard and certification execution still precede service activation. AGX-1 physical acceptance is
+selling state is created. The authenticated control-plane and certification-program checks are implemented below.
+WireGuard and certification execution still precede service activation. Physical AGX acceptance is
 still pending.
 
 Automated coverage includes TLS auth/session separation and response binding,
@@ -1091,7 +1086,7 @@ sudo ./hypermesh-host check-agent \
 sudo ./hypermesh-host onboarding-status --plan-sha AGENT_PLAN_SHA256
 ```
 
-This is an identity, protocol, AIuditor program and local preflight check. It requires the same
+This is an identity, protocol, certification program and local preflight check. It requires the same
 release-built installer and exact approved agent plan. It reads the saved private
 device identity under the shared installer lock, verifies installed payloads,
 inactive units and key/state files, then reruns current hardware, resource and
@@ -1116,19 +1111,19 @@ state; inactive tenants, retired hosts, device bans and changed registration
 bindings cannot be hidden behind the marketplace read cache. The check does not
 publish a heartbeat or make an offline machine appear alive.
 
-Output lists class availability, reported Path A/Path B state, scheduling holds,
-the AIuditor program result, and the remaining heartbeat, tunnel, activation and selling
+Output lists class availability, reported hardware-intake and certification state, scheduling restrictions,
+the certification-program result, and the remaining heartbeat, tunnel, activation and selling
 gates, with a next action for each. Current hardware intake or certification
 problems remain visible even when the HTTPS check succeeds. A reported green
 certificate does not skip remaining gates. The last heartbeat timestamp is
 historical evidence, not a fresh liveness claim.
 
 `check-agent` exits 0 when device-authenticated API compatibility, the strict
-AIuditor program gate and implemented local checks pass, 1 when a check or persistence fails,
+certification-program gate and implemented local checks pass, 1 when a check or persistence fails,
 and 2 for invalid arguments. **Exit 0 does not mean installation is complete or
 selling is allowed.** `activation_allowed` and `selling_allowed` remain false.
 Neither command creates an activation marker, starts/enables a service, runs a
-benchmark, queues a job, clears a hold or changes the host's sell posture.
+benchmark, queues a job, clears a scheduling restriction or changes the host's sell posture.
 
 The dated redacted status is stored at
 `/var/lib/hypermesh/installer/onboarding-PLAN_SHA256.json`, mode 0600. A new check
@@ -1155,7 +1150,7 @@ does not stand in for that execution or benchmark evidence.
 
 `support-bundle` exports one JSON file covering the selected prerequisite,
 agent installation, registration and onboarding journals. Use it after an
-interrupted or failed installation, or to share progress during AGX-1 acceptance.
+interrupted or failed installation, or to share progress during the AGX acceptance.
 It is a **historical journal summary**, not a fresh hardware/network/service
 check, proof of valid credentials, or authorization to activate/sell.
 
@@ -1226,24 +1221,24 @@ overwrite. Physical AGX/N5 acceptance remains pending. Repair/uninstall,
 tunnel and certification execution, activation, and live
 status presentation remain separate roadmap tasks.
 
-## Completed: authenticated AIuditor program gate
+## Completed: certification-program readiness check
 
-`check-agent` now requires `aiuditor_program_v1` from the plane. Update Panopticon
+`check-agent` now requires capability `aiuditor_program_v1` from the plane. Update the control plane
 before this host release; older planes without that capability cannot pass.
 There are no new installer flags or host-side service credentials. The saved
 device credential stays between the host and plane.
 
-The plane uses its configured AIuditor service token to check authoritative
+The plane uses its configured certification-service token to check authoritative
 role/writer metadata and read valid core-suite membership for this tenant and
 hardware class. Missing/unreachable service, rejected service credentials,
 a witness/wrong writer, an empty suite, malformed membership or crossed
 tenant/class data cannot be replaced by a locally seeded default.
 
-The existing `aiuditor` readiness gate becomes `passed` only for `ready`.
+The certification-program readiness check (gate id `aiuditor`) becomes `passed` only for `ready`.
 All other recognized states become `blocked` with a specific next action:
 
 - Configure the plane's `AIUDITOR_SERVICE_URL` and `AIUDITOR_INTERNAL_TOKEN`.
-- Check AIuditor availability and the plane-to-service network.
+- Check certification-program availability and the plane-to-service network.
 - Correct mismatched service authentication without rotating device keys.
 - Select the authoritative writer required by `AIUDITOR_REQUIRED_WRITER`.
 - Have a program operator configure the tenant/class certification suite.
@@ -1257,7 +1252,7 @@ no previous success is reused. Failed status persistence cannot emit success.
 `onboarding-status` shows the saved guidance, and `support-bundle` recognizes
 the new fixed failure code while preserving its redaction rules.
 
-Both plane-to-AIuditor requests share a ten-second maximum deadline and each
+Both plane-to-certification-service requests share a ten-second maximum deadline and each
 body is limited to 64 KiB. Redirects and arbitrary host-supplied URLs are not
 used. Raw upstream errors, service tokens and suite rows are not returned to
 the host. Protocol tests exercise missing/unknown capabilities and states,
@@ -1265,9 +1260,9 @@ and installer tests verify each blocked state persists actionable failure
 without activation or selling permission.
 
 A passed gate proves the plane could authenticate and read its configured
-program. It does **not** prove the host's direct AIuditor/WireGuard path,
+program. It does **not** prove the host's direct certification-service and WireGuard path,
 runtime support for that suite, a benchmark result or certification. The
-AIuditor may still need program configuration before AGX-1 acceptance.
+certification program may still need program configuration before the AGX acceptance.
 The one-shot heartbeat and WireGuard stages are documented below. Workload
 verification and controlled activation remain subsequent execution tasks.
 
@@ -1320,16 +1315,16 @@ sudo ./hypermesh-host onboarding-status --plan-sha AGENT_PLAN_SHA256
 Without `--heartbeat` or `--wireguard`, `check-agent` remains read-only on the plane. With the
 flag it still verifies private registration state, exact installed payloads,
 inactive services and fresh resource/hardware prerequisites first. It performs
-the existing device/AIuditor check and requires `onboarding_heartbeat_v1` before
+the existing device and certification-program check and requires `onboarding_heartbeat_v1` before
 writing. Upgrade the plane first; an older plane produces an actionable error.
 
 The installer saves heartbeat intent before sending, rechecks local identity
 and inactive service configuration, measures Linux `/proc/uptime`, and sends
 one authenticated HTTPS observation. No owner-supplied uptime, fabricated
 device identity, browser token or enrollment retry is used. The plane repeats
-AIuditor readiness and revalidates live SQL authority immediately before commit.
-Only paused, never-certified, non-lab hosts with no loaded model or hold can
-use this pre-activation path. Resolve holds in the dashboard rather than
+certification-program readiness and revalidates live SQL authority immediately before commit.
+Only paused, never-certified, non-lab hosts with no loaded model or scheduling restriction can
+use this pre-activation path. Resolve scheduling restrictions in the dashboard rather than
 deleting state or using this command to force the host online.
 
 A successful receipt must bind the fresh nonce, registered tenant/device/key,
@@ -1351,13 +1346,13 @@ Reading saved status does not refresh it. A later ordinary `check-agent`
 clears the previous local heartbeat acknowledgment; any last-heartbeat time
 from the plane is historical. An inconsistent journal cannot show a passed
 heartbeat without its committed receipt. This is not proof of a continuously
-running agent, a WireGuard handshake, direct AIuditor reachability or completed
+running agent, a WireGuard handshake, direct certification-service reachability or completed
 GPU/model certification.
 
 Automated tests cover explicit opt-in, durable-before-send ordering, older
 planes, local/program failures, lost responses, cancellation, persistence
 failures, measured uptime bounds, protocol binding and redaction. Physical
-AGX-1 acceptance remains pending. WireGuard handshake/data-path checks are now
+the AGX acceptance remains pending. WireGuard handshake/data-path checks are now
 implemented below; certification execution and enrollment-gated service
 activation remain pending.
 
@@ -1373,7 +1368,7 @@ sudo ./hypermesh-host onboarding-status --plan-sha AGENT_PLAN_SHA256
 
 `--heartbeat` may be combined with this flag. All installation, private identity,
 inactive-unit, resource and program checks still run first. Intent is durably
-recorded before allocating an idle peer. The plane refuses holds, active/selling
+recorded before allocating an idle peer. The plane refuses a scheduling restriction, active/selling
 or already-certified hosts, and reuses the registered public key and peer on
 retries. Revision-3 prerequisite plans add iproute2 and iputils-ping; userspace
 WireGuard additionally requires wireguard-go. Missing tools require reviewing
@@ -1381,7 +1376,7 @@ and approving a new setup plan, not bypassing package approval.
 
 The probe creates a temporary interface named `hm<first-12-plan-digest>`, using
 the approved kernel/userspace mode. Only a route to the gateway overlay address
-10.77.0.1/32 is installed. The default/LAN route and existing hypermesh interface
+<gateway-address>/32 is installed. The default/LAN route and existing hypermesh interface
 are not replaced. The userspace process runs as a bounded child, not a service.
 Success requires a fresh handshake with the allocated server key and an ICMP
 echo through that interface. HTTPS success alone cannot pass this gate.
@@ -1395,7 +1390,7 @@ An interruption before the ownership/key markers are complete also requires
 inspection. Preserve registration credentials; do not re-enroll to fix networking.
 
 The gateway must synchronize the idle peer, expose the configured UDP endpoint,
-and answer ICMP on 10.77.0.1. A timeout calls out those checks; inconsistent gateway
+and answer ICMP on <gateway-address>. A timeout calls out those checks; inconsistent gateway
 keys or an exhausted pool require platform repair. The command is bounded by
 the existing three-minute deadline with a 90-second local probe maximum.
 Neither success nor failure starts agent services, grants certification or enables
@@ -1403,7 +1398,7 @@ selling. The idle plane peer persists for later activation and is revoked by hos
 retirement. A later ordinary check clears the saved connectivity success.
 
 Protocol, allocation/retry, failure, cleanup, timestamp and journal checks are
-automated. Physical AGX-1/N5 validation, AIuditor inference and workload
+automated. Physical AGX and N5 validation, certification inference and workload
 compatibility, certification execution, and service activation remain pending.
 
 
@@ -1459,10 +1454,10 @@ check. No raw child output, credentials or inherited environment is exported.
 
 Passing proves allocation, a full memory fill and sampled readback at that time.
 It does not prove exhaustive memory integrity, GPU compute correctness, actual
-model/context fit, AIuditor inference, certification or readiness to sell.
+model/context fit, certification inference, certification or readiness to sell.
 The runtime calls follow the [CUDA driver memory API](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__MEM.html)
 and [HIP memory API](https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/group___memory.html).
-Tests use simulated drivers and bounded CPU-only child processes; actual AGX-1
+Tests use simulated drivers and bounded CPU-only child processes; actual AGX
 and N5 GPU evidence must still be collected.
 
 ## Remaining installation-to-ready sequence
@@ -1471,12 +1466,12 @@ Authenticated acquisition and controlled certification/activation are implemente
 see [the operator and host procedure](authenticated-certification.md). Complete
 the remaining stages without treating simulated tests as hardware acceptance:
 
-1. Provision reviewed catalog pins and a measured AIuditor class envelope, then
-   perform real AGX-1 download, registration, context certification and paused startup.
+1. Provision reviewed catalog pins and a measured class envelope, then
+   perform a real AGX download, registration, context certification and paused startup.
 2. Add enrolled-host maintenance reboot/resume and repair/uninstall. Live status and pre-enrollment prerequisite reboot/resume are implemented.
    Installer self-update still needs its own reviewed transition.
 3. Complete independent website bootstrap trust and guided public download flow.
-4. Run the full recovery/installation acceptance suite and the AGX-1 clean install
+4. Run the full recovery/installation acceptance suite and the AGX clean install
    through hyperme.sh. N5 hardware-class admission and physical acceptance remain
    required, as do Renesas/Rockchip runtime support and physical tests.
 
@@ -1484,7 +1479,7 @@ macOS and additional workload operating modes remain deferred as approved.
 
 ### Completed: pinned certification workload execution (2026-10-01)
 
-Catalog-scoped `path_b` and `compact_cert` jobs now require the plane's
+Catalog-scoped certification jobs and `compact_cert` jobs now require the plane's
 explicit catalog ID, OCI `repo@sha256`, GGUF `file_hash`, and NVIDIA runtime.
 The agent hashes the selected cached/configured model before and after the
 sample, starts that exact image with that catalog alias on loopback, and removes
@@ -1496,13 +1491,13 @@ the existing approved `lab_pull`/model-cache path must supply the pinned file.
 One measured execution produces at most one catalog scorecard. A mutable image
 tag, the default Llama catalog, and an unrelated running endpoint are no longer
 used to manufacture benchmark identity. Compact certification reports failure
-if the plane does not accept its scorecard. An unscoped legacy `path_b` job
+if the plane does not accept its scorecard. An unscoped legacy certification job
 retains its telemetry behavior but cannot publish a catalog benchmark.
 
 Deploy the matching Panopticon job response extension before this host release.
 It adds current catalog `file_hash`, `size_bytes` and the admitted Jetson backend
 to authenticated dispatch. Null source pins stay null; populate reviewed catalog
-metadata rather than inventing a seed hash. This is a dispatch snapshot, not an
+metadata rather than filling in a seed hash. This is a dispatch snapshot, not an
 immutable per-job attestation across retries. Hardware tests remain pending.
 
 **Current status:** approved local execution, full-context checks, authenticated
@@ -1514,15 +1509,15 @@ runtime correctly. Selling remains a separate controlled owner action.
 
 ### Completed: approved local workload preflight (2026-10-01)
 
-The Linux NVIDIA installer now exposes the pinned runner without starting the
+The Linux NVIDIA installer now exposes the digest-locked runner without starting the
 agent or requiring enrollment. This is an operator-facing stage for a **local,
 reviewed model**; authenticated acquisition now has its own reviewed flow in
 [authenticated certification](authenticated-certification.md). It does not replace the public website's eventual guided flow.
 
 1. Finish the prerequisite plan and place the reviewed GGUF in that plan's
    models directory. Obtain the model SHA-256 and OCI runtime digest from the
-   reviewed catalog/release metadata. Do not derive a trusted pin from an
-   untrusted download and treat that as verification.
+   reviewed catalog/release metadata. Do not treat a hash from an
+   untrusted download as that reviewed digest.
 2. Generate a read-only workload plan (no Docker invocation or download):
 
    ```sh
@@ -1575,7 +1570,7 @@ and individual Docker operations two minutes, with a separate 30-second cleanup
 budget. Kernel/filesystem stalls retain normal OS limitations.
 
 **Limits:** this measures a short completion at the requested runtime context
-setting. It does not prove full-context fit, sustained throughput or AIuditor
+setting. It does not prove full-context fit, sustained throughput or certification program
 certification. Full-context checks, recovery export and authenticated certification are
 implemented in the following sections; sustained benchmarks and physical AGX/N5
 acceptance remain pending. HIP and macOS workload preflight are not enabled.
@@ -1697,7 +1692,7 @@ remain open. See [the recovery procedure](authenticated-certification.md#read-on
 `host-status --plan certification-plan.json` now combines read-only local
 installation/identity/activation checks, reboot and systemd observations, and
 the existing authenticated plane snapshot. It reports individual blockers and
-next actions for intake, class, certification, holds, AIuditor and heartbeat
+next actions for intake, class, certification, scheduling restrictions, certification program and heartbeat
 freshness. It detects a changed service invocation across network I/O and binds
 historical certification evidence to the selected run and model pins.
 
@@ -1709,7 +1704,7 @@ heartbeat anomalies, identity/evidence binding, reboot markers, locking and CLI
 privacy. See [live host status](authenticated-certification.md#live-host-status).
 
 Enrolled-host maintenance reboot, repair/uninstall, signed-update reconciliation against the
-original installation, physical AGX-1 acceptance and sustained workload checks
+original installation, physical AGX acceptance and sustained workload checks
 remain open. This diagnostic does not replace those operations.
 
 ### Completed: approved prerequisite reboot and verified resume (2026-10-02)
@@ -1739,7 +1734,7 @@ Tests cover durable ordering, explicit retry, lost replies, changed-machine/boot
 rejection, postflight failures, unsafe journals, credential-free exports and
 inhibitor-preserving command construction. See [the operator procedure](setup-reboot.md).
 
-Physical reboot/SSH reconnection and AGX-1 acceptance remain unverified.
+Physical reboot/SSH reconnection and the AGX acceptance remain unverified.
 Enrolled-host draining and maintenance reboot, unattended boot-time continuation,
 driver/kernel upgrade policy, repair/uninstall and signed-update reconciliation
 remain separate unfinished tasks.
@@ -1775,7 +1770,7 @@ other hardware-backend certification. Those remain separate acceptance/future wo
 - [x] Prerequisite approval, reboot checkpoint/resume, signed service install, browser device login/registration, tunnel/heartbeat, model certification and paused activation in order.
 - [x] Public network metadata removes manual marketplace UUID entry; network selection stays separate from software channel.
 - [x] Verifier explains Python/GnuPG requirements, records release context and prints the next command.
-- [ ] Physical guided clean-install and reboot/interruption acceptance on AGX-1.
+- [ ] Physical guided clean-install and reboot/interruption acceptance on the AGX.
 
 The wizard delegates hardware, ownership, certification and mutation decisions
 to the existing validated operations; its progress cursor never authorizes selling.
@@ -1915,7 +1910,7 @@ reviewed update instead of silently replacing that executable or trust material.
 ### Certification planning after a successful tunnel check
 
 A successful registration, HTTPS heartbeat and WireGuard probe do not establish
-a certification baseline. The platform also needs an AIuditor class envelope
+a certification baseline. The platform also needs an class envelope
 from reviewed lab measurements for the selected hardware class and suite model,
 plus matching immutable model source, size, file hash, runtime image and context
 pins. Suite bootstrap provisions membership only; it cannot restore measurement
@@ -1937,7 +1932,7 @@ the rebuilt test plane; hardware intake approval and activation remain pending.
 
 Implemented an operator-authorized `qualify-host --run-id UUID` path for a registered
 inactive AGX/Jetson host. It performs three real pinned-model context and decode
-tests, preserves failed attempts, and submits evidence for separate AIuditor
+tests, preserves failed attempts, and submits evidence for separate certification program
 publication. See [initial lab qualification](lab-qualification.md). Physical AGX
 execution and operator publication remain pending; normal certification and owner
 activation follow afterward. Sustained-load packs and other runtime profiles remain
@@ -1972,7 +1967,7 @@ Live AGX continuation across an installer upgrade remains to be verified.
 ### Re-enrollment and machine signing identities
 
 Explicit re-enrollment stops old workload/tunnel activity and archives the local
-machine signing checkpoint and its AIuditor delegations before exchanging the new
+machine signing checkpoint and its certification program delegations before exchanging the new
 enrollment token. Private history remains on disk; the replacement enrollment does
 not reuse those keys or cached tokens. An unsafe checkpoint blocks the exchange.
 The API client also checks the signing checkpoint against its current device ID,
@@ -1981,7 +1976,7 @@ reuse the active enrollment.
 
 On the plane, re-enrolling (enroll token or guided registration) under the same
 host name for the same owner retires the old install automatically: it is archived,
-its leases and tunnels end, and every configured AIuditor authority revokes its
+its leases and tunnels end, and every configured credential authority revokes its
 signing key, management and contract credentials and host connection. If no
 authority can be reached the enrollment fails with a retryable error and the old
 install stays active. An enroll token never replaces a browser-registered install,
@@ -1996,4 +1991,4 @@ holding the retired enrollment cannot recreate its identity. A model host that
 never created a checkpoint (an older enroll-token install) also binds a signing
 key after re-enrollment; supervisor hosts keep their enrollment secret. Binding/renewal keeps a 15-second maximum HTTP timeout
 even when the installer injects a zero-timeout client, and preserves shorter client
-timeouts. The matching Panopticon/AIuditor support must deploy before this build.
+timeouts. The matching Panopticon and the certification program support must deploy before this build.

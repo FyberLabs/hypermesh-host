@@ -385,7 +385,7 @@ func activateCertifiedMode(ctx context.Context,p certificationPlan,identity regi
  if err=startCertified(ctx,j,*permit.PermitExpiresAt,d);err!=nil{return err}
  // A certified host sells as soon as its service is verified. A maintenance
  // resume releases only a guard it wrote itself, for example on a retry after
- // the hold was already removed.
+ // the maintenance pause was already removed.
  if resume&&!guarded{return nil}
  return releaseActivationSell(ctx,diagnostic)
 }

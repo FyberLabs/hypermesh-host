@@ -1680,7 +1680,7 @@ func dockerNameArg(args []string) string {
 }
 
 func TestLeaseStopThenStartFreesExitedName(t *testing.T) {
-	// Same leftover as AGX64-1 SWAP: stop left hypermesh-<lease_id> Exited,
+	// Same leftover as a stopped lease: docker stop left hypermesh-<lease_id> Exited,
 	// next lease_start with that lease_id hit docker exit 125.
 	const leaseID = "22b3f0d7-f4dc-4423-8250-58449f15c61d"
 	name := runtime.ContainerName(leaseID)
@@ -1997,7 +1997,7 @@ func TestHeartbeatLogsNVIDIABackend(t *testing.T) {
 	}
 	for _, leak := range []string{"tok/s", "TOPS", "tokens/sec"} {
 		if strings.Contains(out, leak) {
-			t.Fatalf("do not invent %s: %q", leak, out)
+			t.Fatalf("unexpected %s: %q", leak, out)
 		}
 	}
 }

@@ -104,7 +104,7 @@ func TestHeartbeatCadenceDuringLongJob(t *testing.T) {
 		}
 	}
 	// The success path waits exactly HeartbeatEvery and does not take the
-	// failure-hold wake. Driving that wait from the test counts beats while
+	// failure-backoff wake. Driving that wait from the test counts beats while
 	// fetch is still blocked, without a wall-clock sleep that loses the race
 	// when heartbeat work (health, disk, cache) exceeds a few intervals.
 	type hbWaitCall struct {

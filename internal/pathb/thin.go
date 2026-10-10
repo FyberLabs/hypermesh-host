@@ -2,8 +2,8 @@
 //
 // Both collect image hash / uptime / thermal when available. If a local
 // OpenAI-shaped completions endpoint is up, they POST a pinned probe and
-// require a real choice. They do not invent a host-scorecard, an inference
-// bench, or tokens/sec.
+// require a real choice. They do not report a host scorecard, an inference
+// benchmark, or tokens/sec.
 //
 // The probe text and the completion text are never logged and never
 // placed in the job result body.
@@ -220,7 +220,7 @@ type completionResponse struct {
 // complete POSTs the pinned probe. It never returns the prompt or the
 // completion text (success is a bool). Errors are reachability only.
 // Probe reports whether the local completions endpoint answered.
-// It does not invent a sample. The job result stays separate.
+// It does not fabricate a sample. The job result stays separate.
 func (r Runner) Probe(ctx context.Context) bool {
 	ok, _, _, _ := r.complete(ctx)
 	return ok

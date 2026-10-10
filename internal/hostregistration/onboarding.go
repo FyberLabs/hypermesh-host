@@ -84,7 +84,7 @@ func (c *Client) checkOnboarding(s OnboardingSnapshot,r Request,q onboardingRequ
   return fmt.Errorf("incompatible onboarding readiness response")
  }
  if !oneOf(s.AIuditorProgramState,"ready","unconfigured","unavailable","unauthorized","writer_mismatch","missing_suite","invalid_response") {
-  return fmt.Errorf("missing or unrecognized AIuditor program state; update the plane and retry")
+  return fmt.Errorf("missing or unrecognized certification program state; update the plane and retry")
  }
  if !oneOf(s.PathAState,"accepted","pending","rejected","unknown")||
  !oneOf(s.PathBState,"green","never-run","suspended","unknown")||

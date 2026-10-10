@@ -10,9 +10,9 @@
 # Runtime alternative (copy a prebuilt binary only; not this recipe):
 #   nvcr.io/nvidia/cuda:13.2.1-runtime-ubuntu24.04
 # Matches JetPack 7.2 host CUDA 13.2.1. Tag was registry-listed
-# (linux/amd64 + linux/arm64). Not an on-box pull; unverified-until-AGX-build.
+# (linux/amd64 + linux/arm64). Not an on-box pull; not yet verified by an on-box build.
 #
-# Build this ON AGX64-1 after the JetPack 7.2.1 / L4T R39.2.1 overlay:
+# Build this ON the AGX after the JetPack 7.2.1 / L4T R39.2.1 overlay:
 #   sudo docker build --platform linux/arm64 \
 #     -t ghcr.io/fyberlabs/hypermesh-test .
 # Docker 29 Buildx does not accept --runtime=nvidia at build. CDI
@@ -66,7 +66,7 @@ WORKDIR /src
 # is build/bin (same dir as llama-server). cmake --install of the whole
 # tree also install()s every tool RUNTIME that was not built
 # (--target llama-server only), so copy the shared libs cmake actually wrote.
-# AGX64-1 live image that only installed the binary then rm -rf /src had
+# the AGX live image that only installed the binary then rm -rf /src had
 # empty /usr/local/lib and Exit 127 (libllama.so not found) — keep the copy.
 # v0.5.0 vs b4689 build changes:
 #   - llama-server now also links shared libllama-server-impl.so,

@@ -31,7 +31,7 @@ func NewMetal() *Metal {
 }
 
 // MetalStartArgs is the host llama-server argv. Metal is the llama.cpp
-// default on Apple Silicon. No CUDA flags. No invented -ngl tok/s.
+// default on Apple Silicon. No CUDA flags. No -ngl tok/s flag.
 func MetalStartArgs(spec Spec, bin string) []string {
 	if strings.TrimSpace(bin) == "" {
 		bin = "llama-server"
@@ -53,7 +53,7 @@ func MetalStartArgs(spec Spec, bin string) []string {
 
 // Start execs llama-server for a cert-pinned repo@digest. It does not
 // pull GHCR, does not start docker --runtime=nvidia, and does not
-// invent a GGUF or a completion. A later slice wires the local weights.
+// supply a GGUF or a completion.
 func (m *Metal) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if strings.TrimSpace(spec.LeaseID) == "" {
 		return nil, ErrNoLeaseID

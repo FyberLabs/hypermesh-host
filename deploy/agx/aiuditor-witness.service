@@ -1,6 +1,6 @@
 [Unit]
-Description=AIuditor witness sidecar (hydrate only)
-Documentation=https://github.com/FyberLabs/panopticon/tree/main/products/aiuditor/deploy/witness
+Description=Safety-screening witness sidecar (hydrate only)
+Documentation=https://github.com/FyberLabs/hypermesh-host
 After=network-online.target docker.service
 Wants=network-online.target
 

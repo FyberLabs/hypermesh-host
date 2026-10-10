@@ -234,9 +234,9 @@ func certificationPlanConflict(body io.Reader) string {
  case "Configure matching reviewed model source, size, hash, runtime and context pins":
   return "the platform onboarding model is not fully configured; the program operator must configure consistent immutable download source, size, hash, runtime image and context pins, then retry; no new registration is needed"
  case "Configure an authenticated AIuditor certification program", "AIuditor certification program is not ready":
-  return "the platform AIuditor certification program is unavailable or unconfigured; the program operator must restore its authenticated program and suite configuration, then retry"
+  return "the platform certification program is unavailable or unconfigured; the program operator must restore its authenticated program and suite configuration, then retry"
  case "Resolve intake, certification, hold or selling state before onboarding":
-  return "the host is not in an eligible inactive certification state; review hardware intake, suspension, scheduling hold, loaded workloads and selling state in the dashboard"
+  return "the host is not in an eligible inactive certification state; review hardware intake, suspension, scheduling restriction, loaded workloads and selling state in the dashboard"
  case "Reconcile existing lease or agent jobs before inactive certification":
   return "the host has an outstanding lease or agent job; reconcile that workload before running inactive certification"
  case "Certification approval expired; prepare a fresh run":

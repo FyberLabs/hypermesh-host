@@ -131,7 +131,7 @@ func runSetupPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	mode := flags.String("memory-mode", "", "uma or discrete")
 	directory := flags.String("model-dir", "", "existing model-cache directory")
 	allocation := flags.Int64("uma-gib", 0, "optional diagnostic allocation in GiB; omit for minimum-only installation")
-	address := flags.String("aiuditor-check-url", "", "HTTPS readiness URL")
+	address := flags.String("aiuditor-check-url", "", "readiness URL (HTTPS)")
 	profile := flags.String("profile", "auto", "auto or a profile ID from --list-profiles")
 	wireguardMode := flags.String("wireguard-mode", "kernel", "kernel (default) or userspace; only userspace requires wireguard-go")
 	headless := flags.Bool("headless", false, "propose multi-user.target for the next boot; still requires later approval")
@@ -225,7 +225,7 @@ func buildSetupPlan(ctx context.Context, p Plan, requested, wireguardMode string
 		Pending: []string{"Approve a complete plan and revalidate its inputs immediately before applying",
 			"Bind verified agent, rollback helper, configuration and service payloads in the apply milestone",
 			"Validate this candidate profile on hardware, including actual model/context fit",
-			"Complete device authorization, authenticated AIuditor checks and enrollment before selling"},
+			"Complete device authorization, authenticated certification-program checks and enrollment before selling"},
 		RebootPolicy: "No reboot is executed. Kernel and driver transitions require a separately validated profile."}
 	// Total bound as well as per-command bounds.
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)

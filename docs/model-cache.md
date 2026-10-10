@@ -24,7 +24,7 @@ protected. The last-downloaded file alone is not permanently protected. Owners
 can add canonical `sha256:` hashes to `pinned_hashes` in the root-owned policy to
 keep chosen models cached. A cache pin does not start a live inference service.
 Pending reservations retain the existing bounded TTL and clear at lease start,
-stop, cancellation or expiry. Temporary benchmark workloads hold the cache lock
+stop, cancellation or expiry. Temporary benchmark workloads keep the cache lock
 while running and cleaning up.
 
 All acquisition paths use the same cache index and quota. Installer and agent

@@ -166,8 +166,8 @@ func supportOnboarding(dir, sha string) supportStage {
 	case "local_identity": action = "Inspect changed installation or identity files locally; preserve registration and keys."
 	case "local_preflight": action = "Run plan-setup to inspect current hardware, resource and prerequisite blockers."
 	case "plane_check": action = "Check the deployed onboarding API and network connection; retry without deleting credentials."
-	case "aiuditor_program": action = "Check the plane AIuditor configuration, service authentication and tenant/class suite; rerun check-agent for a specific blocker."
-	case "heartbeat": action = "Heartbeat is unconfirmed; check the plane and dashboard holds, then rerun check-agent --heartbeat with the same approved plan and identity."
+	case "aiuditor_program": action = "Check the plane certification-program configuration, service authentication and tenant/class suite; rerun check-agent for a specific blocker."
+	case "heartbeat": action = "Heartbeat is unconfirmed; check the plane and dashboard scheduling restrictions, then rerun check-agent --heartbeat with the same approved plan and identity."
 	case "wireguard": action = "Check gateway peer allocation and UDP/overlay reachability; rerun check-agent --wireguard with the same approved plan and identity."
 	case "status_persistence": action = "Check disk space and state-directory permissions, then rerun check-agent."
 	}

@@ -40,13 +40,13 @@ func runPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	mode := flags.String("memory-mode", "", "uma or discrete")
 	directory := flags.String("model-dir", "", "existing model-cache directory")
 	allocation := flags.Int64("uma-gib", 0, "optional diagnostic allocation in GiB; omit for minimum-only installation")
-	address := flags.String("aiuditor-check-url", "", "explicit HTTPS readiness URL; no credentials or query parameters")
+	address := flags.String("aiuditor-check-url", "", "readiness URL; HTTPS, no credentials or query parameters")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp { return 0 }
 		return 2
 	}
 	if flags.NArg() != 0 || validateEndpoint(*address) != nil {
-		fmt.Fprintln(diagnostic, "provide --aiuditor-check-url as an HTTPS URL without credentials, query or fragment; positional arguments are not accepted")
+		fmt.Fprintln(diagnostic, "provide the readiness URL with --aiuditor-check-url as HTTPS without credentials, query or fragment; positional arguments are not accepted")
 		return 2
 	}
 	var resourceJSON bytes.Buffer
@@ -54,7 +54,7 @@ func runPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 		"--uma-gib", strconv.FormatInt(*allocation, 10)}, &resourceJSON, diagnostic, resources)
 	if code == 2 { return 2 }
 	p := Plan{SchemaVersion: 1, Blockers: []string{}, Pending: []string{
-		"Verify AIuditor identity and enrollment protocol compatibility",
+		"Verify readiness-service identity and enrollment protocol compatibility",
 		"Validate GPU architecture, runtime allocation limits, model fit and OS/runtime memory headroom",
 		"Select a tested versioned OS/kernel/driver profile and signed installer release",
 		"Review exact package, headless, service and reboot changes before approving installation",
@@ -112,11 +112,11 @@ func probeEndpoint(ctx context.Context, address string, client *http.Client) err
 	response, err := client.Do(req)
 	if err != nil {
 		// Do not echo URLs, proxy credentials or server response bodies.
-		return fmt.Errorf("AIuditor endpoint unreachable: check DNS, TLS trust, network access and readiness URL")
+		return fmt.Errorf("readiness endpoint unreachable: check DNS, TLS trust, network access and readiness URL")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("AIuditor readiness returned HTTP %d; check the configured readiness endpoint", response.StatusCode)
+		return fmt.Errorf("readiness check returned HTTP %d; check the configured readiness endpoint", response.StatusCode)
 	}
 	return nil
 }

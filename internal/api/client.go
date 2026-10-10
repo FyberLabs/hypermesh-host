@@ -4,8 +4,8 @@
 //
 // After enroll, device routes send Authorization: Bearer <device_secret>
 // and X-Tenant-ID, with device_id in the body or query as a cross-check.
-// This package does not invent endpoints beyond the fixed agent shapes
-// plus the optional platform enroll-token helper.
+// Endpoints are the fixed agent shapes plus the optional platform
+// enroll-token helper.
 package api
 
 import (
