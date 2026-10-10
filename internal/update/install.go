@@ -34,6 +34,12 @@ type FS interface {
 // installMu stops retention from removing a file the installer is writing.
 var installMu sync.Mutex
 
+// lastInstalledBackup is the rollback file of the newest install in this
+// process. It is guarded by installMu. The marker for that install is written
+// after the lock is released, so a confirmation for an earlier marker must
+// still keep this file.
+var lastInstalledBackup string
+
 // InstallResult is the backup path, empty when dest did not exist.
 type InstallResult struct {
 	Backup string
@@ -107,6 +113,7 @@ func performInstallLocked(fs FS, dest string, payload []byte, previous string) (
 	}
 	note("rename " + dest + " " + backup)
 	res.Backup = backup
+	lastInstalledBackup = backup
 	if err := fs.Rename(tmp, dest); err != nil {
 		return res, err
 	}

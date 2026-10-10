@@ -117,7 +117,8 @@ func pruneAfterInstall(fs FS, dest string, pins []string, log *slog.Logger) {
 }
 
 // pruneAfterConfirm runs after a heartbeat confirms the pending update.
-// pin is the marker backup and is always kept. runningBuild is this
+// pin is the marker backup and is always kept, as is the backup of any later
+// install in this process whose marker is not written yet. runningBuild is this
 // process's build. A non-positive value does not delete update-bad.
 func pruneAfterConfirm(fs FS, dest, pin, stateDir string, runningBuild int, log *slog.Logger) {
 	if fs == nil {
@@ -128,6 +129,10 @@ func pruneAfterConfirm(fs FS, dest, pin, stateDir string, runningBuild int, log 
 	var pins []string
 	if strings.TrimSpace(pin) != "" {
 		pins = append(pins, pin)
+	}
+	if strings.TrimSpace(lastInstalledBackup) != "" {
+		// A newer install may not have written its marker yet.
+		pins = append(pins, lastInstalledBackup)
 	}
 	if strings.TrimSpace(dest) != "" {
 		pruneAfterInstall(fs, dest, pins, log)

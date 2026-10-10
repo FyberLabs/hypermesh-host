@@ -485,3 +485,41 @@ func TestWatchConfirmPrunesBackups(t *testing.T) {
 		}
 	})
 }
+
+func TestConfirmationKeepsBackupOfNewerInstallWithoutMarker(t *testing.T) {
+	t.Setenv(envKeepBackups, "1")
+	dir := t.TempDir()
+	state := t.TempDir()
+	dest := filepath.Join(dir, "hypermesh-agent")
+	base := time.Unix(1_700_000_000, 0)
+	write := func(path string, mt time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldBackup := dest + ".pre-1.0.0"
+	write(dest, base.Add(10*time.Hour))
+	write(oldBackup, base.Add(5*time.Hour))
+	write(dest+".pre-other", base.Add(8*time.Hour))
+	// The newer install renames the running binary, which keeps an old mtime.
+	// Its marker is not written yet when the earlier confirmation prunes.
+	res, err := Install(OSFS, dest, []byte("next"), "1.1.0", oldBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := base.Add(time.Hour)
+	if err := os.Chtimes(res.Backup, old, old); err != nil {
+		t.Fatal(err)
+	}
+	pruneAfterConfirm(OSFS, dest, oldBackup, state, 0, nil)
+	if _, err := os.Stat(res.Backup); err != nil {
+		t.Fatalf("newer install backup was pruned: %v", err)
+	}
+	if _, err := os.Stat(oldBackup); err != nil {
+		t.Fatalf("confirmed marker backup was pruned: %v", err)
+	}
+}
