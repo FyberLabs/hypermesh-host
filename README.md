@@ -71,7 +71,7 @@ The agent (`hypermesh-agent`, systemd unit `hypermesh-agent.service`) runs one l
 
 1. **Enroll** once with a one-time token (`POST /api/v1/hypermesh/agent/enroll`). The returned device secret is written to `$STATE_DIR/device.json` with mode 0600. The enroll token itself is never stored; only a hash is kept so a new token can be recognized.
 2. **Heartbeat** every 30 seconds, including build commit, sell state and host health.
-3. **Tunnel.** The agent generates a WireGuard key on the host (`/etc/wireguard/hypermesh.key`, mode 0600), registers only the public key, and applies the session the control plane allocates. The private key never leaves the host. Hosts without the WireGuard kernel module (the AGX Orin image) use `wireguard-go` through `hypermesh-wg.service`; see `HYPERMESH_WG_USERSPACE`.
+3. **Tunnel.** The agent generates a WireGuard key on the host (mode 0600), registers only the public key, and applies the session the control plane allocates. The private key never leaves the host. A fresh enrollment stores it at `$STATE_DIR/enrollment-keys/<token-hash>/hypermesh.key` (guided installs use `/var/lib/hypermesh/registration-keys/<request-id>/hypermesh.key`), and `device.json` records the directory. Only older state without a recorded directory uses `/etc/wireguard/hypermesh.key`. Hosts without the WireGuard kernel module (the AGX Orin image) use `wireguard-go` through `hypermesh-wg.service`; see `HYPERMESH_WG_USERSPACE`.
 4. **Jobs.** Every 15 seconds the agent pulls one job and posts a result. Job kinds are defined in [internal/api/types.go](internal/api/types.go):
 
    | Job | What the host does |
@@ -94,7 +94,7 @@ Each lease container is started with `--runtime=nvidia`, `--read-only`, `--cap-d
 
 ### Model cache
 
-Models are stored under `/var/lib/hypermesh/models`. Downloads are checked against the filesystem's free space, a 2 GiB floor (`HYPERMESH_DISK_FLOOR_BYTES`) and a cache budget (`HYPERMESH_MODEL_CACHE_MAX_BYTES`). The least recently used models are evicted to make room; the loaded model and models backing a lease are never evicted. See [docs/model-cache.md](docs/model-cache.md).
+Models are cached in a `cache` directory next to the file named by `HYPERMESH_GGUF_PATH`, `/var/lib/hypermesh/models/cache` by default. If setup selects another model directory, the cache follows it. Downloads are checked against the filesystem's free space, a 2 GiB floor (`HYPERMESH_DISK_FLOOR_BYTES`) and a cache budget (`HYPERMESH_MODEL_CACHE_MAX_BYTES`). The least recently used models are evicted to make room; the loaded model and models backing a lease are never evicted. See [docs/model-cache.md](docs/model-cache.md).
 
 ### Owner controls
 
@@ -205,6 +205,14 @@ deploy/                    systemd units, env examples and per-hardware notes
 docs/                      installer, certification, cache and release documents
 packaging/                 release scripts, bootstrap verifier, Homebrew formula
 ```
+
+## Release publishing
+
+Maintainer notes for the release workflow.
+
+The publisher logs in with `azure/login` and GitHub OIDC (`id-token: write`). There is no deployment environment. Two app registrations are used. A push to `main` logs in with repository variable `HYPERMESH_HOST_RELEASE_TEST_CLIENT_ID`. A `v*` tag logs in with `HYPERMESH_HOST_RELEASE_PROD_CLIENT_ID`. `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_STORAGE_ACCOUNT`, and `AZURE_STORAGE_CONTAINER` are repository variables. The test subject is `repo:FyberLabs/hypermesh-host:ref:refs/heads/main`. The prod subject is `repo:FyberLabs/hypermesh-host:ref:refs/tags/v*`. The test publisher writes `test/`, `channels/test.json`, and the lease blob `locks/release-publish`. It reads `channels/prod.json` and does not write that blob or anything under `prod/`. It installs `storage-blob-preview` 1.0.0b3 and sets blob tag `superseded=true` on older `test/` releases before the channel pointer moves. A tag failure does not move the pointer. A prod re-run whose `channels/prod.json` already names this release does not write the pointer again, and it reuses the GitHub Release asset when the name and sha256 match. The prod publisher writes `prod/`, `channels/prod.json`, and `locks/release-publish`. It reads `channels/test.json` and does not write that blob or anything under `test/`. Prod does not delete blobs and does not set blob tags. `locks/release-publish` is the only blob either publisher writes outside its channel.
+
+The signing key is read after that login from Key Vault `kv-fyber-hmhost` in resource group `rg-fyber`: `az keyvault secret show --vault-name kv-fyber-hmhost --name hypermesh-host-release-gpg-private-key --query value -o tsv` and the same command for `hypermesh-host-release-gpg-passphrase`. The passphrase is masked. Those three names are the defaults. Repository variables `HYPERMESH_RELEASE_KV_NAME`, `HYPERMESH_RELEASE_GPG_KEY_SECRET`, and `HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET` override them when set.
 
 ## Security
 
