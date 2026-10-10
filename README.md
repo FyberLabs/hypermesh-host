@@ -30,7 +30,7 @@ Other machines are not supported for hosting yet:
 ## Requirements
 
 - A supported host from the table above, running Ubuntu with systemd. The manual `hypermesh-host agx` path requires Ubuntu 24.04.5, kernel 6.8, CUDA 13.2.1 and L4T R39.2.1, and refuses to run otherwise.
-- At least 16 GiB of system memory and more than 12 GiB currently available to the GPU runtime. Model storage needs about 2.2 times that amount free (see [docs/host-installer.md](docs/host-installer.md) for how the checks work).
+- At least 16 GiB of system memory, with more than 12 GiB of it currently free, and more than 12 GiB currently free in the GPU runtime. The model filesystem needs at least 26.4 GiB free (2.2 times 12 GiB) for the minimum install; larger models are checked again when they are used (see [docs/host-installer.md](docs/host-installer.md) for how the checks work).
 - Docker Engine (`docker.io` or `docker-ce`) with the NVIDIA container runtime, installed before you start. Guided setup stops if Docker is missing. It proposes other missing packages (WireGuard tools, `wireguard-go` on hosts without the kernel module, and similar) and asks before installing them.
 - Python 3 and GnuPG, to run the release verifier.
 - Internet access to the control plane.
