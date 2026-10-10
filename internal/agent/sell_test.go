@@ -397,7 +397,7 @@ func TestLabSoakUnchangedAndNotUsedAsSell(t *testing.T) {
 	waitLoop(t, a, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return posted != nil
+		return posted != nil && hb.SellState != ""
 	})
 
 	mu.Lock()
