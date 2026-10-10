@@ -36,7 +36,10 @@ Both preflight paths require `/proc/meminfo` `MemTotal` within the documented
 pass. Docker's configured `runtimes.nvidia.path` must resolve to the installed
 executable found as `nvidia-container-runtime`, including valid symlink aliases.
 An installed wrapper with Docker pointing at `runc` or a missing executable
-does not pass.
+does not pass. Both paths query `docker info` through the local
+`unix:///var/run/docker.sock` socket and validate the daemon's effective runtime
+map. A stopped daemon, an inaccessible socket, or editing `daemon.json` without
+applying the configuration cannot produce a passing report.
 CUDA is read from toolkit `version.json` or `version.txt`; NVCC component build
 numbers do not identify the toolkit maintenance release. The clock check requires
 every online CPU and the GPU to have distinct minimum/maximum scaling limits,

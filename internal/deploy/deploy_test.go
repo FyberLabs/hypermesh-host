@@ -320,7 +320,9 @@ func TestCollectParsesAGXPins(t *testing.T) {
 		DockerJSON: docker,
 		Output: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			switch name {
-			case "uname":
+			case "docker":
+                return []byte(`{"nvidia":{"path":"nvidia-container-runtime"}}`), nil
+            case "uname":
 				return []byte("aarch64\n"), nil
 			case "systemctl":
 				return []byte("multi-user.target\n"), nil

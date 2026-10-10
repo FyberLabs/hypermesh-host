@@ -232,9 +232,8 @@ func Collect(ctx context.Context, s Source) Facts {
 	}
 	f.JetsonClocks = s.clocks(ctx)
 	f.Tegrastats = s.look("tegrastats")
-	f.Docker = s.look("docker")
+	f.Docker, f.NvidiaRuntime = s.dockerState(ctx)
 	f.WG = s.look("wg")
-	f.NvidiaRuntime = s.nvidiaRuntime()
 	return f
 }
 
@@ -257,7 +256,19 @@ func (s Source) cuda(ctx context.Context) string {
 	return ""
 }
 
-func (s Source) nvidiaRuntime() bool {
+func (s Source) dockerState(ctx context.Context) (bool, bool) {
+	b, err := s.output(ctx, "docker", "--host=unix:///var/run/docker.sock", "info", "--format", "{{json .Runtimes}}")
+	if err != nil {
+		return false, false
+	}
+	var runtimes map[string]struct{ Path string }
+	if json.Unmarshal(b, &runtimes) != nil || runtimes == nil {
+		return false, false
+	}
+	return true, s.runtimeMatches(runtimes["nvidia"].Path)
+}
+
+func (s Source) runtimeMatches(configured string) bool {
 	look := s.LookPath
 	if look == nil {
 		look = exec.LookPath
@@ -266,17 +277,6 @@ func (s Source) nvidiaRuntime() bool {
 	if err != nil || installed == "" {
 		return false
 	}
-	b, err := s.read(s.path(s.DockerJSON, "/etc/docker/daemon.json"))
-	if err != nil {
-		return false
-	}
-	var config struct {
-		Runtimes map[string]struct{ Path string }
-	}
-	if json.Unmarshal(b, &config) != nil {
-		return false
-	}
-	configured := config.Runtimes["nvidia"].Path
 	if configured == "" {
 		return false
 	}

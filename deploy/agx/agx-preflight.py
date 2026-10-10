@@ -320,7 +320,7 @@ def evaluate(facts: dict[str, Any]) -> dict[str, Any]:
         checks,
         "docker",
         facts.get("docker") is True,
-        "docker on PATH" if facts.get("docker") else "docker missing; workloads use docker --runtime=nvidia",
+        "local Docker daemon responded" if facts.get("docker") else "local Docker daemon query failed or returned invalid runtime information",
     )
     _check(
         checks,
@@ -379,7 +379,13 @@ def collect_facts(
         status_code, status_out, _ = run(["dpkg-query", "-W", f"-f=${{Status}}", name])
         packages[name] = status_code == 0 and status_out.strip() == "install ok installed"
     boot = read_text(BOOT_CONTROL)
-    daemon = read_text(DOCKER_DAEMON)
+    docker_code, docker_out, _ = run(["docker", "--host=unix:///var/run/docker.sock", "info", "--format", "{{json .Runtimes}}"])
+    try:
+        runtimes = json.loads(docker_out) if docker_code == 0 else None
+    except json.JSONDecodeError:
+        runtimes = None
+    docker_ready = isinstance(runtimes, dict)
+    daemon = json.dumps({"runtimes": runtimes}) if docker_ready else None
     runtime_bin = which("nvidia-container-runtime")
     memory_match = re.search(r"^MemTotal:\s+([0-9]+)\s+kB\s*$", read_text("/proc/meminfo") or "", re.M)
     return {
@@ -401,7 +407,7 @@ def collect_facts(
         "jetson_clocks_present": clocks_bin is not None,
         "jetson_clocks": clock_lock_state(read_text) if clocks_bin and clocks_code == 0 else None,
         "tegrastats": which("tegrastats") is not None,
-        "docker": which("docker") is not None,
+        "docker": docker_ready,
         "nvidia_runtime": nvidia_runtime_configured(daemon, runtime_bin, which),
         "wireguard_tools": which("wg") is not None,
         "llama_bench": which("llama-bench") is not None,

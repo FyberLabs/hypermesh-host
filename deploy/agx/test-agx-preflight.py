@@ -94,6 +94,26 @@ class PreflightTests(unittest.TestCase):
         self.assertIsNone(facts['jetson_clocks'])
         self.assertFalse(preflight.evaluate(facts)['ok'])
 
+    def test_docker_daemon_effective_runtimes(self):
+        for code, output, docker, runtime in [
+            (1, '{"nvidia":{"path":"nvidia-container-runtime"}}', False, False),
+            (0, 'invalid', False, False), (0, 'null', False, False),
+            (0, '{"runc":{"path":"runc"}}', True, False),
+            (0, '{"nvidia":{"path":"runc"}}', True, False),
+            (0, '{"nvidia":{"path":"nvidia-container-runtime"}}', True, True),
+        ]:
+            with self.subTest(code=code, output=output):
+                def run(cmd):
+                    if cmd[0] == 'docker':
+                        self.assertEqual(cmd, ['docker', '--host=unix:///var/run/docker.sock', 'info', '--format', '{{json .Runtimes}}'])
+                        return code, output, ''
+                    return 1, '', ''
+                facts = preflight.collect_facts(run=run,
+                    read_text=lambda _: '{"runtimes":{"nvidia":{"path":"nvidia-container-runtime"}}}',
+                    which=lambda name: '/usr/bin/' + name, uname=lambda: ('aarch64', '6.8'))
+                self.assertEqual(facts['docker'], docker)
+                self.assertEqual(facts['nvidia_runtime'], runtime)
+
     def test_clock_controls(self):
         def reader(changes):
             def read(path):
