@@ -577,3 +577,47 @@ func freeLocalPort(t *testing.T) string {
 	defer ln.Close()
 	return fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port)
 }
+
+// A docker that never answers inspect or logs must not hold lease_start past
+// HYPERMESH_LEASE_START_READY_TIMEOUT_S. Inspection and the log tail both
+// run under the readiness deadline.
+func TestLeaseStartHungDockerStaysWithinReadyTimeout(t *testing.T) {
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	a.cfg.LeaseReadyWait = 400 * time.Millisecond
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	var hung atomic.Int32
+	a.runtime = &runtime.NVIDIA{Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && (args[0] == "inspect" || args[0] == "logs") {
+			hung.Add(1)
+			if _, ok := ctx.Deadline(); !ok {
+				t.Errorf("docker %s ran without a deadline", args[0])
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return docker.run(ctx, name, args...)
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	got := a.leaseStart(ctx, ingressJob("lease-hung", hash))
+	elapsed := time.Since(start)
+	if got.Passed {
+		t.Fatalf("hung docker passed readiness: %+v", got)
+	}
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("lease_start took %s with a 400ms readiness timeout; result %+v", elapsed, got)
+	}
+	if strings.Contains(got.Reason, "canceled") || hung.Load() == 0 {
+		t.Fatalf("reason %q inspected %d", got.Reason, hung.Load())
+	}
+	if a.currentLease() != nil {
+		t.Fatal("lease kept after a readiness failure with working cleanup")
+	}
+	if conn, err := net.DialTimeout("tcp", listen, 100*time.Millisecond); err == nil {
+		conn.Close()
+		t.Fatal("listener left behind")
+	}
+}

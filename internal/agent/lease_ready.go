@@ -31,8 +31,12 @@ const (
 	// leaseModelAttempts is the first start plus one re-download when the
 	// weights file is missing or its hash does not match file_hash.
 	leaseModelAttempts = 2
-	leaseLogLines      = 40
-	leaseLogBytes      = 2048
+	// leaseDiagReserve is the most the readiness budget sets aside at its
+	// end for reading the container log tail. Inspection and /health probes
+	// stop before it. The log read ends at the readiness deadline.
+	leaseDiagReserve = 2 * time.Second
+	leaseLogLines    = 40
+	leaseLogBytes    = 2048
 )
 
 var (
@@ -241,7 +245,19 @@ func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.H
 	client := &http.Client{Timeout: a.probeTimeout(), Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 	defer client.CloseIdleConnections()
 	started := time.Now()
+	// The whole wait, including docker inspect and the log tail read, ends
+	// at deadline. Probes stop at probeDeadline so the log tail still has a
+	// slice of the budget when the model never becomes ready.
 	deadline := started.Add(timeout)
+	reserve := leaseDiagReserve
+	if limit := timeout / 5; reserve > limit {
+		reserve = limit
+	}
+	probeDeadline := deadline.Add(-reserve)
+	probeCtx, cancelProbe := context.WithDeadline(ctx, probeDeadline)
+	defer cancelProbe()
+	diagCtx, cancelDiag := context.WithDeadline(ctx, deadline)
+	defer cancelDiag()
 	var containerURL, ingressURL string
 	if !docker {
 		ingressURL = leaseHealthURL(listen)
@@ -253,9 +269,9 @@ func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.H
 			return err
 		}
 		if docker && h != nil {
-			state, err := a.readWorkload(ctx, h)
+			state, err := a.readWorkload(probeCtx, h)
 			if err == nil && state.Exited() {
-				return a.exitedError(ctx, h, state)
+				return a.exitedError(diagCtx, h, state)
 			}
 			if err == nil && state.Running && state.IP != "" && containerURL == "" {
 				if err := a.startLeaseForwarder(listen, a.bridgeAddr(state.IP)); err != nil {
@@ -272,13 +288,13 @@ func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.H
 				a.log.Info("lease forwarder listening", "lease_id", h.LeaseID, "listen", listen)
 			}
 		}
-		if ingressURL != "" {
+		if ingressURL != "" && probeCtx.Err() == nil {
 			if containerURL != "" {
-				containerOK = healthReady(ctx, client, containerURL)
+				containerOK = healthReady(probeCtx, client, containerURL)
 			} else if !docker {
 				containerOK = true
 			}
-			ingressOK = healthReady(ctx, client, ingressURL)
+			ingressOK = healthReady(probeCtx, client, ingressURL)
 			if containerOK && ingressOK {
 				load := time.Since(started).Seconds()
 				leaseID := ""
@@ -289,8 +305,11 @@ func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.H
 				return nil
 			}
 		}
-		if !time.Now().Before(deadline) {
-			return a.timeoutError(ctx, h, containerURL != "" && containerOK, ingressOK, containerURL == "" && docker)
+		if !time.Now().Before(probeDeadline) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return a.timeoutError(diagCtx, h, containerURL != "" && containerOK, ingressOK, containerURL == "" && docker)
 		}
 		timer := time.NewTimer(interval)
 		select {
