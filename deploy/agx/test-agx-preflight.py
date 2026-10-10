@@ -1,0 +1,84 @@
+"""Portable tests for the product-owned AGX soak preflight; no lab claims."""
+import importlib.util
+import json
+from pathlib import Path
+import re
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location('agx_preflight', Path(__file__).with_name('agx-preflight.py'))
+preflight = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(preflight)
+
+
+def ready():
+    return dict(arch=preflight.ARCH, kernel='6.8.12-tegra', l4t=preflight.L4T,
+                ubuntu=preflight.UBUNTU, cuda=preflight.CUDA,
+                default_target=preflight.DEFAULT_TARGET,
+                packages={name: True for name in preflight.INSTALLED_PACKAGES},
+                boot_control=True, nvpmodel_id=preflight.NVPMODEL_ID,
+                power_mode=preflight.POWER_MODE, jetson_clocks_present=True,
+                jetson_clocks=False, tegrastats=True, docker=True,
+                nvidia_runtime=True, wireguard_tools=True, llama_bench=False)
+
+
+class PreflightTests(unittest.TestCase):
+    def test_cli_pins_stay_in_sync(self):
+        source = (Path(__file__).resolve().parents[2] / 'internal/deploy/preflight.go').read_text()
+        for name, value in dict(pinArch=preflight.ARCH, pinL4T=preflight.L4T,
+                                pinKernel=preflight.KERNEL_PREFIX, pinUbuntu=preflight.UBUNTU,
+                                pinCUDA=preflight.CUDA, pinTarget=preflight.DEFAULT_TARGET,
+                                pinNvpmodelWatts=preflight.POWER_MODE).items():
+            self.assertEqual(re.search(r'\b' + name + r'\s*=\s*"([^"]+)"', source)[1], value)
+        self.assertEqual(int(re.search(r'pinNvpmodelID\s*=\s*(\d+)', source)[1]), preflight.NVPMODEL_ID)
+
+    def test_ready_and_each_missing_required_fact(self):
+        self.assertTrue(preflight.evaluate(ready())['ok'])
+        for field in ready():
+            if field == 'llama_bench':
+                continue  # OCI soak uses the configured NVIDIA runtime.
+            with self.subTest(field=field):
+                facts = ready()
+                facts.pop(field)
+                self.assertFalse(preflight.evaluate(facts)['ok'])
+        for cuda in [preflight.CUDA_RESCUE, '13.2', '13.2.10']:
+            self.assertFalse(preflight.evaluate(ready() | {'cuda': cuda})['ok'])
+        self.assertFalse(preflight.evaluate(ready() | {'jetson_clocks': True})['ok'])
+        self.assertFalse(preflight.evaluate(ready() | {'kernel': '6.80'})['ok'])
+
+    def test_cuda_patch_and_fallback(self):
+        self.assertEqual(preflight.parse_cuda_text('release 13.2, V13.2.1', None, None), '13.2.1')
+        self.assertEqual(preflight.parse_cuda_text('release 13.2', '{"cuda":{"version":"13.2.1"}}', None), '13.2.1')
+        self.assertIsNone(preflight.parse_cuda_text('release 13.2', '{bad', None))
+
+    def test_runtime_binary_does_not_prove_configuration(self):
+        config = json.dumps({'runtimes': {'nvidia': {'path': 'nvidia-container-runtime'}}})
+        self.assertFalse(preflight.nvidia_runtime_configured(None, '/bin/nvidia-container-runtime'))
+        self.assertFalse(preflight.nvidia_runtime_configured(config, None))
+        for entry in [None, {}, {"path": ""}]:
+            self.assertFalse(preflight.nvidia_runtime_configured(json.dumps({'runtimes': {'nvidia': entry}}), '/bin/nvidia-container-runtime'))
+        self.assertTrue(preflight.nvidia_runtime_configured(config, '/bin/nvidia-container-runtime'))
+
+    def test_failed_commands_do_not_supply_evidence(self):
+        def run(cmd):
+            if cmd[0] == 'nvpmodel':
+                return 1, 'NV Power Mode: 30W\n2', ''
+            if cmd[0] == 'jetson_clocks':
+                return 1, 'not running', ''
+            return 1, '', ''
+        facts = preflight.collect_facts(run=run, read_text=lambda _: None,
+                                        which=lambda name: '/bin/' + name,
+                                        uname=lambda: ('aarch64', '6.8'))
+        self.assertIsNone(facts['nvpmodel_id'])
+        self.assertIsNone(facts['jetson_clocks'])
+        self.assertFalse(preflight.evaluate(facts)['ok'])
+
+    def test_cli_exit_codes(self):
+        with patch.object(preflight, 'collect_facts', return_value=ready()), patch('sys.stdout'), patch('sys.stderr'):
+            self.assertEqual(preflight.main([]), 0)
+        with patch.object(preflight, 'collect_facts', return_value={}), patch('sys.stdout'), patch('sys.stderr'):
+            self.assertEqual(preflight.main([]), 3)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -107,6 +107,7 @@ sudo docker run --runtime=nvidia --platform linux/arm64 \
   -p "${TUNNEL_ADDRESS}:8080:8080" \
   --network hypermesh-workload \
   --read-only --tmpfs /tmp \
+  --log-driver none --ulimit core=0 \
   --cap-drop ALL --security-opt no-new-privileges:true \
   -v "$HOME"/hypermesh/workload/model.gguf:/models/model.gguf:ro \
   ghcr.io/fyberlabs/hypermesh-test

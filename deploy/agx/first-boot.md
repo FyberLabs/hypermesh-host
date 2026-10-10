@@ -16,6 +16,28 @@ cat /etc/nv_tegra_release
 
 Expect R39 / REVISION 2.1.
 
+## Soak preflight
+
+This repository owns the AGX soak pins and the portable check migrated from
+infra. After applying the overlay and before building or running the soak:
+
+```bash
+sudo python3 deploy/agx/agx-preflight.py --write /var/lib/hypermesh/agx-preflight.json
+```
+
+Run it from a checkout of the reviewed hypermesh-host release on the AGX itself.
+It prints JSON and exits 0 only when every required fact matches; exit 3 means
+missing, mismatched, or unproven facts. It reads local files and commands and
+does not change firmware, power modes, packages, or Docker configuration.
+The pins match `hypermesh-host agx`: L4T R39.2.1, CUDA 13.2.1, kernel 6.8,
+Ubuntu 24.04.5, aarch64, nvpmodel 2 / 30W, headless boot, and stopped clocks.
+CUDA 13.0.0 is a rescue option and does not pass the soak check. The report
+does not certify model execution, memory protection, or a completed soak.
+
+Infra retains its existing copy until this replacement is deployed and checked
+on pan-test. Remove the infra script and inventory preflight block in a separate
+infra PR after that check; merging this PR alone does not prove deployment.
+
 ## Flash (only if the box is not already 7.2.1)
 
 Use NVIDIA SDK Manager or `Linux_for_Tegra` for `jetson-agx-orin-devkit`. Super J4012 uses Seeed’s image, not this XML.

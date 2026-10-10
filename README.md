@@ -92,6 +92,17 @@ Heartbeat and job calls send `Authorization: Bearer <device secret>` and `X-Tena
 
 Each lease container is started with `--runtime=nvidia`, `--read-only`, `--cap-drop ALL`, `--security-opt no-new-privileges:true`, a `/tmp` tmpfs, `--log-driver none` and `--ulimit core=0`. The only host mount is the model file, read-only. It joins an internal Docker network (`hypermesh-workload`) with no LAN or internet route. The agent forwards TCP from the host's WireGuard address (port `HYPERMESH_LISTEN_PORT`, default 8080) to the container's port 8080, binds that listener to the `hypermesh` interface, limits it to 64 connections, and closes idle connections after 5 minutes. Docker keeps no container output, and the agent does not log prompts or completions.
 
+Check the effective configuration with
+`sudo docker inspect --format '{{json .HostConfig.LogConfig}} {{json .HostConfig.Ulimits}}' CONTAINER`:
+the logging type must be `none`, and the `core` limit must have soft and hard
+values of 0. Instance checks reject unsafe effective settings before sending a
+probe. On a lab host, use a unique synthetic prompt and confirm it is absent
+from container files and the journal after a lease; this requires an actual
+lab run and is not established by unit tests.
+
+The product-owned [AGX soak preflight](deploy/agx/first-boot.md#soak-preflight)
+provides a JSON report of the pinned image and operating settings.
+
 ### Model cache
 
 Models are cached in a `cache` directory next to the file named by `HYPERMESH_GGUF_PATH`, `/var/lib/hypermesh/models/cache` by default. If setup selects another model directory, the cache follows it. Downloads are checked against the filesystem's free space, a 2 GiB floor (`HYPERMESH_DISK_FLOOR_BYTES`) and a cache budget (`HYPERMESH_MODEL_CACHE_MAX_BYTES`). The least recently used models are evicted to make room. Models backing an active lease, pending workload reservations and owner-pinned models (`pinned_hashes` in the root-owned policy) are protected. The most recently downloaded model is not protected on its own. See [docs/model-cache.md](docs/model-cache.md).

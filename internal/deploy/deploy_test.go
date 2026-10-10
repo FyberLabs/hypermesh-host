@@ -668,3 +668,15 @@ func TestConnectStartsAgentBeforeDiscovery(t *testing.T) {
         }}
     if err:=connect(context.Background(),opt);err!=nil {t.Fatal(err)}
 }
+
+func TestCUDACompilerBannerPreservesPatch(t *testing.T) {
+	for _, tc := range []struct{ text, want string }{
+		{"Cuda compilation tools, release 13.2, V13.2.1", "13.2.1"},
+		{"Cuda compilation tools, release 13.2", ""},
+		{"CUDA Version 13.2.1", "13.2.1"},
+	} {
+		if got := cudaFromText(tc.text); got != tc.want {
+			t.Fatalf("cudaFromText(%q) = %q, want %q", tc.text, got, tc.want)
+		}
+	}
+}

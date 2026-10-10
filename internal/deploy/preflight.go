@@ -275,12 +275,13 @@ func (s Source) clocks(ctx context.Context) string {
 }
 
 var (
-	l4tRelease  = regexp.MustCompile(`R(\d+)`)
-	l4tRevision = regexp.MustCompile(`REVISION:\s*([0-9.]+)`)
-	cudaRelease = regexp.MustCompile(`(?i)release\s+([0-9]+\.[0-9]+\.[0-9]+)`)
-	cudaVersion = regexp.MustCompile(`(?i)cuda version\s+([0-9]+\.[0-9]+\.[0-9]+)`)
-	wattsRE     = regexp.MustCompile(`(?i)(\d+)\s*W`)
-	intLine     = regexp.MustCompile(`^-?\d+$`)
+	l4tRelease   = regexp.MustCompile(`R(\d+)`)
+	l4tRevision  = regexp.MustCompile(`REVISION:\s*([0-9.]+)`)
+	cudaRelease  = regexp.MustCompile(`(?i)release\s+([0-9]+\.[0-9]+\.[0-9]+)`)
+	cudaVersion  = regexp.MustCompile(`(?i)cuda version\s+([0-9]+\.[0-9]+\.[0-9]+)`)
+	cudaCompiler = regexp.MustCompile(`\bV([0-9]+\.[0-9]+\.[0-9]+)`)
+	wattsRE      = regexp.MustCompile(`(?i)(\d+)\s*W`)
+	intLine      = regexp.MustCompile(`^-?\d+$`)
 )
 
 func parseL4T(text string) string {
@@ -328,6 +329,9 @@ func cudaFromJSON(b []byte) string {
 }
 
 func cudaFromText(text string) string {
+	if m := cudaCompiler.FindStringSubmatch(text); m != nil {
+		return m[1]
+	}
 	if m := cudaRelease.FindStringSubmatch(text); m != nil {
 		return m[1]
 	}
