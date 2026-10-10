@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -198,6 +199,10 @@ func runMeasure(args []string, out, diagnostic io.Writer, observe func() Binding
 		fmt.Fprintln(diagnostic, "require observable current boot/hardware/firmware identity")
 		return 1
 	}
+	// Workloads run in their own process group, so Ctrl-C and SIGTERM must
+	// cancel them through the context or they would outlive this command.
+	interrupted, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	samples := []Sample{}
 	for i := 0; i < *count; i++ {
 		if err = checkPin(adapter, *runtimePin); err == nil {
@@ -208,7 +213,7 @@ func runMeasure(args []string, out, diagnostic io.Writer, observe func() Binding
 			return 1
 		}
 		captured := time.Now().UTC()
-		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		ctx, cancel := context.WithTimeout(interrupted, *timeout)
 		metrics, peak, elapsed, runErr := measureProtocol(ctx, adapter, model, b, *protocol, *generated)
 		cancel()
 		if runErr != nil {

@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -190,5 +193,39 @@ func TestVerifyArtifactsBindsSampleFieldsAndTokenCount(t *testing.T) {
 	}
 	if VerifyArtifacts(Report{Samples: append(append([]Sample(nil), samples...), short1...)}, dir) == nil {
 		t.Fatal("accepted samples with different generated token counts")
+	}
+}
+
+func TestInterruptCancelsWorkloadProcessGroup(t *testing.T) {
+	model := adapterFixture(t, "public fixture content\n")
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	adapter := adapterFixture(t, "echo $$ > "+pidFile+"\nsleep 30\n")
+	modelContent, _ := os.ReadFile(model.Name())
+	runtimeContent, _ := os.ReadFile(adapter.Name())
+	go func() {
+		for i := 0; i < 500; i++ {
+			if b, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(b)) != "" {
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	var output, diag bytes.Buffer
+	start := time.Now()
+	code := runMeasure([]string{"--protocol", "adapter", "--model-file", model.Name(), "--runtime-file", adapter.Name(), "--model-sha256", sum(string(modelContent)), "--runtime-sha256", sum(string(runtimeContent)), "--phase", "baseline", "--artifact-dir", t.TempDir()}, &output, &diag, func() Binding { return Binding{BootID: "boot", Hardware: "testboard", Firmware: "v1"} })
+	if code == 0 || time.Since(start) > 10*time.Second {
+		t.Fatalf("code=%d after %s: %s", code, time.Since(start), diag.String())
+	}
+	b, _ := os.ReadFile(pidFile)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100 && syscall.Kill(pid, 0) == nil; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		t.Fatal("workload still running after interrupt")
 	}
 }
