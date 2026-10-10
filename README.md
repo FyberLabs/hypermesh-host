@@ -12,7 +12,7 @@ Default control plane: **`https://api.test.hyperme.sh`** (deployed test control 
 
 ## Build and test
 
-The `hypermesh-host protection` command prepares and checks firmware, memory-domain and model/runtime evidence for independent review. See [memory protection qualification](docs/memory-protection-qualification.md) for hardware configuration, baseline/protected testing and optional host-selection requirements. It does not grant qualification or enable protected placement.
+The `hypermesh-host protection` command prepares and checks firmware, memory-domain and model/runtime evidence for independent review. `protection probe` collects platform identity without claiming enablement; `protection measure` runs repeated pinned CPU llama-bench loads and writes hashed evidence. See [memory protection qualification](docs/memory-protection-qualification.md) for hardware configuration, baseline/protected testing and optional host-selection requirements. It does not grant qualification or enable protected placement.
 
 `hypermesh-host inspect` includes read-only `memory_encryption` diagnostics for AMD Memory Guard/TSME. Linux's `sme` CPU flag is recorded as capability evidence; `tsme_state` remains `unknown` because it does not prove firmware enablement. Verify the current BIOS setting and vendor support before making a protection claim. TSME covers system DRAM and does not establish GPU VRAM protection, privileged-host isolation or remote attestation.
 

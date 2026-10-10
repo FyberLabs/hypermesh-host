@@ -9,7 +9,7 @@ The local framework is an evidence template and completeness validator. It does
 not run a physical attack, enable firmware, attest a guest, or publish a
 qualification. Even a complete dossier returns `qualified: false` and requires
 independent program review. Production protected placement remains unavailable
-until the approval registry and live verifier are implemented.
+until approval decisions are connected to the live verifier and all execution boundaries.
 
 ## Target hardware and firmware
 
@@ -194,8 +194,78 @@ also hides rows lacking the required qualification fields if an older server
 ignores the query filter. Qualified rows display the independently approved
 modes, when those become available.
 
-The next production slice needs independently approved qualification storage,
-revocation, current-boot observations and lease binding. Preserve requirements
+The approval registry now stores independently reviewed decisions and revocation.
+The next production slice needs live current-boot observations and lease binding. Preserve requirements
 durably and recheck them before delivery, enqueue, host load and lease activation;
 confidential key release must occur inside the attested guest. Do not enable a
 positive protected placement merely by removing the current rejection.
+
+## Platform probe and CPU measurement runner
+
+`hypermesh-host protection probe` emits a `firmware_identity` artifact envelope
+with capture time, boot/DMI identity, CPU capability, architecture and platform
+adapter revision. AMD x86 and device-tree NVIDIA T234/T264 candidates are
+recognized; Jetson release metadata is collected where present. Every adapter
+currently reports effective encryption as `unknown`: these are local collection
+adapters, not qualified enablement probes. No BIOS writes, flash, fuse changes or
+MSR access occur. Save the exact output under its SHA-256 content hash. It can
+support identity review; it does not pass `encryption_enabled_current_boot` or
+prove a memory domain's coverage. The exact OEM board/firmware and hardware
+on/off trials are still needed to approve an enablement adapter.
+
+The explicit `measure` subcommand runs trusted, pinned local workloads on Linux:
+
+```sh
+hypermesh-host protection measure \
+  --model-file /lab/public-model.gguf --model-sha256 MODEL_SHA256 \
+  --runtime-file /lab/llama-bench --runtime-sha256 EXECUTABLE_SHA256 \
+  --protocol llama-bench --phase baseline \
+  --context-tokens 4096 --generated-tokens 128 \
+  --samples 3 --timeout 10m --artifact-dir /lab/private-artifacts \
+  > baseline-samples.json
+```
+
+After the operator changes firmware, cold boots and collects effective enablement
+evidence, repeat with `--phase protected` and the same pins/context. Merge the two
+sample arrays into the dossier's `samples`; preserve each baseline boot ID and
+use the current protected boot for protected samples. Set expiry from the oldest
+capture. The phase is only an operator label, never an enablement decision.
+
+Use a reviewed, statically linked llama-bench build supporting JSON, context-depth
+and CPU-only options. Each sample starts a fresh process with `-p 0 -n N -d
+(context-N) -ngl 0 -nkvo 1 -r 1 -o json`; decode happens at the requested prefilled
+context depth. The parser checks the returned model path, depth, token count,
+CPU offload settings and single timing sample. It derives decode throughput from
+the reported nanoseconds and retains raw benchmark JSON in the hashed artifact.
+This benchmark excludes tokenization and sampling time; wall time is also saved.
+See the [upstream llama-bench contract](https://github.com/ggml-org/llama.cpp/blob/master/tools/llama-bench/README.md).
+
+Executable and model files must be regular, non-symlink files matching their
+SHA-256 pins. Open descriptors are passed to the child, pins are rechecked before
+and after every load, and platform identity is rechecked afterwards. The runner
+uses a bounded output buffer and per-sample deadline, kills the process group on
+completion/timeout, and writes exclusive 0600 content-addressed artifacts.
+The executable pin is not a full OS/library/container measurement: qualify a
+reviewed static build and platform image separately. The artifact directory must
+be private and operator-controlled. The executable is trusted lab code, not an
+untrusted program sandbox. Use public test models without proprietary prompts.
+
+Peak bytes come from Linux process `getrusage` high-water RSS, not model file
+size. This is not aggregate simultaneous child memory, GPU memory, a thermal or
+sustained-stability test, or proof of memory-controller encryption. Only the CPU
+backend is supported by this runner; UMA/discrete GPU need separate adapters.
+
+For an existing independently reviewed lab adapter, `--protocol adapter` sends
+one JSON object on stdin with schema `hypermesh-measure-request-v1`, `model_path`
+(`/proc/self/fd/4`) and the full `binding`. The adapter must load that public model,
+exercise the requested context on CPU, and emit a single JSON object containing
+positive `generated_tokens` and `inference_seconds`. Its timing is producer
+reported, while the runner collects process peak RSS. Pin the adapter and review
+all delegated runtime dependencies; an adapter pin does not bind those dependencies.
+Unknown output fields, trailing data, impossible timing and nonzero exit fail.
+This protocol is for trusted lab integration, not automatic qualification.
+
+The control-plane approval registry and durable lease-policy contract are
+specified in [protection registry v1](https://github.com/FyberLabs/panopticon/blob/main/products/hypermesh/docs/protection-registry-v1.md).
+Review authority remains separate from collection. Registry decisions do not
+open protected checkout until live delivery/load enforcement is implemented.
