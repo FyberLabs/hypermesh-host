@@ -292,6 +292,21 @@ func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.H
 				containerURL = a.containerHealthURL(state.IP)
 				ingressURL = leaseHealthURL(listen)
 				a.log.Info("lease forwarder listening", "lease_id", h.LeaseID, "listen", listen)
+			} else if containerURL != "" {
+				// A tunnel sync can change client_address while the model loads.
+				// Listen on the current address and probe it, not the one
+				// captured when the container first answered. A failed rebind
+				// is retried on the next check until the deadline.
+				if want := a.leaseListenAddr(); want != "" && want != listen {
+					if err := a.startLeaseForwarder(want, a.bridgeAddr(h.ContainerIP)); err != nil {
+						a.log.Warn("lease forwarder not rebound", "lease_id", h.LeaseID, "listen", want, "err", err)
+					} else {
+						listen = want
+						h.PublishAddr = listen
+						ingressURL = leaseHealthURL(listen)
+						a.log.Info("lease forwarder rebound", "lease_id", h.LeaseID, "listen", listen)
+					}
+				}
 			}
 		}
 		if ingressURL != "" && probeCtx.Err() == nil {

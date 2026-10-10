@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
 )
 
@@ -828,4 +829,62 @@ func TestLeaseStopDuringStartIsNotUndone(t *testing.T) {
 		t.Fatalf("result %+v", got)
 	}
 	assertLeaseClean(t, a, listen, docker)
+}
+
+// When client_address changes while the model is still loading, the listener
+// moves to the new address and the ingress probe follows it.
+func TestStartingLeaseRebindsWhenTunnelAddressChanges(t *testing.T) {
+	var ready atomic.Bool
+	a, hash, oldListen, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		if ready.Load() {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	a.cfg.LeaseReadyWait = 5 * time.Second
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	done := make(chan pathb.Result, 1)
+	go func() { done <- a.leaseStart(context.Background(), ingressJob("lease-moving", hash)) }()
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for " + what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	accepts := func(addr string) bool {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	}
+	waitFor("first listener", func() bool { return accepts(oldListen) })
+	_, port, _ := net.SplitHostPort(oldListen)
+	newListen := net.JoinHostPort("127.0.0.2", port)
+	a.setBindIP("127.0.0.2/32")
+	waitFor("rebound listener", func() bool { return accepts(newListen) })
+	if accepts(oldListen) {
+		t.Fatal("old tunnel address still accepting")
+	}
+	ready.Store(true)
+	select {
+	case got := <-done:
+		if !got.Passed {
+			t.Fatalf("start %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("start did not finish")
+	}
+	h := a.currentLease()
+	if h == nil || !h.Serving() || h.PublishAddr != newListen {
+		t.Fatalf("handle %+v, want publish %s", h, newListen)
+	}
+	a.stopLeaseForwarder()
 }
