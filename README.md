@@ -212,4 +212,6 @@ Report vulnerabilities to **security@hyperme.sh**. Please do not open a public i
 
 ## License
 
-No license has been published for this repository yet, so no permission to use, copy, modify or distribute the code is granted beyond what GitHub's Terms of Service allow for viewing and forking public repositories. This section will be updated when a license is added.
+Released under the MIT License. See [LICENSE](LICENSE). Copyright (c) 2026 Fyber Labs TN LLC.
+
+The model files and container images that hosts run (for example llama.cpp and the models you download) have their own licenses, which are not covered by this one.
