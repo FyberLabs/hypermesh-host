@@ -154,7 +154,12 @@ hypermesh-host inspect --benchmark --model /path/to/model.gguf
 
 `inspect` prints JSON: a hardware-class fingerprint (no hostname, serial or keys), detected processor and memory, a backend suggestion and a model memory budget. On AMD systems it also reports `memory_encryption` evidence; this is capability information, not proof that memory encryption is enabled. `--benchmark` runs an installed `llama-bench` after checking that the model fits in measured memory. Recommendations are not certification. For backend build options see the [llama.cpp build documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).
 
-`hypermesh-host protection` generates and validates a memory-protection evidence template. It does not change firmware or enable anything. See [docs/memory-protection-qualification.md](docs/memory-protection-qualification.md).
+`hypermesh-host protection` generates and validates a memory-protection evidence template. It does not change firmware or enable anything. Two subcommands support it:
+
+- `hypermesh-host protection probe` collects local platform identity as unverified diagnostic evidence. It does not claim that any protection is enabled.
+- `hypermesh-host protection measure` (Linux only) runs 3 to 30 fresh loads of a pinned, CPU-only `llama-bench` (or a trusted adapter) against a public test model. It takes `--model-file`, `--runtime-file`, `--model-sha256`, `--runtime-sha256`, `--phase baseline|protected`, `--artifact-dir`, and optional `--protocol`, `--samples`, `--context-tokens`, `--generated-tokens`, `--timeout` and `--firmware-id` (for device-tree hosts without DMI). It prints samples as JSON and writes content-hashed artifacts. The phase is a label, not proof that protection is enabled.
+
+See [docs/memory-protection-qualification.md](docs/memory-protection-qualification.md) for the full procedure.
 
 ## Build from source
 
