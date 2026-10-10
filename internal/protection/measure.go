@@ -22,14 +22,6 @@ import (
 	"time"
 )
 
-// Adapter output covers inference only. The process high-water RSS is collected
-// independently; accelerated memory is unsupported in this first runner.
-type Measurement struct {
-	GeneratedTokens  int64           `json:"generated_tokens"`
-	InferenceSeconds float64         `json:"inference_seconds"`
-	RawResult        json.RawMessage `json:"raw_result,omitempty"`
-}
-
 type boundedOutput struct{ bytes.Buffer }
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
@@ -87,7 +79,7 @@ func measureProtocol(ctx context.Context, executable, model *os.File, b Binding,
 	}{"hypermesh-measure-request-v1", "/proc/self/fd/4", generated, b})
 	cmd := exec.CommandContext(ctx, "/proc/self/fd/3")
 	if protocol == "llama-bench" {
-		cmd.Args = append(cmd.Args, "-m", "/proc/self/fd/4", "-p", "0", "-n", strconv.Itoa(generated), "-d", strconv.Itoa(b.ContextTokens-generated), "-ngl", "0", "-nkvo", "1", "-r", "1", "-o", "json")
+		cmd.Args = append(cmd.Args, "-m", "/proc/self/fd/4", "-p", "0", "-n", strconv.Itoa(generated), "-d", strconv.Itoa(b.ContextTokens-generated), "-ngl", "0", "-nkvo", "1", "-nopo", "1", "-r", "1", "-o", "json")
 	}
 	cmd.ExtraFiles = []*os.File{executable, model}
 	cmd.Stdin = bytes.NewReader(request)
@@ -236,14 +228,7 @@ func runMeasure(args []string, out, diagnostic io.Writer, observe func() Binding
 			return 1
 		}
 		id := fmt.Sprintf("%s-%d-%d", *phase, captured.UnixNano(), i)
-		payload, _ := json.Marshal(struct {
-			Binding        Binding     `json:"binding"`
-			Metrics        Measurement `json:"metrics"`
-			PeakBytes      int64       `json:"peak_bytes"`
-			PeakSource     string      `json:"peak_source"`
-			WallSeconds    float64     `json:"wall_seconds"`
-			ProtectedLabel bool        `json:"protected_label"`
-		}{b, metrics, peak, "linux_process_rusage_maxrss", elapsed.Seconds(), *phase == "protected"})
+		payload, _ := json.Marshal(SamplePayload{b, metrics, peak, "linux_process_rusage_maxrss", elapsed.Seconds(), *phase == "protected"})
 		content, _ := json.Marshal(Artifact{Schema: ArtifactSchema, Kind: "sample", ID: id, CapturedAt: captured, Payload: payload})
 		hash := sha256.Sum256(content)
 		ref := hex.EncodeToString(hash[:])
@@ -274,7 +259,7 @@ func parseLlamaBench(raw []byte, contextTokens, generated int) (Measurement, err
 	if err := json.Unmarshal(raw, &objects); err != nil || len(objects) != 1 {
 		return Measurement{}, errors.New("require one benchmark object")
 	}
-	for _, key := range []string{"model_filename", "n_prompt", "n_gen", "n_depth", "n_gpu_layers", "no_kv_offload", "avg_ns", "samples_ns"} {
+	for _, key := range []string{"model_filename", "n_prompt", "n_gen", "n_depth", "n_gpu_layers", "no_kv_offload", "no_op_offload", "avg_ns", "samples_ns"} {
 		if value, ok := objects[0][key]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return Measurement{}, errors.New("missing benchmark identity or metrics")
 		}
@@ -286,6 +271,7 @@ func parseLlamaBench(raw []byte, contextTokens, generated int) (Measurement, err
 		Depth         int       `json:"n_depth"`
 		GPULayers     int       `json:"n_gpu_layers"`
 		NoKVOffload   bool      `json:"no_kv_offload"`
+		NoOpOffload   flexBool  `json:"no_op_offload"`
 		AverageNS     float64   `json:"avg_ns"`
 		SamplesNS     []float64 `json:"samples_ns"`
 	}
@@ -296,8 +282,23 @@ func parseLlamaBench(raw []byte, contextTokens, generated int) (Measurement, err
 		return Measurement{}, errors.New("require one CPU decode benchmark")
 	}
 	r := rows[0]
-	if r.ModelFilename != "/proc/self/fd/4" || r.Prompt != 0 || r.Generated != generated || r.Depth != contextTokens-generated || r.GPULayers != 0 || !r.NoKVOffload || r.AverageNS <= 0 || len(r.SamplesNS) != 1 || r.SamplesNS[0] != r.AverageNS {
+	if r.ModelFilename != "/proc/self/fd/4" || r.Prompt != 0 || r.Generated != generated || r.Depth != contextTokens-generated || r.GPULayers != 0 || !r.NoKVOffload || !bool(r.NoOpOffload) || r.AverageNS <= 0 || len(r.SamplesNS) != 1 || r.SamplesNS[0] != r.AverageNS {
 		return Measurement{}, errors.New("benchmark differs from pinned CPU/context request")
 	}
 	return Measurement{GeneratedTokens: int64(generated), InferenceSeconds: r.AverageNS / 1e9, RawResult: append(json.RawMessage(nil), raw...)}, nil
+}
+
+// flexBool accepts the boolean or 0/1 integer forms llama-bench has used.
+type flexBool bool
+
+func (b *flexBool) UnmarshalJSON(data []byte) error {
+	switch string(bytes.TrimSpace(data)) {
+	case "true", "1":
+		*b = true
+	case "false", "0":
+		*b = false
+	default:
+		return errors.New("invalid boolean")
+	}
+	return nil
 }

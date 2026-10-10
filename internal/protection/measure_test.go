@@ -70,7 +70,7 @@ func TestMeasurementsRequireValidAdapterOutputAndRespectTimeout(t *testing.T) {
 }
 
 func TestNativeLlamaBenchRequiresExactCPUContext(t *testing.T) {
-	raw := []byte(`[{"model_filename":"/proc/self/fd/4","n_prompt":0,"n_gen":128,"n_depth":3968,"n_gpu_layers":0,"no_kv_offload":true,"avg_ns":10000000,"samples_ns":[10000000]}]`)
+	raw := []byte(`[{"model_filename":"/proc/self/fd/4","n_prompt":0,"n_gen":128,"n_depth":3968,"n_gpu_layers":0,"no_kv_offload":true,"no_op_offload":1,"avg_ns":10000000,"samples_ns":[10000000]}]`)
 	m, err := parseLlamaBench(raw, 4096, 128)
 	if err != nil || m.GeneratedTokens != 128 || m.InferenceSeconds != 0.01 || len(m.RawResult) == 0 {
 		t.Fatalf("%+v %v", m, err)
@@ -80,6 +80,8 @@ func TestNativeLlamaBenchRequiresExactCPUContext(t *testing.T) {
 		bytes.Replace(raw, []byte(`"n_depth":3968`), []byte(`"n_depth":0`), 1),
 		bytes.Replace(raw, []byte(`"no_kv_offload":true`), []byte(`"no_kv_offload":false`), 1),
 		bytes.Replace(raw, []byte(`"n_gpu_layers":0,`), nil, 1),
+		bytes.Replace(raw, []byte(`"no_op_offload":1`), []byte(`"no_op_offload":0`), 1),
+		bytes.Replace(raw, []byte(`"no_op_offload":1,`), nil, 1),
 	} {
 		if _, err := parseLlamaBench(changed, 4096, 128); err == nil {
 			t.Fatal("accepted different benchmark domain")
@@ -89,7 +91,7 @@ func TestNativeLlamaBenchRequiresExactCPUContext(t *testing.T) {
 
 func TestRunnerProducesThreeHashBoundMeasurementArtifacts(t *testing.T) {
 	model := adapterFixture(t, "public fixture content\n")
-	adapter := adapterFixture(t, "sleep 0.05\nprintf '%s' '[{\"model_filename\":\"/proc/self/fd/4\",\"n_prompt\":0,\"n_gen\":128,\"n_depth\":3968,\"n_gpu_layers\":0,\"no_kv_offload\":true,\"avg_ns\":10000000,\"samples_ns\":[10000000]}]'\n")
+	adapter := adapterFixture(t, "sleep 0.05\nprintf '%s' '[{\"model_filename\":\"/proc/self/fd/4\",\"n_prompt\":0,\"n_gen\":128,\"n_depth\":3968,\"n_gpu_layers\":0,\"no_kv_offload\":true,\"no_op_offload\":1,\"avg_ns\":10000000,\"samples_ns\":[10000000]}]'\n")
 	modelContent, _ := os.ReadFile(model.Name())
 	runtimeContent, _ := os.ReadFile(adapter.Name())
 	dir := t.TempDir()
@@ -117,7 +119,7 @@ func TestRunnerProducesThreeHashBoundMeasurementArtifacts(t *testing.T) {
 
 func TestRunnerAcceptsFirmwareOverrideOnDeviceTreeHosts(t *testing.T) {
 	model := adapterFixture(t, "public fixture content\n")
-	adapter := adapterFixture(t, "sleep 0.05\nprintf '%s' '[{\"model_filename\":\"/proc/self/fd/4\",\"n_prompt\":0,\"n_gen\":128,\"n_depth\":3968,\"n_gpu_layers\":0,\"no_kv_offload\":true,\"avg_ns\":10000000,\"samples_ns\":[10000000]}]'\n")
+	adapter := adapterFixture(t, "sleep 0.05\nprintf '%s' '[{\"model_filename\":\"/proc/self/fd/4\",\"n_prompt\":0,\"n_gen\":128,\"n_depth\":3968,\"n_gpu_layers\":0,\"no_kv_offload\":true,\"no_op_offload\":1,\"avg_ns\":10000000,\"samples_ns\":[10000000]}]'\n")
 	modelContent, _ := os.ReadFile(model.Name())
 	runtimeContent, _ := os.ReadFile(adapter.Name())
 	args := []string{"--model-file", model.Name(), "--runtime-file", adapter.Name(), "--model-sha256", sum(string(modelContent)), "--runtime-sha256", sum(string(runtimeContent)), "--phase", "baseline", "--artifact-dir", t.TempDir()}
@@ -134,5 +136,59 @@ func TestRunnerAcceptsFirmwareOverrideOnDeviceTreeHosts(t *testing.T) {
 	var samples []Sample
 	if err := json.Unmarshal(output.Bytes(), &samples); err != nil || len(samples) != 3 || samples[0].Binding.Firmware != "r36.4" {
 		t.Fatalf("%v %+v", err, samples)
+	}
+}
+
+func TestVerifyArtifactsBindsSampleFieldsAndTokenCount(t *testing.T) {
+	model := adapterFixture(t, "public fixture content\n")
+	adapter := adapterFixture(t, "sleep 0.05\nprintf '%s' '[{\"model_filename\":\"/proc/self/fd/4\",\"n_prompt\":0,\"n_gen\":128,\"n_depth\":3968,\"n_gpu_layers\":0,\"no_kv_offload\":true,\"no_op_offload\":1,\"avg_ns\":10000000,\"samples_ns\":[10000000]}]'\n")
+	modelContent, _ := os.ReadFile(model.Name())
+	runtimeContent, _ := os.ReadFile(adapter.Name())
+	dir := t.TempDir()
+	var output, diag bytes.Buffer
+	code := runMeasure([]string{"--model-file", model.Name(), "--runtime-file", adapter.Name(), "--model-sha256", sum(string(modelContent)), "--runtime-sha256", sum(string(runtimeContent)), "--phase", "baseline", "--artifact-dir", dir}, &output, &diag, func() Binding { return Binding{BootID: "boot", Hardware: "testboard", Firmware: "v1"} })
+	if code != 0 {
+		t.Fatalf("code=%d: %s", code, diag.String())
+	}
+	var samples []Sample
+	if err := json.Unmarshal(output.Bytes(), &samples); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyArtifacts(Report{Samples: samples}, dir); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*Sample){
+		"throughput": func(s *Sample) { s.TokensPerSecond *= 2 },
+		"phase":      func(s *Sample) { s.Protected = true },
+		"peak":       func(s *Sample) { s.PeakBytes++ },
+		"binding":    func(s *Sample) { s.Binding.ContextTokens++ },
+	} {
+		changed := append([]Sample(nil), samples...)
+		change(&changed[0])
+		if VerifyArtifacts(Report{Samples: changed}, dir) == nil {
+			t.Fatalf("accepted altered sample %s", name)
+		}
+	}
+	// A second run that decodes a different number of tokens is not paired evidence.
+	other := t.TempDir()
+	short := adapterFixture(t, "sleep 0.05\nprintf '%s' '[{\"model_filename\":\"/proc/self/fd/4\",\"n_prompt\":0,\"n_gen\":1,\"n_depth\":4095,\"n_gpu_layers\":0,\"no_kv_offload\":true,\"no_op_offload\":1,\"avg_ns\":10000000,\"samples_ns\":[10000000]}]'\n")
+	runtimeContent, _ = os.ReadFile(short.Name())
+	output.Reset()
+	code = runMeasure([]string{"--model-file", model.Name(), "--runtime-file", short.Name(), "--model-sha256", sum(string(modelContent)), "--runtime-sha256", sum(string(runtimeContent)), "--phase", "protected", "--generated-tokens", "1", "--artifact-dir", other}, &output, &diag, func() Binding { return Binding{BootID: "boot", Hardware: "testboard", Firmware: "v1"} })
+	if code != 0 {
+		t.Fatalf("code=%d: %s", code, diag.String())
+	}
+	var short1 []Sample
+	if err := json.Unmarshal(output.Bytes(), &short1); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range short1 {
+		content, _ := os.ReadFile(filepath.Join(other, s.ArtifactSHA256))
+		if err := os.WriteFile(filepath.Join(dir, s.ArtifactSHA256), content, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if VerifyArtifacts(Report{Samples: append(append([]Sample(nil), samples...), short1...)}, dir) == nil {
+		t.Fatal("accepted samples with different generated token counts")
 	}
 }

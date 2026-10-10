@@ -79,7 +79,10 @@ Each artifact is a JSON envelope whose metadata is included in its content hash:
 {"schema":"hypermesh-protection-artifact-v1","kind":"check","id":"firmware_identity","captured_at":"2026-10-09T12:00:00Z","payload":{"vendor_log":"captured test evidence"}}
 ```
 
-Use `kind: sample` with the sample ID for measurement artifacts. The capture
+Use `kind: sample` with the sample ID for measurement artifacts. A sample
+artifact's payload must be the measurement written by `protection measure`; the
+validator requires its binding, phase label, peak bytes and throughput to match the
+dossier entry, and every sample to use the same generated token count. The capture
 producer records `captured_at` when collecting the observation; copy that exact
 instant into the corresponding check/sample entry. The validator compares the
 hashed metadata with the dossier and rejects missing or relabeled capture times.
@@ -235,9 +238,9 @@ that the main `protection` command accepts; it is a label, not verification.
 
 Use a reviewed, statically linked llama-bench build supporting JSON, context-depth
 and CPU-only options. Each sample starts a fresh process with `-p 0 -n N -d
-(context-N) -ngl 0 -nkvo 1 -r 1 -o json`; decode happens at the requested prefilled
+(context-N) -ngl 0 -nkvo 1 -nopo 1 -r 1 -o json`; decode happens at the requested prefilled
 context depth. The parser checks the returned model path, depth, token count,
-CPU offload settings and single timing sample. It derives decode throughput from
+CPU offload settings (including operation offload, so the build must report `no_op_offload`) and single timing sample. It derives decode throughput from
 the reported nanoseconds and retains raw benchmark JSON in the hashed artifact.
 This benchmark excludes tokenization and sampling time; wall time is also saved.
 See the [upstream llama-bench contract](https://github.com/ggml-org/llama.cpp/blob/master/tools/llama-bench/README.md).

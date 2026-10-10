@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -24,9 +25,44 @@ type Artifact struct {
 	Payload    json.RawMessage `json:"payload"`
 }
 
+// SamplePayload is the artifact payload that backs one Sample. The measure
+// runner writes it, and VerifyArtifacts requires the dossier's sample fields
+// and workload to agree with it.
+type SamplePayload struct {
+	Binding        Binding     `json:"binding"`
+	Metrics        Measurement `json:"metrics"`
+	PeakBytes      int64       `json:"peak_bytes"`
+	PeakSource     string      `json:"peak_source"`
+	WallSeconds    float64     `json:"wall_seconds"`
+	ProtectedLabel bool        `json:"protected_label"`
+}
+
+// Measurement is the inference result of one load. Adapter output covers
+// inference only; process high-water RSS is collected independently.
+type Measurement struct {
+	GeneratedTokens  int64           `json:"generated_tokens"`
+	InferenceSeconds float64         `json:"inference_seconds"`
+	RawResult        json.RawMessage `json:"raw_result,omitempty"`
+}
+
+func verifySamplePayload(s Sample, payload json.RawMessage) (int64, error) {
+	var p SamplePayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return 0, fmt.Errorf("sample artifact payload is not a measurement: %s", s.ArtifactSHA256)
+	}
+	if p.Binding != s.Binding || p.ProtectedLabel != s.Protected || p.PeakBytes != s.PeakBytes || p.PeakSource != "linux_process_rusage_maxrss" ||
+		p.Metrics.GeneratedTokens <= 0 || !(p.Metrics.InferenceSeconds > 0) || math.IsInf(p.Metrics.InferenceSeconds, 0) ||
+		s.TokensPerSecond != float64(p.Metrics.GeneratedTokens)/p.Metrics.InferenceSeconds {
+		return 0, fmt.Errorf("sample artifact does not match its dossier entry: %s", s.ArtifactSHA256)
+	}
+	return p.Metrics.GeneratedTokens, nil
+}
+
 // VerifyArtifacts checks content-addressed evidence, never executes it.
 func VerifyArtifacts(r Report, directory string) error {
 	refs := map[string]Artifact{}
+	samples := map[string]Sample{}
+	var generated int64
 	for _, c := range r.Checks {
 		if _, exists := refs[c.ArtifactSHA256]; exists {
 			return fmt.Errorf("duplicate artifact reference")
@@ -38,6 +74,7 @@ func VerifyArtifacts(r Report, directory string) error {
 			return fmt.Errorf("duplicate artifact reference")
 		}
 		refs[s.ArtifactSHA256] = Artifact{Kind: "sample", ID: s.ID, CapturedAt: s.CapturedAt}
+		samples[s.ArtifactSHA256] = s
 	}
 	for ref, expected := range refs {
 		if !digest(ref) {
@@ -72,6 +109,17 @@ func VerifyArtifacts(r Report, directory string) error {
 		var trailing any
 		if decoder.Decode(&trailing) != io.EOF || artifact.Schema != ArtifactSchema || artifact.Kind != expected.Kind || artifact.ID != expected.ID || artifact.CapturedAt.IsZero() || !artifact.CapturedAt.Equal(expected.CapturedAt) || len(artifact.Payload) == 0 || bytes.Equal(bytes.TrimSpace(artifact.Payload), []byte("null")) {
 			return fmt.Errorf("artifact capture metadata mismatch: %s", ref)
+		}
+		if sample, ok := samples[ref]; ok {
+			tokens, err := verifySamplePayload(sample, artifact.Payload)
+			if err != nil {
+				return err
+			}
+			// Baseline and protected loads must decode the same number of tokens.
+			if generated != 0 && tokens != generated {
+				return fmt.Errorf("sample artifacts use different generated token counts")
+			}
+			generated = tokens
 		}
 	}
 	return nil
