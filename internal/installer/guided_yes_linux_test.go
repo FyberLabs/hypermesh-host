@@ -215,6 +215,13 @@ func TestGuidedInstallRejectsBadFlagsBeforeAnyAction(t *testing.T) {
 		{"--continue", "--yes"},
 		{"--continue", "--network", "test"},
 		{"--continue", "--cache-quota-gib", "5"},
+		{"--yes", "--interactive"},
+		{"--yes", "--network="},
+		{"--yes", "--model-dir="},
+		{"--yes", "--host-name="},
+		{"--yes", "--host-name", "  "},
+		{"--yes", "--cache-quota-gib="},
+		{"--cache-reserve-gib="},
 		{"--yes", "--cache-quota-gib", "abc"},
 		{"--yes", "--cache-quota-gib", "0"},
 		{"--cache-reserve-gib", "1"},
@@ -241,5 +248,28 @@ func TestCacheFlagsReplaceAnExistingPolicy(t *testing.T) {
 	p, err := agent.ReadCachePolicy(dir)
 	if err != nil || p.MaxBytes != 1<<30 || p.ReserveBytes != 2<<30 {
 		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+func TestYesUpgradesACompletedPausedOnlySession(t *testing.T) {
+	for _, yes := range []bool{true, false} {
+		g, calls, _ := fixtureGuided(t, "")
+		g.ui = yesUI(t, io.Discard)
+		if err := g.finish(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		*calls = nil
+		g.state.Stage, g.state.Autonomous, g.state.SellConsent = 7, true, false
+		g.ui = guidedUI{ctx: withContinuationConsent(context.Background()), out: io.Discard, in: bufio.NewReader(noInput{t}), yes: yes}
+		if err := g.finish(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"host-status"}
+		if yes {
+			want = []string{"activate-agent", "host-status"}
+		}
+		if !reflect.DeepEqual(*calls, want) || g.state.SellConsent != yes {
+			t.Fatalf("yes=%v consent=%v calls=%v", yes, g.state.SellConsent, *calls)
+		}
 	}
 }

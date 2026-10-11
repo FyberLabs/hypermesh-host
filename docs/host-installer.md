@@ -1977,7 +1977,7 @@ browser approval, a newer installer and a WireGuard repair are not on it and sto
 with a message naming the question. Bad flags exit with status 2 before anything
 runs, and a setting flag that disagrees with a saved session is refused before any recovery or upgrade work. The cache flags replace a saved cache policy. `--yes` is the run's own consent, so it also upgrades a paused-startup-only session; a saved continuation alone never does. Wrong,
 unfit or failing hosts stop through the same checks as before. `--yes` cannot be
-combined with `--continue`.
+combined with `--continue` or `--interactive`; an explicitly empty setting flag exits with status 2.
 
 ### Re-enrollment and machine signing identities
 

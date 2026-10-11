@@ -110,7 +110,7 @@ model quota larger than the disk, or a failed model test. It does not answer
 questions that were not part of that consent: accepting changed platform
 packages, a new browser approval, switching to a newer installer, or a WireGuard
 repair. Run the installer again without `--yes` to answer those. Browser sign-in
-is still done by you, in any browser. `--yes` cannot be combined with `--continue`.
+is still done by you, in any browser. `--yes` cannot be combined with `--continue` or `--interactive`, and a setting flag with an empty value is an error.
 
 ## Automatic continuation
 

@@ -267,6 +267,12 @@ func (g guidedFlow) finish(ctx context.Context)error {
  // Older installers advanced the cursor even when activation release was
  // unavailable. Reconcile through the existing authenticated activation path;
  // its active-service branch does not restart the host or clear an owner pause.
+ if g.ui.yes&&s.Stage==7&&s.Autonomous&&!s.SellConsent {
+  // --yes is this run's consent to start selling for a session an older installer approved for paused startup only.
+  if err=g.ui.confirm(promptPausedOnly);err!=nil{return err}
+  s.SellConsent=true
+  if err=g.save();err!=nil{return err}
+ }
  if s.Stage==7&&s.Autonomous&&s.SellConsent {
   if err=g.apply(ctx,"activate-agent","certification.json","Activate the host service and start selling?","--start");err!=nil{return err}
  }
@@ -410,18 +416,25 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  reserveFlag:=flags.String("cache-reserve-gib","","disk space to keep free on the model filesystem in GiB (at least 2)")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0{return 2}
- headlessSet:=false
- flags.Visit(func(f *flag.Flag){if f.Name=="headless"{headlessSet=true}})
+ given:=map[string]bool{}
+ flags.Visit(func(f *flag.Flag){given[f.Name]=true})
+ headlessSet:=given["headless"]
  *hostFlag=strings.TrimSpace(*hostFlag)
- settings:=*networkFlag!=""||*hostFlag!=""||*dirFlag!=""||headlessSet
- if *background && (*interactive || *cacheSettings || *yes || settings || *quotaFlag!="" || *reserveFlag!="") {fmt.Fprintln(diagnostic,"--continue cannot be combined with interactive options, --yes or setting flags");return 2}
+ for _,name:=range []string{"network","host-name","model-dir","cache-quota-gib","cache-reserve-gib"} {
+  value:=map[string]string{"network":*networkFlag,"host-name":*hostFlag,"model-dir":*dirFlag,"cache-quota-gib":*quotaFlag,"cache-reserve-gib":*reserveFlag}[name]
+  if given[name]&&value=="" {fmt.Fprintf(diagnostic,"--%s needs a value; leave the flag out to use the default\n",name);return 2}
+ }
+ settings:=given["network"]||given["host-name"]||given["model-dir"]||headlessSet
+ if *yes && *interactive {fmt.Fprintln(diagnostic,"--yes and --interactive contradict each other: --yes answers the questions that --interactive asks");return 2}
+ if *background && (*interactive || *cacheSettings || *yes || settings || given["cache-quota-gib"] || given["cache-reserve-gib"]) {fmt.Fprintln(diagnostic,"--continue cannot be combined with interactive options, --yes or setting flags");return 2}
  if *networkFlag!="" {if _,e:=installationNetwork(*networkFlag);e!=nil{fmt.Fprintln(diagnostic,"--network:",e);return 2}}
  if *hostFlag!="" && !agentNameRE.MatchString(*hostFlag) {fmt.Fprintln(diagnostic,"--host-name must contain 1-63 letters, digits, dots, underscores or hyphens");return 2}
  if *quotaFlag!="" {if n,e:=strconv.ParseUint(*quotaFlag,10,32);e!=nil||n==0{fmt.Fprintln(diagnostic,"--cache-quota-gib must be a positive whole number of GiB");return 2}}
  if *reserveFlag!="" {if n,e:=strconv.ParseUint(*reserveFlag,10,32);e!=nil||n<2{fmt.Fprintln(diagnostic,"--cache-reserve-gib must be a whole number of GiB, at least 2");return 2}}
  if *dirFlag!="" && (!filepath.IsAbs(*dirFlag)||filepath.Clean(*dirFlag)!=*dirFlag) {fmt.Fprintln(diagnostic,"--model-dir must be an absolute, clean directory path");return 2}
- cacheFlags:=*quotaFlag!=""||*reserveFlag!=""
- if *interactive || *cacheSettings {ctx=context.WithValue(ctx,continuationInteractive{},true)}
+ cacheFlags:=given["cache-quota-gib"]||given["cache-reserve-gib"]
+ // --yes answers the questions itself; it must not turn off the saved consent that later steps use.
+ if *interactive || (*cacheSettings&&!*yes) {ctx=context.WithValue(ctx,continuationInteractive{},true)}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
  if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
  ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx,yes:*yes,cacheQuota:*quotaFlag,cacheReserve:*reserveFlag}
@@ -437,7 +450,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
   // Refuse conflicting settings before any recovery or upgrade work.
   if err==nil{err=resumedSettingsMatch(s,*networkFlag,*hostFlag,*dirFlag,headlessSet,*headlessFlag)}
-  if err==nil&&cacheFlags{ctx=context.WithValue(ctx,continuationInteractive{},true);ui.ctx=ctx}
+  if err==nil&&cacheFlags&&!*yes{ctx=context.WithValue(ctx,continuationInteractive{},true);ui.ctx=ctx}
   if err==nil && *background && s.ContinuationSHA!="" {
    target,e:=continuationTarget(s);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
    if target!="" {unlock();return runContinuation(ctx,target,input,out,diagnostic)}
