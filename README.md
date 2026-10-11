@@ -53,7 +53,7 @@ Host setup is one guided flow:
    sudo ./hypermesh-host
    ```
 
-   It checks hardware, memory, disk and network, shows every change it proposes (packages, headless mode, reboot), and asks for approval. You approve the host in a browser on any device. The host stays paused until certification passes. If setup is interrupted or the machine reboots, a systemd timer (`hypermesh-onboarding.timer`) resumes it. Running `sudo ./hypermesh-host` again also resumes.
+   It checks hardware, memory, disk and network, shows every change it proposes (packages, headless mode, reboot), and asks for approval. You approve the host in a browser on any device. The host stays paused until certification passes. If setup is interrupted or the machine reboots, a systemd timer (`hypermesh-onboarding.timer`) resumes it. Running `sudo ./hypermesh-host` again also resumes. To give your consent once instead of answering each question, run `sudo ./hypermesh-host --yes` (see [docs/first-install-guide.md](docs/first-install-guide.md)).
 
 3. After setup, control selling from the host:
 

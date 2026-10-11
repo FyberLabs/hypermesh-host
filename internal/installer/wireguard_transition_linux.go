@@ -408,7 +408,7 @@ func checkGuidedKernel(loaded func() bool, run func(...string) error, approve fu
 	if approve == nil {
 		return false, fmt.Errorf("loading the installed WireGuard module requires approval")
 	}
-	if err := approve("Load the installed WireGuard kernel module to verify it works? No packages or kernel files will be changed."); err != nil {
+	if err := approve(promptModule); err != nil {
 		return false, err
 	}
 	if run("wireguard") != nil {

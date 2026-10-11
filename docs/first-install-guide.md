@@ -51,8 +51,8 @@ storage pools. Account network and software update channel are separate choices.
 
 The guide checks hardware, available memory and disk capacity and shows the
 required software and headless changes. Its combined approval covers those
-changes, any required reboot, signed host service installation, model tests and
-paused startup after network approval. Browser sign-in and host enrollment happen
+changes, any required reboot, signed host service installation, model tests, and
+service startup and selling once the host is certified. Browser sign-in and host enrollment happen
 before machine changes or reboot. You can use a browser on another computer or
 phone.
 
@@ -69,11 +69,55 @@ and Orin NX classes; other hardware needs its platform admission/certification
 work first. Changes outside the saved consent remain blocked and visible in the
 service journal; they are never approved by a generic automatic “yes.”
 
+## Give your consent once with `--yes`
+
+To avoid the setup questions, give your consent for the whole setup once:
+
+```sh
+sudo ./hypermesh-host --yes
+```
+
+`--yes` accepts the questions of a first setup, and says so as it goes. Those are
+the account network, the host name, model storage, headless mode, the model cache
+quota and reserve, creating a missing model directory, the system changes, the
+model tests, and continuing automatically, including starting to sell once the
+host is certified. The saved approval is the same one a typed "yes" records. Answers come
+from what the installer detects on this host: network `production`, this machine's
+host name, `/var/lib/hypermesh/models`, headless mode on, and a cache quota and
+reserve it suggests for that filesystem.
+
+To use different settings in the same run, add the flag for each one:
+
+| Flag | Setting |
+| --- | --- |
+| `--network production\|test` | account network |
+| `--host-name NAME` | name shown in your dashboard |
+| `--model-dir /path` | existing model storage directory |
+| `--headless=false` | keep the graphical login |
+| `--cache-quota-gib N` | model cache quota |
+| `--cache-reserve-gib N` | free space to keep (at least 2) |
+
+A setting flag answers its own question even without `--yes`. In a setup that
+has already started, a setting flag that differs from the saved one stops with an
+error rather than being ignored; the model cache flags need `--cache-settings`
+there.
+
+`--yes` still stops with a message when this host's own settings are wrong, do not
+fit, or fail a check or benchmark, for example an unsupported processor class, a
+model quota larger than the disk, or a failed model test. It does not answer
+questions that were not part of that consent: accepting changed platform
+packages, a new browser approval, switching to a newer installer, or a WireGuard
+repair. Run the installer again without `--yes` to answer those. Browser sign-in
+is still done by you, in any browser. `--yes` cannot be combined with `--continue`.
+
 ## Automatic continuation
 
 Do not rerun the installer after reboot or while waiting for benchmark review.
 It runs the required tests, retains evidence while the network admin reviews it,
-and continues certification and paused activation after approval. API/network
+and continues certification and activation after approval. A certified host starts
+selling automatically; pause or resume it with `sudo hypermesh-host sell pause`
+and `sell resume`. The first host of a new hardware class is reviewed by a network
+admin, which is the only step after your approval that waits on a person. API/network
 failures retry with durable exponential backoff from one minute to one hour.
 Waiting for review polls about once a minute, without repeating successful tests.
 After successful live status verification the onboarding timer disables itself;

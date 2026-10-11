@@ -1961,6 +1961,24 @@ session and executable usable. Automated coverage includes pathname replacement,
 failed upgrade preparation, repeated upgrades and default noninteractive consent.
 Live AGX continuation across an installer upgrade remains to be verified.
 
+### One consent with `--yes`
+
+`install --yes` (the default command accepts it too) answers the first-setup
+questions without reading input: network, host name, model storage, creating a
+missing model directory, headless mode, cache quota and reserve and their save, the
+system-changes approval and the continue-automatically approval, which also covers
+starting to sell once certified. Each approval is printed as `Approved by --yes`
+and recorded exactly as a typed answer is (`SellConsent`, the saved continuation).
+Defaults are the detected ones; `--network`, `--host-name`, `--model-dir`,
+`--headless=false`, `--cache-quota-gib` and `--cache-reserve-gib` replace them in the
+same run. The allowed questions are one list (`yesPrompt`, the saved continuation
+list plus the first-setup questions). Review of changed platform packages, a new
+browser approval, a newer installer and a WireGuard repair are not on it and stop
+with a message naming the question. Bad flags exit with status 2 before anything
+runs, and a setting flag that disagrees with a saved session is refused. Wrong,
+unfit or failing hosts stop through the same checks as before. `--yes` cannot be
+combined with `--continue`.
+
 ### Re-enrollment and machine signing identities
 
 Explicit re-enrollment stops old workload/tunnel activity and archives the local
