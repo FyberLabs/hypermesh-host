@@ -1963,7 +1963,7 @@ Live AGX continuation across an installer upgrade remains to be verified.
 
 ### One consent with `--yes`
 
-`install --yes` (the default command accepts it too) answers the first-setup
+`install --yes` (`hypermesh-host --yes` is the same) answers the first-setup
 questions without reading input: network, host name, model storage, creating a
 missing model directory, headless mode, cache quota and reserve and their save, the
 system-changes approval and the continue-automatically approval, which also covers
@@ -1975,7 +1975,7 @@ same run. The allowed questions are one list (`yesPrompt`, the saved continuatio
 list plus the first-setup questions). Review of changed platform packages, a new
 browser approval, a newer installer and a WireGuard repair are not on it and stop
 with a message naming the question. Bad flags exit with status 2 before anything
-runs, and a setting flag that disagrees with a saved session is refused. Wrong,
+runs, and a setting flag that disagrees with a saved session is refused before any recovery or upgrade work. The cache flags replace a saved cache policy. `--yes` is the run's own consent, so it also upgrades a paused-startup-only session; a saved continuation alone never does. Wrong,
 unfit or failing hosts stop through the same checks as before. `--yes` cannot be
 combined with `--continue`.
 

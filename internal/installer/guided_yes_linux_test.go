@@ -75,14 +75,20 @@ func TestWithoutYesQuestionsStillAskAndDeclineStops(t *testing.T) {
 	}
 }
 
-func TestYesDoesNotWidenSavedContinuationConsent(t *testing.T) {
+func TestYesIsThisRunsConsentEvenWithASavedContinuation(t *testing.T) {
 	ui := yesUI(t, io.Discard)
 	ui.ctx = withContinuationConsent(context.Background())
-	if err := ui.confirm(promptPausedOnly); err == nil {
-		t.Fatal("saved continuation approved selling for a paused-only session")
+	if err := ui.confirm(promptPausedOnly); err != nil {
+		t.Fatal("--yes could not approve selling for a paused-only session:", err)
 	}
-	if _, err := ui.ask("Maximum disk space for downloaded models (GiB)", "10"); err == nil {
-		t.Fatal("saved continuation answered a configuration question")
+	if err := ui.confirm("Accept these already-installed package versions and continue? No packages will be changed."); err == nil ||
+		!strings.Contains(err.Error(), "--yes does not cover") {
+		t.Fatalf("unlisted question under a saved continuation: %v", err)
+	}
+	// Without --yes the saved continuation still refuses to start selling.
+	plain := guidedUI{ctx: withContinuationConsent(context.Background()), out: io.Discard, in: bufio.NewReader(noInput{t})}
+	if err := plain.confirm(promptPausedOnly); err == nil {
+		t.Fatal("saved continuation approved selling for a paused-only session")
 	}
 }
 
@@ -118,18 +124,24 @@ func TestYesStopsWhenAHostCheckFails(t *testing.T) {
 }
 
 func TestYesRecordsSellingConsentForPausedOnlySession(t *testing.T) {
-	g, calls, _ := fixtureGuided(t, "")
-	g.ui = yesUI(t, io.Discard)
-	if err := g.finish(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	*calls = nil
-	g.state.Stage, g.state.Autonomous, g.state.SellConsent = 6, true, false
-	if err := g.finish(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if !g.state.SellConsent || g.state.Stage != 7 || !reflect.DeepEqual(*calls, []string{"activate-agent", "host-status"}) {
-		t.Fatalf("consent=%v stage=%d calls=%v", g.state.SellConsent, g.state.Stage, *calls)
+	for _, saved := range []bool{false, true} {
+		g, calls, _ := fixtureGuided(t, "")
+		g.ui = yesUI(t, io.Discard)
+		if err := g.finish(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		*calls = nil
+		g.state.Stage, g.state.Autonomous, g.state.SellConsent = 6, true, false
+		if saved {
+			// A resumed autonomous session runs under its saved continuation context.
+			g.ui.ctx = withContinuationConsent(context.Background())
+		}
+		if err := g.finish(context.Background()); err != nil {
+			t.Fatalf("saved continuation=%v: %v", saved, err)
+		}
+		if !g.state.SellConsent || g.state.Stage != 7 || !reflect.DeepEqual(*calls, []string{"activate-agent", "host-status"}) {
+			t.Fatalf("saved=%v consent=%v stage=%d calls=%v", saved, g.state.SellConsent, g.state.Stage, *calls)
+		}
 	}
 }
 
@@ -203,11 +215,31 @@ func TestGuidedInstallRejectsBadFlagsBeforeAnyAction(t *testing.T) {
 		{"--continue", "--yes"},
 		{"--continue", "--network", "test"},
 		{"--continue", "--cache-quota-gib", "5"},
+		{"--yes", "--cache-quota-gib", "abc"},
+		{"--yes", "--cache-quota-gib", "0"},
+		{"--cache-reserve-gib", "1"},
+		{"--cache-reserve-gib", "-3"},
 		{"unexpected"},
 	} {
 		var diagnostic bytes.Buffer
 		if code := RunGuidedInstall(context.Background(), args, noInput{t}, io.Discard, &diagnostic); code != 2 {
 			t.Fatalf("%v: code %d %s", args, code, diagnostic.String())
 		}
+	}
+}
+
+func TestCacheFlagsReplaceAnExistingPolicy(t *testing.T) {
+	dir := t.TempDir()
+	if err := agent.WriteCachePolicy(dir, agent.CachePolicy{Schema: 1, MaxBytes: 50 << 30, ReserveBytes: 2 << 30}); err != nil {
+		t.Fatal(err)
+	}
+	ui := yesUI(t, io.Discard)
+	ui.cacheQuota = "1"
+	if err := guidedCachePolicy(dir, ui, true); err != nil {
+		t.Fatal(err)
+	}
+	p, err := agent.ReadCachePolicy(dir)
+	if err != nil || p.MaxBytes != 1<<30 || p.ReserveBytes != 2<<30 {
+		t.Fatalf("%+v %v", p, err)
 	}
 }

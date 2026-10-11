@@ -3,6 +3,7 @@
 package installer
 
 import (
+ "strconv"
  "bufio"
  "bytes"
  "context"
@@ -93,13 +94,15 @@ func (u guidedUI) preset(flagName,value string)(string,bool) {
  return value,true
 }
 func (u guidedUI) ask(label,def string)(string,error) {
- if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
-  if label=="Private Hugging Face token file for a gated model (Enter for public or cached models)" || label=="Private token file if required (Enter to retry without one)" {return "",nil}
-  return "",fmt.Errorf("onboarding requires additional configuration: %s",label)
- }
+ // --yes is this run's own consent, so it answers even when a saved continuation
+ // approval is also present; the saved approval is not widened for other runs.
  if u.yes {
   if def!=""{fmt.Fprintf(u.out,"%s: %s (default)\n",label,def)}
   return def,nil
+ }
+ if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
+  if label=="Private Hugging Face token file for a gated model (Enter for public or cached models)" || label=="Private token file if required (Enter to retry without one)" {return "",nil}
+  return "",fmt.Errorf("onboarding requires additional configuration: %s",label)
  }
  if def!="" {fmt.Fprintf(u.out,"%s [%s]: ",label,def)} else {fmt.Fprintf(u.out,"%s: ",label)}
  var line string;var err error
@@ -119,13 +122,13 @@ func (u guidedUI) ask(label,def string)(string,error) {
  return answer,nil
 }
 func (u guidedUI) confirm(label string)error {
- if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
-  if continuationPrompt(label){return nil}
-  return fmt.Errorf("onboarding needs review of a change outside saved consent: %s",label)
- }
  if u.yes {
   if yesPrompt(label){fmt.Fprintf(u.out,"Approved by --yes: %s\n",label);return nil}
   return fmt.Errorf("--yes does not cover this question: %s Run the installer again without --yes to answer it",label)
+ }
+ if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
+  if continuationPrompt(label){return nil}
+  return fmt.Errorf("onboarding needs review of a change outside saved consent: %s",label)
  }
 
  answer,err:=u.ask(label+" (y/N)","");if err!=nil{return err}
@@ -378,7 +381,7 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintln(g.ui.out,"Certification passed. Using this host’s saved registration to start the service; selling starts once startup is verified.")
   fmt.Fprintln(g.ui.out,"Pause or resume selling at any time with: sudo hypermesh-host sell pause | sell resume")
   if g.state.Autonomous&&!g.state.SellConsent{
-   if g.ui.ctx!=nil&&g.ui.ctx.Value(continuationConsent{})==true{
+   if !g.ui.yes&&g.ui.ctx!=nil&&g.ui.ctx.Value(continuationConsent{})==true{
     return fmt.Errorf("certification passed, but the saved approval covers paused startup only; run the installer again with --interactive to approve starting selling")
    }
    if err=g.ui.confirm(promptPausedOnly);err!=nil{return err}
@@ -414,7 +417,10 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if *background && (*interactive || *cacheSettings || *yes || settings || *quotaFlag!="" || *reserveFlag!="") {fmt.Fprintln(diagnostic,"--continue cannot be combined with interactive options, --yes or setting flags");return 2}
  if *networkFlag!="" {if _,e:=installationNetwork(*networkFlag);e!=nil{fmt.Fprintln(diagnostic,"--network:",e);return 2}}
  if *hostFlag!="" && !agentNameRE.MatchString(*hostFlag) {fmt.Fprintln(diagnostic,"--host-name must contain 1-63 letters, digits, dots, underscores or hyphens");return 2}
+ if *quotaFlag!="" {if n,e:=strconv.ParseUint(*quotaFlag,10,32);e!=nil||n==0{fmt.Fprintln(diagnostic,"--cache-quota-gib must be a positive whole number of GiB");return 2}}
+ if *reserveFlag!="" {if n,e:=strconv.ParseUint(*reserveFlag,10,32);e!=nil||n<2{fmt.Fprintln(diagnostic,"--cache-reserve-gib must be a whole number of GiB, at least 2");return 2}}
  if *dirFlag!="" && (!filepath.IsAbs(*dirFlag)||filepath.Clean(*dirFlag)!=*dirFlag) {fmt.Fprintln(diagnostic,"--model-dir must be an absolute, clean directory path");return 2}
+ cacheFlags:=*quotaFlag!=""||*reserveFlag!=""
  if *interactive || *cacheSettings {ctx=context.WithValue(ctx,continuationInteractive{},true)}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
  if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
@@ -429,6 +435,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if _,e:=os.Lstat(statePath);e==nil{
   err=guidedRead(statePath,&s,true)
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
+  // Refuse conflicting settings before any recovery or upgrade work.
+  if err==nil{err=resumedSettingsMatch(s,*networkFlag,*hostFlag,*dirFlag,headlessSet,*headlessFlag)}
+  if err==nil&&cacheFlags{ctx=context.WithValue(ctx,continuationInteractive{},true);ui.ctx=ctx}
   if err==nil && *background && s.ContinuationSHA!="" {
    target,e:=continuationTarget(s);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
    if target!="" {unlock();return runContinuation(ctx,target,input,out,diagnostic)}
@@ -458,8 +467,6 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    }()
   }
   if err==nil{err=validateGuidedDownload(s.Download)}
-  if err==nil{err=resumedSettingsMatch(s,*networkFlag,*hostFlag,*dirFlag,headlessSet,*headlessFlag)}
-  if err==nil&&(*quotaFlag!=""||*reserveFlag!="")&&!*cacheSettings{err=fmt.Errorf("this host's model cache settings are already saved; add --cache-settings to change them")}
   if err==nil{fmt.Fprintf(out,"Resuming setup for %s on %s. Completed steps will be checked by the installation gates.\n",s.Host,s.Network)}
  }else if !os.IsNotExist(e){err=e}else{
   if *background {fmt.Fprintln(diagnostic,"no saved onboarding session");return 1}
@@ -524,7 +531,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if !*background {if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)};if err!=nil{fmt.Fprintln(diagnostic,err);return 1}}
   ctx=withContinuationConsent(ctx);ui.ctx=ctx
  }
- if err=guidedCachePolicy(s.Directory,ui,*cacheSettings);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ if err=guidedCachePolicy(s.Directory,ui,*cacheSettings||cacheFlags);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  if !*background && s.Stage>=4 && !s.Autonomous {

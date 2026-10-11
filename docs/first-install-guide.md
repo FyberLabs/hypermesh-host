@@ -99,8 +99,10 @@ To use different settings in the same run, add the flag for each one:
 
 A setting flag answers its own question even without `--yes`. In a setup that
 has already started, a setting flag that differs from the saved one stops with an
-error rather than being ignored; the model cache flags need `--cache-settings`
-there.
+error, before anything is changed, rather than being ignored. The two model cache
+flags replace a model cache policy that is already saved, as `--cache-settings`
+does. A session approved by an older installer covered paused startup only;
+`--yes` gives the consent to start selling for such a session too.
 
 `--yes` still stops with a message when this host's own settings are wrong, do not
 fit, or fail a check or benchmark, for example an unsupported processor class, a
