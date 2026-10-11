@@ -128,3 +128,39 @@ func TestVerifiedCopyReceivesTheOriginalOptionsAndItsStatusIsKept(t *testing.T) 
 		t.Fatal("a missing copy reported success")
 	}
 }
+
+func TestRunningVerifiedBytesRepairAChangedOrUnsafeImage(t *testing.T) {
+	good := []byte("the verified installer")
+	for name, damage := range map[string]func(path string){
+		"changed bytes": func(path string) { os.WriteFile(path, []byte("replaced"), 0700) },
+		"loose mode":    func(path string) { os.Chmod(path, 0777) },
+		"symlink": func(path string) {
+			os.Remove(path)
+			os.Symlink("/etc/passwd", path)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := withImages(t)
+			path := saveImage(t, dir, good)
+			damage(path)
+			payload := agentPayload{agentFile{path, digestSetupBytes(good), 0700}, good}
+			if err := ensureContinuationImage(path, payload); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := agentFileMatches(path, payload); err != nil || !ok {
+				t.Fatalf("not restored: %v %v", ok, err)
+			}
+			if target, err := resumeTarget(resumeSession(digestSetupBytes(good))); err != nil || target != path {
+				t.Fatalf("restored copy not used: %q %v", target, err)
+			}
+		})
+	}
+	dir := withImages(t)
+	payload := agentPayload{agentFile{filepath.Join(dir, "x"), digestSetupBytes(good), 0700}, good}
+	if err := os.MkdirAll(payload.Path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureContinuationImage(payload.Path, payload); err == nil {
+		t.Fatal("a directory was removed")
+	}
+}

@@ -285,6 +285,28 @@ func resumeTarget(s guidedState) (string, error) {
 	return target, nil
 }
 
+// ensureContinuationImage makes the saved image equal the running executable.
+// The payload is the running executable, whose digest is the one recorded after
+// verification, so replacing a changed or unsafe image with it restores the
+// verified bytes rather than trusting anything new.
+func ensureContinuationImage(image string, payload agentPayload) error {
+	exists, err := agentFileMatches(image, payload)
+	if err != nil {
+		info, statErr := os.Lstat(image)
+		if statErr != nil || info.IsDir() {
+			return err
+		}
+		if err = os.Remove(image); err != nil {
+			return err
+		}
+		exists = false
+	}
+	if exists {
+		return nil
+	}
+	return writeAgentFile(image, payload)
+}
+
 // runVerifiedCopy runs the verified copy with the original options and returns its exit status.
 func runVerifiedCopy(ctx context.Context, path string, args []string, input io.Reader, out, diagnostic io.Writer) int {
 	cmd := exec.CommandContext(ctx, path, append([]string{"install"}, args...)...)
@@ -373,12 +395,8 @@ func installContinuation(ctx context.Context, s *guidedState) error {
 		return err
 	}
 	payload := agentPayload{agentFile{image, sha, 0700}, binary}
-	if exists, e := agentFileMatches(image, payload); e != nil {
-		return e
-	} else if !exists {
-		if e = writeAgentFile(image, payload); e != nil {
-			return e
-		}
+	if err = ensureContinuationImage(image, payload); err != nil {
+		return err
 	}
 	// The first verified binary remains a stable dispatcher. Only session.json
 	// selects the active immutable image, so failed upgrades retain the old one.

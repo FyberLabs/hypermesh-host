@@ -123,7 +123,9 @@ installed as `/usr/local/bin/hypermesh-host`.
 - If you resume by hand with `sudo ./hypermesh-host` and the downloaded file is
   not identical to the saved copy, the installer continues from the saved copy
   and says so. If the saved copy is missing or has changed, it stops before
-  doing anything and tells you how to recover.
+  doing anything and tells you how to recover. Running the root-owned
+  `sudo hypermesh-host`, or the same release downloaded again, puts the saved copy
+  back from those verified bytes.
 - To avoid running the downloaded file at all, resume with
   `sudo hypermesh-host`, which is the root-owned copy and works from any
   directory. Setup prints this once it is approved.

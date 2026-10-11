@@ -1970,7 +1970,8 @@ it carries on. Same build but different bytes: it hands over to the saved image
 with the original options and keeps its exit status. Image missing, changed,
 loose in mode or ownership: it stops with the fix (resume with
 `sudo /usr/local/bin/hypermesh-host`, or download the same release again in a new
-directory). A session not yet approved, or a different build, is left to the
+directory); either one then restores the image from its own bytes, which match the
+recorded digest (`ensureContinuationImage`). A session not yet approved, or a different build, is left to the
 existing paths; a different build is checked against the signed release before it
 is adopted. The check cannot defend against a swapped file that is already
 executing; the defence there is launching the root-owned copy. After approval the
