@@ -3,6 +3,7 @@
 package installer
 
 import (
+ "strconv"
  "bufio"
  "bytes"
  "context"
@@ -62,8 +63,43 @@ func installationNetwork(name string)(guidedNetwork,error) {
  switch name {case "production":case "test":suffix="test.";default:return guidedNetwork{},fmt.Errorf("choose production or test")}
  return guidedNetwork{"https://api."+suffix+"hyperme.sh","https://auth."+suffix+"hyperme.sh/realms/controlplane","https://portal."+suffix+"hyperme.sh"},nil
 }
-type guidedUI struct { in *bufio.Reader; out io.Writer; ctx context.Context }
+type guidedUI struct {
+ in *bufio.Reader; out io.Writer; ctx context.Context
+ // yes answers the covered questions without reading input; see yesPrompt.
+ yes bool
+ // Settings given as flags answer their question instead of asking it.
+ cacheQuota,cacheReserve string
+}
+const (
+ promptEnroll="Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation, and service startup and selling after admin approval?"
+ promptContinue="Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests, service startup and selling once certified?"
+ promptPausedOnly="The saved approval covered paused startup only. Start selling on this host once the service is verified?"
+ promptModule="Load the installed WireGuard kernel module to verify it works? No packages or kernel files will be changed."
+ promptCacheSave="Save this host's model cache quota and free-space reserve?"
+)
+// yesPrompt lists the questions that --yes answers. It is the saved continuation
+// list plus the questions of a first setup that precede it. It is not a general
+// "yes": review of changed packages, a new browser approval, a newer installer,
+// a WireGuard repair and anything unexpected stay with the owner.
+func yesPrompt(label string)bool {
+ switch label {
+ case promptEnroll,promptContinue,promptPausedOnly,promptModule,promptCacheSave:return true
+ }
+ return continuationPrompt(label)||(strings.HasPrefix(label,"Create ")&&strings.HasSuffix(label," without changing partitions or mounts?"))
+}
+// preset returns the value of a setting given as a flag, announcing its use.
+func (u guidedUI) preset(flagName,value string)(string,bool) {
+ if value==""{return "",false}
+ fmt.Fprintf(u.out,"Using --%s %s\n",flagName,value)
+ return value,true
+}
 func (u guidedUI) ask(label,def string)(string,error) {
+ // --yes is this run's own consent, so it answers even when a saved continuation
+ // approval is also present; the saved approval is not widened for other runs.
+ if u.yes {
+  if def!=""{fmt.Fprintf(u.out,"%s: %s (default)\n",label,def)}
+  return def,nil
+ }
  if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
   if label=="Private Hugging Face token file for a gated model (Enter for public or cached models)" || label=="Private token file if required (Enter to retry without one)" {return "",nil}
   return "",fmt.Errorf("onboarding requires additional configuration: %s",label)
@@ -86,6 +122,10 @@ func (u guidedUI) ask(label,def string)(string,error) {
  return answer,nil
 }
 func (u guidedUI) confirm(label string)error {
+ if u.yes {
+  if yesPrompt(label){fmt.Fprintf(u.out,"Approved by --yes: %s\n",label);return nil}
+  return fmt.Errorf("--yes does not cover this question: %s Run the installer again without --yes to answer it",label)
+ }
  if u.ctx!=nil && u.ctx.Value(continuationConsent{})==true {
   if continuationPrompt(label){return nil}
   return fmt.Errorf("onboarding needs review of a change outside saved consent: %s",label)
@@ -227,6 +267,12 @@ func (g guidedFlow) finish(ctx context.Context)error {
  // Older installers advanced the cursor even when activation release was
  // unavailable. Reconcile through the existing authenticated activation path;
  // its active-service branch does not restart the host or clear an owner pause.
+ if g.ui.yes&&s.Stage==7&&s.Autonomous&&!s.SellConsent {
+  // --yes is this run's consent to start selling for a session an older installer approved for paused startup only.
+  if err=g.ui.confirm(promptPausedOnly);err!=nil{return err}
+  s.SellConsent=true
+  if err=g.save();err!=nil{return err}
+ }
  if s.Stage==7&&s.Autonomous&&s.SellConsent {
   if err=g.apply(ctx,"activate-agent","certification.json","Activate the host service and start selling?","--start");err!=nil{return err}
  }
@@ -341,10 +387,10 @@ func (g guidedFlow) finish(ctx context.Context)error {
   fmt.Fprintln(g.ui.out,"Certification passed. Using this host’s saved registration to start the service; selling starts once startup is verified.")
   fmt.Fprintln(g.ui.out,"Pause or resume selling at any time with: sudo hypermesh-host sell pause | sell resume")
   if g.state.Autonomous&&!g.state.SellConsent{
-   if g.ui.ctx!=nil&&g.ui.ctx.Value(continuationConsent{})==true{
+   if !g.ui.yes&&g.ui.ctx!=nil&&g.ui.ctx.Value(continuationConsent{})==true{
     return fmt.Errorf("certification passed, but the saved approval covers paused startup only; run the installer again with --interactive to approve starting selling")
    }
-   if err=g.ui.confirm("The saved approval covered paused startup only. Start selling on this host once the service is verified?");err!=nil{return err}
+   if err=g.ui.confirm(promptPausedOnly);err!=nil{return err}
    g.state.SellConsent=true
    if err=g.save();err!=nil{return err}
   }
@@ -361,14 +407,39 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  interactive:=flags.Bool("interactive",false,"explicitly review prompts and supply recovery input")
  cacheSettings:=flags.Bool("cache-settings",false,"review host model cache quota and reserve")
  receipt:=flags.String("receipt","","download receipt (normally found beside the executable)")
+ yes:=flags.Bool("yes",false,"give the consent for this whole setup once: accept the setup questions with the defaults detected on this host, or the settings given as flags")
+ networkFlag:=flags.String("network","","account network: production or test (default production)")
+ hostFlag:=flags.String("host-name","","name shown in your host dashboard (default this machine's host name)")
+ dirFlag:=flags.String("model-dir","","existing directory for model storage (default /var/lib/hypermesh/models)")
+ headlessFlag:=flags.Bool("headless",true,"disable graphical login after reboot (use --headless=false to keep it)")
+ quotaFlag:=flags.String("cache-quota-gib","","maximum disk space for downloaded models in GiB")
+ reserveFlag:=flags.String("cache-reserve-gib","","disk space to keep free on the model filesystem in GiB (at least 2)")
  if err:=flags.Parse(args);err!=nil{if err==flag.ErrHelp{return 0};return 2}
  if flags.NArg()!=0{return 2}
- if *background && (*interactive || *cacheSettings) {fmt.Fprintln(diagnostic,"--continue cannot be combined with interactive options");return 2}
- if *interactive || *cacheSettings {ctx=context.WithValue(ctx,continuationInteractive{},true)}
+ given:=map[string]bool{}
+ flags.Visit(func(f *flag.Flag){given[f.Name]=true})
+ headlessSet:=given["headless"]
+ *hostFlag=strings.TrimSpace(*hostFlag)
+ for _,name:=range []string{"network","host-name","model-dir","cache-quota-gib","cache-reserve-gib"} {
+  value:=map[string]string{"network":*networkFlag,"host-name":*hostFlag,"model-dir":*dirFlag,"cache-quota-gib":*quotaFlag,"cache-reserve-gib":*reserveFlag}[name]
+  if given[name]&&value=="" {fmt.Fprintf(diagnostic,"--%s needs a value; leave the flag out to use the default\n",name);return 2}
+ }
+ settings:=given["network"]||given["host-name"]||given["model-dir"]||headlessSet
+ if *yes && *interactive {fmt.Fprintln(diagnostic,"--yes and --interactive contradict each other: --yes answers the questions that --interactive asks");return 2}
+ if *background && (*interactive || *cacheSettings || *yes || settings || given["cache-quota-gib"] || given["cache-reserve-gib"]) {fmt.Fprintln(diagnostic,"--continue cannot be combined with interactive options, --yes or setting flags");return 2}
+ if *networkFlag!="" {if _,e:=installationNetwork(*networkFlag);e!=nil{fmt.Fprintln(diagnostic,"--network:",e);return 2}}
+ if *hostFlag!="" && !agentNameRE.MatchString(*hostFlag) {fmt.Fprintln(diagnostic,"--host-name must contain 1-63 letters, digits, dots, underscores or hyphens");return 2}
+ if *quotaFlag!="" {if n,e:=strconv.ParseUint(*quotaFlag,10,32);e!=nil||n==0{fmt.Fprintln(diagnostic,"--cache-quota-gib must be a positive whole number of GiB");return 2}}
+ if *reserveFlag!="" {if n,e:=strconv.ParseUint(*reserveFlag,10,32);e!=nil||n<2{fmt.Fprintln(diagnostic,"--cache-reserve-gib must be a whole number of GiB, at least 2");return 2}}
+ if *dirFlag!="" && (!filepath.IsAbs(*dirFlag)||filepath.Clean(*dirFlag)!=*dirFlag) {fmt.Fprintln(diagnostic,"--model-dir must be an absolute, clean directory path");return 2}
+ cacheFlags:=given["cache-quota-gib"]||given["cache-reserve-gib"]
+ // --yes answers the questions itself; it must not turn off the saved consent that later steps use.
+ if *interactive || (*cacheSettings&&!*yes) {ctx=context.WithValue(ctx,continuationInteractive{},true)}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
  if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
- ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx}
+ ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx,yes:*yes,cacheQuota:*quotaFlag,cacheReserve:*reserveFlag}
  fmt.Fprintln(out,"Hypermesh host setup\nThis guide checks your host, installs required software, connects your account and tests readiness. You approve machine changes before they run.")
+ if *yes {fmt.Fprintln(out,"--yes: you consent once to this whole setup. Questions about the network, host name, model storage, headless mode, system changes, model tests, and continuing automatically (including starting selling once the host is certified) are answered with this host's defaults or your flags. Anything else, and any setting that is wrong or does not fit, still stops here with a message.")}
  dir:=filepath.Join(defaultSetupState,"guided")
  unlock,err:=lockSetupState(dir);if err!=nil{fmt.Fprintln(diagnostic,err);return 1};defer unlock()
  statePath:=filepath.Join(dir,"session.json")
@@ -377,6 +448,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  if _,e:=os.Lstat(statePath);e==nil{
   err=guidedRead(statePath,&s,true)
   if err==nil&&(s.Schema!=1||s.Machine!=machine||s.Stage<0||s.Stage>7){err=fmt.Errorf("saved installation state is inconsistent; preserve it for recovery")}
+  // Refuse conflicting settings before any recovery or upgrade work.
+  if err==nil{err=resumedSettingsMatch(s,*networkFlag,*hostFlag,*dirFlag,headlessSet,*headlessFlag)}
+  if err==nil&&cacheFlags&&!*yes{ctx=context.WithValue(ctx,continuationInteractive{},true);ui.ctx=ctx}
   if err==nil && *background && s.ContinuationSHA!="" {
    target,e:=continuationTarget(s);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
    if target!="" {unlock();return runContinuation(ctx,target,input,out,diagnostic)}
@@ -420,7 +494,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if err==nil{err=validateGuidedDownload(s.Download)}
   if err!=nil{fmt.Fprintln(diagnostic,"Cannot find a matching download receipt. Run the website verifier for this release again in a new directory.");return 1}
   s.Schema=1;s.Machine=machine
-  s.Network,err=ui.ask("Account network: production or test (separate from the "+s.Download.Channel+" software channel)","production")
+  if v,ok:=ui.preset("network",*networkFlag);ok{s.Network=v}else{s.Network,err=ui.ask("Account network: production or test (separate from the "+s.Download.Channel+" software channel)","production")}
   var network guidedNetwork
   if err==nil{network,err=installationNetwork(s.Network)}
   if err==nil{s.Tenant,err=guidedTenant(ctx,network)}
@@ -432,9 +506,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    }
   }
   hostname,_:=os.Hostname()
-  if err==nil{s.Host,err=ui.ask("Name shown in your host dashboard",hostname)}
+  if v,ok:=ui.preset("host-name",*hostFlag);ok&&err==nil{s.Host=v}else if err==nil{s.Host,err=ui.ask("Name shown in your host dashboard",hostname)}
   if err==nil&&!agentNameRE.MatchString(s.Host){err=fmt.Errorf("host name must contain 1-63 letters, digits, dots, underscores or hyphens")}
-  if err==nil{s.Directory,err=ui.ask("Existing directory for model storage","/var/lib/hypermesh/models")}
+  if v,ok:=ui.preset("model-dir",*dirFlag);ok&&err==nil{s.Directory=v}else if err==nil{s.Directory,err=ui.ask("Existing directory for model storage","/var/lib/hypermesh/models")}
   if err==nil&&(!filepath.IsAbs(s.Directory)||filepath.Clean(s.Directory)!=s.Directory){err=fmt.Errorf("choose an absolute existing model directory")}
   if err==nil {
    info,e:=os.Stat(s.Directory)
@@ -444,7 +518,8 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    } else if e!=nil||!info.IsDir(){err=fmt.Errorf("model storage must be an accessible directory")}
   }
   if err==nil{
-   var answer string;answer,err=ui.ask("Use headless mode (disable graphical login after reboot)? yes/no","yes")
+   var answer string
+   if headlessSet {answer="no";if *headlessFlag{answer="yes"};fmt.Fprintf(out,"Using --headless=%v\n",*headlessFlag)} else {answer,err=ui.ask("Use headless mode (disable graphical login after reboot)? yes/no","yes")}
    if err==nil {switch strings.ToLower(answer){case "yes","y":s.Headless=true;case "no","n":default:err=fmt.Errorf("answer yes or no")}}
   }
   if err==nil {
@@ -469,11 +544,11 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   if !*background {if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)};if err!=nil{fmt.Fprintln(diagnostic,err);return 1}}
   ctx=withContinuationConsent(ctx);ui.ctx=ctx
  }
- if err=guidedCachePolicy(s.Directory,ui,*cacheSettings);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+ if err=guidedCachePolicy(s.Directory,ui,*cacheSettings||cacheFlags);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  planDir,err:=guidedPlanDirectory(dir,s)
  if err!=nil{fmt.Fprintln(diagnostic,err);return 1}
  if !*background && s.Stage>=4 && !s.Autonomous {
-  if err=ui.confirm("Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests, service startup and selling once certified?");err!=nil{fmt.Fprintln(diagnostic,err);return 1}
+  if err=ui.confirm(promptContinue);err!=nil{fmt.Fprintln(diagnostic,err);return 1}
   s.Autonomous=true
   s.SellConsent=true
   if err=installContinuation(ctx,&s);err==nil{err=writeGuided(statePath,s)}
@@ -483,7 +558,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  flow:=guidedFlow{dir:planDir,state:&s,ui:ui,diagnostic:diagnostic,run:guidedCommand,save:func()error{return writeGuided(statePath,s)},
   prepareContinuation:func(ctx context.Context,p SetupPlan)error{
    if !s.Autonomous {
-    if e:=ui.confirm("Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation, and service startup and selling after admin approval?");e!=nil{return e}
+    if e:=ui.confirm(promptEnroll);e!=nil{return e}
     s.SellConsent=true
    }
    if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
@@ -591,5 +666,19 @@ func upgradeGuidedInstalled(ctx context.Context,dir,statePath,receipt string,s *
  if next.Autonomous {next.ContinuationSHA="";if len(prepare)==0{return fmt.Errorf("continuation upgrade preparation is required")};if err=prepare[0](&next);err!=nil{return err}}
  if err=writeGuided(statePath,next);err!=nil{return err}
  *s=next
+ return nil
+}
+
+// A saved session keeps the settings it was created with. A setting flag that
+// disagrees would otherwise be ignored, so say so instead.
+func resumedSettingsMatch(s guidedState,network,host,dir string,headlessSet,headless bool)error {
+ var differs []string
+ if network!=""&&network!=s.Network{differs=append(differs,"--network")}
+ if host!=""&&host!=s.Host{differs=append(differs,"--host-name")}
+ if dir!=""&&dir!=s.Directory{differs=append(differs,"--model-dir")}
+ if headlessSet&&headless!=s.Headless{differs=append(differs,"--headless")}
+ if len(differs)>0 {
+  return fmt.Errorf("setup was already started with different settings, so %s cannot change it. Run the installer again without those flags to resume it",strings.Join(differs," and "))
+ }
  return nil
 }

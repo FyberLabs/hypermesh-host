@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/FyberLabs/hypermesh-host/internal/deploy"
@@ -26,9 +27,7 @@ func Main() {
   os.Exit(installer.RunQualifyHost(ctx,os.Args[2:],os.Stdin,os.Stdout,os.Stderr))
  }
 
- if len(os.Args) < 2 || os.Args[1] == "install" {
-  args := []string{}
-  if len(os.Args) > 1 { args = os.Args[2:] }
+ if guided, args := guidedInstallArgs(os.Args[1:]); guided {
   ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
   code := installer.RunGuidedInstall(ctx, args, os.Stdin, os.Stdout, os.Stderr)
   stop()
@@ -292,6 +291,8 @@ connects your account through browser approval, and checks host readiness.
 Keep the download receipt and signing key beside the verified executable.
 If interrupted or rebooted, run the same command again.
 
+To give your consent once instead of answering each question, run
+  sudo ./hypermesh-host --yes
   install --help    Guided setup options
   sell pause [--until=RFC3339]
                     Pause selling (indefinitely, or until the given time)
@@ -299,4 +300,20 @@ If interrupted or rebooted, run the same command again.
   sell status       Show the current selling state
   advanced-help     Individual operations for automation and recovery
 `)
+}
+
+// guidedInstallArgs reports whether the command line starts guided setup, and
+// with which flags. Guided setup runs with no arguments, with "install", or with
+// leading flags such as "--yes". Help flags and named commands do not start it.
+func guidedInstallArgs(args []string) (bool, []string) {
+	if len(args) == 0 {
+		return true, []string{}
+	}
+	if args[0] == "install" {
+		return true, args[1:]
+	}
+	if strings.HasPrefix(args[0], "-") && args[0] != "-h" && args[0] != "--help" && args[0] != "-help" {
+		return true, args
+	}
+	return false, nil
 }
