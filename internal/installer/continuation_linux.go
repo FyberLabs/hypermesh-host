@@ -4,7 +4,9 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"github.com/FyberLabs/hypermesh-host/internal/update"
 	"io"
 	"os"
@@ -247,11 +249,57 @@ func runningContinuation() ([]byte, error) {
 	}
 	return binary, nil
 }
+// continuationImages holds the verified, root-owned images selected by session.json.
+var continuationImages = filepath.Join(filepath.Dir(continuationBinary), "images")
+
 func continuationImage(sha string) (string, error) {
 	if !setupDigestRE.MatchString(sha) {
 		return "", fmt.Errorf("invalid continuation digest")
 	}
-	return filepath.Join(filepath.Dir(continuationBinary), "images", sha, "hypermesh-deploy"), nil
+	return filepath.Join(continuationImages, sha, "hypermesh-deploy"), nil
+}
+
+// resumeTarget decides which executable carries on a saved setup that a person
+// started by hand. Once setup has been approved, a verified copy of the installer
+// is saved in a root-only directory, and session.json (also root-only) records
+// its digest. A hand-started run therefore continues from that copy, so the
+// downloaded file is never what does the privileged work after approval.
+//
+// It returns "" when the running executable already is the verified copy, or
+// when there is nothing verified to compare with yet (setup was not approved),
+// or when the running build is a different one: a different build is handled by
+// the upgrade path, which checks it against the signed release first.
+func resumeTarget(s guidedState) (string, error) {
+	if s.ContinuationSHA == "" {
+		return "", nil
+	}
+	if s.Download.Build != buildinfo.CurrentBuild() || s.Download.Commit != buildinfo.Current() {
+		return "", nil
+	}
+	target, err := continuationTarget(s)
+	if err != nil {
+		return "", fmt.Errorf("this installer file does not match the verified copy saved when setup was approved, and that copy cannot be used (%v). "+
+			"Nothing was changed. Resume with the root-owned copy: sudo /usr/local/bin/hypermesh-host. "+
+			"If that is missing, download the same release again with the website verifier in a new directory and run it there", err)
+	}
+	return target, nil
+}
+
+// runVerifiedCopy runs the verified copy with the original options and returns its exit status.
+func runVerifiedCopy(ctx context.Context, path string, args []string, input io.Reader, out, diagnostic io.Writer) int {
+	cmd := exec.CommandContext(ctx, path, append([]string{"install"}, args...)...)
+	cmd.Stdin = input
+	cmd.Stdout = out
+	cmd.Stderr = diagnostic
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() > 0 {
+			return exit.ExitCode()
+		}
+		fmt.Fprintln(diagnostic, "could not run the verified installer copy:", err)
+		return 1
+	}
+	return 0
 }
 func continuationTarget(s guidedState) (string, error) {
 	binary, err := runningContinuation()

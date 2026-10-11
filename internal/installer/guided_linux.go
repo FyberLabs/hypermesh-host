@@ -451,6 +451,14 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   // Refuse conflicting settings before any recovery or upgrade work.
   if err==nil{err=resumedSettingsMatch(s,*networkFlag,*hostFlag,*dirFlag,headlessSet,*headlessFlag)}
   if err==nil&&cacheFlags&&!*yes{ctx=context.WithValue(ctx,continuationInteractive{},true);ui.ctx=ctx}
+  // After approval, a verified root-owned copy carries on, not this downloaded file.
+  if err==nil&&!*background {
+   target,e:=resumeTarget(s)
+   if e!=nil{err=e} else if target!="" {
+    fmt.Fprintln(diagnostic,"This installer file differs from the verified copy saved when setup was approved. Continuing with the verified root-owned copy.")
+    unlock();return runVerifiedCopy(ctx,target,args,input,out,diagnostic)
+   }
+  }
   if err==nil && *background && s.ContinuationSHA!="" {
    target,e:=continuationTarget(s);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
    if target!="" {unlock();return runContinuation(ctx,target,input,out,diagnostic)}
@@ -564,7 +572,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
    s.Autonomous=true
    if e:=installContinuation(ctx,&s);e!=nil{return e}
-   return writeGuided(statePath,s)
+   if e:=writeGuided(statePath,s);e!=nil{return e}
+   fmt.Fprintln(ui.out,"A verified, root-owned copy of this installer is saved. To resume later from any directory, run: sudo hypermesh-host")
+   return nil
   },
   adoptEnrollment:func(ctx context.Context,p agentInstallPlan)(bool,error){return adoptEarlyEnrollment(ctx,planDir,p,s)},
   qualification:func(ctx context.Context,path string)(bool,error){u:=ui;u.ctx=ctx;return guidedQualification(ctx,path,u,diagnostic)},
