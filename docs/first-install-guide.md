@@ -130,6 +130,9 @@ installed as `/usr/local/bin/hypermesh-host`.
   `sudo hypermesh-host`, which is the root-owned copy and works from any
   directory. Setup prints this once it is approved.
 
+If you start the downloaded file without `sudo` after approval, it tells you to run
+`sudo /usr/local/bin/hypermesh-host` instead of elevating the download.
+
 Before you approve setup nothing has been verified on the host yet, so resume
 from the directory you downloaded into, or run the website verifier again.
 

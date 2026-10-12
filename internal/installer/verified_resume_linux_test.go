@@ -164,3 +164,26 @@ func TestRunningVerifiedBytesRepairAChangedOrUnsafeImage(t *testing.T) {
 		t.Fatal("a directory was removed")
 	}
 }
+
+func TestNonRootAdviceNamesTheRootOwnedCopyOnceItExists(t *testing.T) {
+	root := t.TempDir()
+	installed := installedHostCLI
+	downloaded := "/home/me/download/hypermesh-host"
+	if got := rootStartAdvice(downloaded, root, installed); !strings.Contains(got, downloaded) || strings.Contains(got, "root-owned copy") {
+		t.Fatalf("before approval: %q", got)
+	}
+	path := agentDest(root, installed)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	got := rootStartAdvice(downloaded, root, installed)
+	if !strings.Contains(got, "sudo \""+installed+"\"") || strings.Contains(got, downloaded) {
+		t.Fatalf("after approval: %q", got)
+	}
+	if got = rootStartAdvice(installed, root, installed); !strings.Contains(got, installed) {
+		t.Fatalf("already the installed copy: %q", got)
+	}
+}

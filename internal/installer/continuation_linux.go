@@ -389,13 +389,16 @@ func installContinuation(ctx context.Context, s *guidedState) error {
 			return fmt.Errorf("running continuation does not match signed release")
 		}
 	}
-	if err := installHostCLI("", binary, s.HostCLISHA); err != nil { return err }
 	image, err := continuationImage(sha)
 	if err != nil {
 		return err
 	}
 	payload := agentPayload{agentFile{image, sha, 0700}, binary}
+	// Repair the saved image first, so a damaged public CLI cannot block recovery of it.
 	if err = ensureContinuationImage(image, payload); err != nil {
+		return err
+	}
+	if err := installHostCLI("", binary, s.HostCLISHA); err != nil {
 		return err
 	}
 	// The first verified binary remains a stable dispatcher. Only session.json

@@ -436,7 +436,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  // --yes answers the questions itself; it must not turn off the saved consent that later steps use.
  if *interactive || (*cacheSettings&&!*yes) {ctx=context.WithValue(ctx,continuationInteractive{},true)}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
- if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
+ if os.Geteuid()!=0{fmt.Fprint(diagnostic,rootStartAdvice(exe,"",installedHostCLI));return 1}
  ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx,yes:*yes,cacheQuota:*quotaFlag,cacheReserve:*reserveFlag}
  fmt.Fprintln(out,"Hypermesh host setup\nThis guide checks your host, installs required software, connects your account and tests readiness. You approve machine changes before they run.")
  if *yes {fmt.Fprintln(out,"--yes: you consent once to this whole setup. Questions about the network, host name, model storage, headless mode, system changes, model tests, and continuing automatically (including starting selling once the host is certified) are answered with this host's defaults or your flags. Anything else, and any setting that is wrong or does not fit, still stops here with a message.")}
@@ -691,4 +691,16 @@ func resumedSettingsMatch(s guidedState,network,host,dir string,headlessSet,head
   return fmt.Errorf("setup was already started with different settings, so %s cannot change it. Run the installer again without those flags to resume it",strings.Join(differs," and "))
  }
  return nil
+}
+
+// rootStartAdvice says how to start setup as root. Once setup has been approved
+// the root-owned copy exists, and it is what to elevate: advising sudo on a
+// downloaded, user-owned file could run a file that was swapped since approval.
+func rootStartAdvice(exe,root,installed string)string {
+ if exe!=installed {
+  if info,err:=os.Lstat(agentDest(root,installed));err==nil&&info.Mode().IsRegular() {
+   return fmt.Sprintf("Start guided setup with the root-owned copy saved when setup was approved:\n  sudo %q\n",installed)
+  }
+ }
+ return fmt.Sprintf("Start guided setup with:\n  sudo %q\n",exe)
 }
