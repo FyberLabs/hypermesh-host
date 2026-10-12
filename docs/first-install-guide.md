@@ -112,6 +112,36 @@ packages, a new browser approval, switching to a newer installer, or a WireGuard
 repair. Run the installer again without `--yes` to answer those. Browser sign-in
 is still done by you, in any browser. `--yes` cannot be combined with `--continue` or `--interactive`, and a setting flag with an empty value is an error.
 
+## Resuming after approval
+
+Once you approve setup, the installer saves a verified copy of itself in a
+root-only directory and records its checksum in the root-only setup record. The
+copy is checked against the signed release before it is saved. The same copy is
+installed as `/usr/local/bin/hypermesh-host`.
+
+- The background service always runs the saved copy.
+- If you resume by hand with `sudo ./hypermesh-host` and the downloaded file is
+  not identical to the saved copy, the installer continues from the saved copy
+  and says so. If the saved copy is missing or has changed, it stops before
+  doing anything and tells you how to recover. Running the root-owned
+  `sudo hypermesh-host`, or the same release downloaded again, puts the saved copy
+  back from those verified bytes.
+- To avoid running the downloaded file at all, resume with
+  `sudo hypermesh-host`, which is the root-owned copy and works from any
+  directory. Setup prints this once it is approved.
+
+If you start the downloaded file without `sudo` after approval, it tells you to run
+`sudo /usr/local/bin/hypermesh-host` instead of elevating the download.
+
+Before you approve setup nothing has been verified on the host yet, so resume
+from the directory you downloaded into, or run the website verifier again.
+
+A downloaded file that was swapped for a different program would already be
+running as root by the time it could check anything, so a check inside the file
+cannot stop that. What protects you is not starting it: use
+`sudo hypermesh-host` for later runs, and keep the download directory private
+until setup is approved.
+
 ## Automatic continuation
 
 Do not rerun the installer after reboot or while waiting for benchmark review.

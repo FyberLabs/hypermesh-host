@@ -4,7 +4,9 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"github.com/FyberLabs/hypermesh-host/internal/update"
 	"io"
 	"os"
@@ -247,11 +249,79 @@ func runningContinuation() ([]byte, error) {
 	}
 	return binary, nil
 }
+// continuationImages holds the verified, root-owned images selected by session.json.
+var continuationImages = filepath.Join(filepath.Dir(continuationBinary), "images")
+
 func continuationImage(sha string) (string, error) {
 	if !setupDigestRE.MatchString(sha) {
 		return "", fmt.Errorf("invalid continuation digest")
 	}
-	return filepath.Join(filepath.Dir(continuationBinary), "images", sha, "hypermesh-deploy"), nil
+	return filepath.Join(continuationImages, sha, "hypermesh-deploy"), nil
+}
+
+// resumeTarget decides which executable carries on a saved setup that a person
+// started by hand. Once setup has been approved, a verified copy of the installer
+// is saved in a root-only directory, and session.json (also root-only) records
+// its digest. A hand-started run therefore continues from that copy, so the
+// downloaded file is never what does the privileged work after approval.
+//
+// It returns "" when the running executable already is the verified copy, or
+// when there is nothing verified to compare with yet (setup was not approved),
+// or when the running build is a different one: a different build is handled by
+// the upgrade path, which checks it against the signed release first.
+func resumeTarget(s guidedState) (string, error) {
+	if s.ContinuationSHA == "" {
+		return "", nil
+	}
+	if s.Download.Build != buildinfo.CurrentBuild() || s.Download.Commit != buildinfo.Current() {
+		return "", nil
+	}
+	target, err := continuationTarget(s)
+	if err != nil {
+		return "", fmt.Errorf("this installer file does not match the verified copy saved when setup was approved, and that copy cannot be used (%v). "+
+			"Nothing was changed. Resume with the root-owned copy: sudo /usr/local/bin/hypermesh-host. "+
+			"If that is missing, download the same release again with the website verifier in a new directory and run it there", err)
+	}
+	return target, nil
+}
+
+// ensureContinuationImage makes the saved image equal the running executable.
+// The payload is the running executable, whose digest is the one recorded after
+// verification, so replacing a changed or unsafe image with it restores the
+// verified bytes rather than trusting anything new.
+func ensureContinuationImage(image string, payload agentPayload) error {
+	exists, err := agentFileMatches(image, payload)
+	if err != nil {
+		info, statErr := os.Lstat(image)
+		if statErr != nil || info.IsDir() {
+			return err
+		}
+		if err = os.Remove(image); err != nil {
+			return err
+		}
+		exists = false
+	}
+	if exists {
+		return nil
+	}
+	return writeAgentFile(image, payload)
+}
+
+// runVerifiedCopy runs the verified copy with the original options and returns its exit status.
+func runVerifiedCopy(ctx context.Context, path string, args []string, input io.Reader, out, diagnostic io.Writer) int {
+	cmd := exec.CommandContext(ctx, path, append([]string{"install"}, args...)...)
+	cmd.Stdin = input
+	cmd.Stdout = out
+	cmd.Stderr = diagnostic
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() > 0 {
+			return exit.ExitCode()
+		}
+		fmt.Fprintln(diagnostic, "could not run the verified installer copy:", err)
+		return 1
+	}
+	return 0
 }
 func continuationTarget(s guidedState) (string, error) {
 	binary, err := runningContinuation()
@@ -319,18 +389,17 @@ func installContinuation(ctx context.Context, s *guidedState) error {
 			return fmt.Errorf("running continuation does not match signed release")
 		}
 	}
-	if err := installHostCLI("", binary, s.HostCLISHA); err != nil { return err }
 	image, err := continuationImage(sha)
 	if err != nil {
 		return err
 	}
 	payload := agentPayload{agentFile{image, sha, 0700}, binary}
-	if exists, e := agentFileMatches(image, payload); e != nil {
-		return e
-	} else if !exists {
-		if e = writeAgentFile(image, payload); e != nil {
-			return e
-		}
+	// Repair the saved image first, so a damaged public CLI cannot block recovery of it.
+	if err = ensureContinuationImage(image, payload); err != nil {
+		return err
+	}
+	if err := installHostCLI("", binary, s.HostCLISHA); err != nil {
+		return err
 	}
 	// The first verified binary remains a stable dispatcher. Only session.json
 	// selects the active immutable image, so failed upgrades retain the old one.

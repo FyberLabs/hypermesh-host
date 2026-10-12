@@ -436,7 +436,7 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
  // --yes answers the questions itself; it must not turn off the saved consent that later steps use.
  if *interactive || (*cacheSettings&&!*yes) {ctx=context.WithValue(ctx,continuationInteractive{},true)}
  exe,err:=os.Executable();if err!=nil{fmt.Fprintln(diagnostic,"cannot locate the verified installer");return 1}
- if os.Geteuid()!=0{fmt.Fprintf(diagnostic,"Start guided setup with:\n  sudo %q\n",exe);return 1}
+ if os.Geteuid()!=0{fmt.Fprint(diagnostic,rootStartAdvice(exe,"",installedHostCLI));return 1}
  ui:=guidedUI{in:bufio.NewReader(input),out:out,ctx:ctx,yes:*yes,cacheQuota:*quotaFlag,cacheReserve:*reserveFlag}
  fmt.Fprintln(out,"Hypermesh host setup\nThis guide checks your host, installs required software, connects your account and tests readiness. You approve machine changes before they run.")
  if *yes {fmt.Fprintln(out,"--yes: you consent once to this whole setup. Questions about the network, host name, model storage, headless mode, system changes, model tests, and continuing automatically (including starting selling once the host is certified) are answered with this host's defaults or your flags. Anything else, and any setting that is wrong or does not fit, still stops here with a message.")}
@@ -451,6 +451,14 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
   // Refuse conflicting settings before any recovery or upgrade work.
   if err==nil{err=resumedSettingsMatch(s,*networkFlag,*hostFlag,*dirFlag,headlessSet,*headlessFlag)}
   if err==nil&&cacheFlags&&!*yes{ctx=context.WithValue(ctx,continuationInteractive{},true);ui.ctx=ctx}
+  // After approval, a verified root-owned copy carries on, not this downloaded file.
+  if err==nil&&!*background {
+   target,e:=resumeTarget(s)
+   if e!=nil{err=e} else if target!="" {
+    fmt.Fprintln(diagnostic,"This installer file differs from the verified copy saved when setup was approved. Continuing with the verified root-owned copy.")
+    unlock();return runVerifiedCopy(ctx,target,args,input,out,diagnostic)
+   }
+  }
   if err==nil && *background && s.ContinuationSHA!="" {
    target,e:=continuationTarget(s);if e!=nil{fmt.Fprintln(diagnostic,e);return 1}
    if target!="" {unlock();return runContinuation(ctx,target,input,out,diagnostic)}
@@ -564,7 +572,9 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
    if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
    s.Autonomous=true
    if e:=installContinuation(ctx,&s);e!=nil{return e}
-   return writeGuided(statePath,s)
+   if e:=writeGuided(statePath,s);e!=nil{return e}
+   fmt.Fprintln(ui.out,"A verified, root-owned copy of this installer is saved. To resume later from any directory, run: sudo hypermesh-host")
+   return nil
   },
   adoptEnrollment:func(ctx context.Context,p agentInstallPlan)(bool,error){return adoptEarlyEnrollment(ctx,planDir,p,s)},
   qualification:func(ctx context.Context,path string)(bool,error){u:=ui;u.ctx=ctx;return guidedQualification(ctx,path,u,diagnostic)},
@@ -681,4 +691,16 @@ func resumedSettingsMatch(s guidedState,network,host,dir string,headlessSet,head
   return fmt.Errorf("setup was already started with different settings, so %s cannot change it. Run the installer again without those flags to resume it",strings.Join(differs," and "))
  }
  return nil
+}
+
+// rootStartAdvice says how to start setup as root. Once setup has been approved
+// the root-owned copy exists, and it is what to elevate: advising sudo on a
+// downloaded, user-owned file could run a file that was swapped since approval.
+func rootStartAdvice(exe,root,installed string)string {
+ if exe!=installed {
+  if info,err:=os.Lstat(agentDest(root,installed));err==nil&&info.Mode().IsRegular() {
+   return fmt.Sprintf("Start guided setup with the root-owned copy saved when setup was approved:\n  sudo %q\n",installed)
+  }
+ }
+ return fmt.Sprintf("Start guided setup with:\n  sudo %q\n",exe)
 }

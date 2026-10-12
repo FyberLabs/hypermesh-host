@@ -1961,6 +1961,23 @@ session and executable usable. Automated coverage includes pathname replacement,
 failed upgrade preparation, repeated upgrades and default noninteractive consent.
 Live AGX continuation across an installer upgrade remains to be verified.
 
+### Verified resume
+
+A hand-started run of a saved session whose approval recorded a verified copy
+(`ContinuationSHA`, with the image in the root-only continuation directory) now
+compares the running executable with that copy before any other work. Same bytes:
+it carries on. Same build but different bytes: it hands over to the saved image
+with the original options and keeps its exit status. Image missing, changed,
+loose in mode or ownership: it stops with the fix (resume with
+`sudo /usr/local/bin/hypermesh-host`, or download the same release again in a new
+directory); either one then restores the image from its own bytes, which match the
+recorded digest (`ensureContinuationImage`). A session not yet approved, or a different build, is left to the
+existing paths; a different build is checked against the signed release before it
+is adopted. The check cannot defend against a swapped file that is already
+executing; the defence there is launching the root-owned copy. After approval the
+installer prints `sudo hypermesh-host` as the resume command. Reuses
+`continuationTarget`, the image store and `HostCLISHA`; nothing new is stored.
+
 ### One consent with `--yes`
 
 `install --yes` (`hypermesh-host --yes` is the same) answers the first-setup
