@@ -1,0 +1,90 @@
+name: Test-channel bring-up or usage result
+description: Report a successful or failed hardware test, certification attempt or test purchase.
+title: "[Test channel] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Follow docs/community-testing.md. Partial results and failures are welcome.
+        Use this form for a public summary only. Keep raw diagnostics, payment references, serials,
+        IP addresses, tokens, prompts and private model paths out of the issue.
+  - type: input
+    id: request
+    attributes:
+      label: Hardware request or previous result
+      description: Link the hardware support issue or an earlier result so reruns stay connected.
+  - type: input
+    id: release
+    attributes:
+      label: Exact signed test release
+      description: Version, global build, source commit and immutable release link. Include the selected OS/architecture and CLI checksum verification result.
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Hardware and software configuration
+      description: Exact CPU, board, accelerator devices/counts, RAM/device memory, OS/kernel/firmware, driver and runtime pins. Summarize inspect output after reviewing it.
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Furthest stage attempted
+      options:
+        - Download and signature verification
+        - Hardware inspection
+        - Installation or service startup
+        - Enrollment or connectivity
+        - Pinned local inference
+        - Bronze certification run
+        - End-to-end model usage and test purchase
+        - Shared remote-memory experiment
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Passed this stage
+        - Failed this stage
+        - Blocked or unsupported
+        - Not run
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and evidence summary
+      description: Exact commands with secrets removed, expected/actual behavior, first error, UTC time, and whether restart/retry changes it. For inference include public model revision/hash, runtime digest, quantization and context. Unknown measurements stay unknown.
+    validations:
+      required: true
+  - type: textarea
+    id: measurements
+    attributes:
+      label: Measurements and cleanup
+      description: Usable/free memory before and under load, latency/throughput and duration, thermal or OOM events, and whether the workload/service stopped cleanly. Attach only reviewed, redacted evidence.
+  - type: dropdown
+    id: payment_mode
+    attributes:
+      label: Payment mode exercised
+      options:
+        - No purchase attempted
+        - Test credits
+        - Provider sandbox
+        - Separately authorized real-money test
+    validations:
+      required: true
+  - type: textarea
+    id: journey
+    attributes:
+      label: End-to-end usage result
+      description: Summarize model selection, reservation, checkout, granted lease, actual inference through Hypermesh, usage/charge receipt, cancellation/refund and teardown. State what was not run. Share opaque lease/payment references only through authenticated private support.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Public report review
+      options:
+        - label: I reviewed this report and removed credentials, personal identifiers and private model/payment data.
+          required: true
