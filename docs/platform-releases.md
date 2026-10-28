@@ -111,6 +111,13 @@ These adapters are not enabled by this candidate. They need dedicated workload
 contracts; no existing GGUF backend is relabeled as TPU/NPU. The host's minimum
 RAM policy does not imply an add-on has 16 GiB of accelerator memory.
 
+## Community bring-up
+
+Use the [contributor guide](community-testing.md) and hardware request/result
+forms to test systems outside the owned lab. Publish fixes through the same
+signed test channel, link the exact configuration and release, and record
+Bronze certification and end-to-end test purchases as separate outcomes.
+
 ## Acceptance before sales
 
 For each exact board/chip/RAM/OS/driver/runtime combination record:

@@ -27,6 +27,12 @@ Other machines are not supported for hosting yet:
 - The guided setup has Ubuntu profiles for Jetson, AMD HIP and discrete CUDA hosts. Each is marked "candidate; physical acceptance pending" in the code.
 - ROCm and macOS (Metal) runtime paths exist as build-tagged scaffolds. See [deploy/rocm/README.md](deploy/rocm/README.md) and [deploy/mac/README.md](deploy/mac/README.md).
 
+## Community hardware testing
+
+Volunteer systems can enter the same signed test channel as lab hardware.
+[Request support or report a test result](docs/community-testing.md), including
+NVIDIA, AMD, Intel and AI accelerator/M.2 configurations we do not own.
+
 ## Expanded release candidates
 
 The signed test-channel release payload covers Linux ARM64 (ROCK 5, Orion O6N, RZ/V2H and

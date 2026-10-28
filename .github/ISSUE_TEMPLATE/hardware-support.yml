@@ -1,0 +1,60 @@
+name: Request test-channel hardware support
+description: Offer a system for testing or request a runtime or accelerator adapter.
+title: "[Hardware] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You can help qualify hardware we do not own. Start with the existing signed test channel.
+        Please omit serial numbers, IP addresses, account details, credentials and private model data.
+        A request records a candidate; it does not certify the system.
+  - type: dropdown
+    id: family
+    attributes:
+      label: Hardware family
+      options:
+        - NVIDIA GPU or Jetson
+        - AMD GPU or APU
+        - Intel GPU or NPU
+        - Apple silicon
+        - ARM CPU or integrated accelerator
+        - AI accelerator or M.2 module
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Exact configuration
+      description: Board, CPU, every GPU or accelerator, RAM and device memory; for add-ons include carrier and actual PCIe/USB wiring. No serials.
+    validations:
+      required: true
+  - type: textarea
+    id: software
+    attributes:
+      label: OS and runtime
+      description: OS release, kernel, firmware, GPU driver, SDK, runtime version and model format. Unknown values are useful too.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Workload and vendor references
+      description: Public vendor documentation, supported model format, licensing or redistribution restrictions, and the workload you want to run.
+    validations:
+      required: true
+  - type: dropdown
+    id: availability
+    attributes:
+      label: Can you run test-channel builds on this hardware?
+      options:
+        - Yes, I own or administer it and can test
+        - Yes, with help getting started
+        - No, this is a support request only
+    validations:
+      required: true
+  - type: textarea
+    id: next_run
+    attributes:
+      label: Existing result or next test
+      description: Existing feedback issue, exact test release, what already works, first failure, and optional availability. Keep contact details private.
