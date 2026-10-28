@@ -21,19 +21,33 @@ and architecture match. Neither command authorizes enrollment or selling.
 | Ryzen AI Max+ 395/PRO 395, PRO 495 | Linux AMD64 | `rocm,cpu` build tags; HIP requires compatible ROCm, KFD/DRI and pinned workload image; no HSA override |
 | Apple silicon Mac mini / Studio | Darwin ARM64 | Signed binaries and inspection; native Metal process/service lifecycle, installation and qualification remain pending |
 
-## Get binaries before physical testing
+## Download from the test channel
 
-Every host PR CI run uploads `host-lab-binaries-<commit>` containing all six
-executables, the platform matrix, a source-commit readme and SHA256SUMS. This
-happens before the full Go tests, so lab binaries remain downloadable even when
-an environment-specific test fails. Download from the Actions run artifacts.
-The binaries are unsigned build-0 lab artifacts, distinct from the signed
-installation channel. No signing keys or production permissions are used.
-For a local build, from a clean checkout run
-`bash packaging/release/build-candidates.sh /tmp/new-host-lab-binaries`.
+Test builds use the existing signed test channel. Each platform's agent and CLI
+is an individual release asset; download only the executable needed for that
+host. There is no separate CI binary bundle or build-0 distribution path.
+Physical qualification governs production promotion and selling eligibility,
+not access to test builds.
 
-Signed test-channel publication follows the reviewed main-branch publisher;
-physical model qualification is needed for selling rather than lab download.
+[Signed test build 0.0.100](https://github.com/FyberLabs/hypermesh-host/releases/tag/test-100-b4be18a14c34)
+is the first release with all three OS/architecture targets. Select the
+`hypermesh-deploy_0.0.100_<os>_<arch>` CLI for `linux_arm64`, `linux_amd64` or
+`darwin_arm64`, or the corresponding `hypermesh-agent` executable. The existing
+checksums, signature and release metadata cover each asset. The
+[test channel](https://github.com/FyberLabs/hypermesh-host/releases/tag/test)
+tracks subsequent test builds.
+
+For normal downloads, the verifier resolves the latest signed test release and
+selects the local platform:
+
+```sh
+python3 ./hypermesh-bootstrap.py --channel test
+```
+
+Use `--download-only` to verify and save without starting Linux setup. macOS
+builds stop after download for inspection. Explicit `--os` and `--arch` select a
+binary for another host. Keep the signing key and installation receipt with the
+verified executable.
 
 ## Release payload and verification
 
@@ -56,8 +70,8 @@ agent updating is disabled on non-Linux candidates so the existing Linux-only
 update/apply path cannot replace a Darwin binary with a Linux payload.
 
 Release version/build allocation and production promotion remain governed by
-[release versioning](release-versioning.md). These changes prepare a new test
-release after merge; branch builds do not publish a release. A successful build
+[release versioning](release-versioning.md). Merged main-branch changes publish through the existing signed test channel;
+branch builds do not publish a release. A successful build
 is not physical host acceptance. The platform matrix does not open placement,
 change prices, turn on selling, or grant memory-protection qualifications.
 

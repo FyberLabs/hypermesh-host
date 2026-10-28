@@ -29,7 +29,7 @@ Other machines are not supported for hosting yet:
 
 ## Expanded release candidates
 
-The next release payload covers Linux ARM64 (ROCK 5, Orion O6N, RZ/V2H and
+The signed test-channel release payload covers Linux ARM64 (ROCK 5, Orion O6N, RZ/V2H and
 Jetson), Linux AMD64 with ROCm (Ryzen AI Max+ 395/PRO 495), and Darwin ARM64
 (Apple silicon Mac mini/Studio). The target range starts at 16 GiB with no
 software upper RAM ceiling. Run `hypermesh-host platforms` for the matrix and
