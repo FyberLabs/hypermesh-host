@@ -78,7 +78,7 @@ func validateSetupApprovalPolicy(p SetupPlan, approved string, installed bool) e
   }
 	}
 	if validateEndpoint(p.ReadinessURL)!=nil || p.Preflight.Resources.ModelDirectory=="" ||
-		(p.Preflight.Resources.MemoryMode!="uma" && p.Preflight.Resources.MemoryMode!="discrete") {
+		(p.Preflight.Resources.MemoryMode!="cpu" && p.Preflight.Resources.MemoryMode!="uma" && p.Preflight.Resources.MemoryMode!="discrete") {
 		return fmt.Errorf("plan lacks valid preflight inputs; regenerate it")
 	}
 	if p.WireGuardMode!="kernel" && p.WireGuardMode!="userspace" { return fmt.Errorf("invalid WireGuard mode") }

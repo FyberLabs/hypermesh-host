@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+ "github.com/FyberLabs/hypermesh-host/internal/hardware"
 	"github.com/FyberLabs/hypermesh-host/internal/bench"
 	"github.com/FyberLabs/hypermesh-host/internal/logsafe"
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
@@ -92,6 +93,7 @@ type Agent struct {
 	// the allowlisted HTTP fetcher. Tests stub this — never hit the network.
 	fetchWeights func(ctx context.Context, dest, sourceRef, pin string) error
  modelFit func(context.Context,int64)error
+ modelProfile func(context.Context)hardware.Profile
 	// dockerRun runs docker CLI. Nil uses the NVIDIA runtime's runner when
 	// available; tests inject a stub for egress observation.
 	dockerRun runtime.DockerRunner
@@ -1141,7 +1143,7 @@ func (a *Agent) leaseStart(ctx context.Context, job api.Job) pathb.Result {
 // its hash does not match and source_ref can download it again.
 func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Result, bool) {
 	if job.SourceRef != "" {
-		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
+		if err := a.checkDemandFit(ctx, job.SizeBytes, job.Backend); err != nil {
 			return pathb.Result{Reason: err.Error()}, false
 		}
 		if job.SizeBytes <= 0 {
@@ -1182,7 +1184,7 @@ func (a *Agent) leaseStartAttempt(ctx context.Context, job api.Job) (pathb.Resul
 		return res, false
 	}
 	if job.SourceRef != "" {
-		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
+		if err := a.checkDemandFit(ctx, job.SizeBytes, job.Backend); err != nil {
 			return pathb.Result{Reason: err.Error()}, false
 		}
 	}

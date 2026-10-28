@@ -46,7 +46,7 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		return fail("certification refused while a lease is recorded")
 	}
 	if job.SourceRef != "" && a.certModelPath == "" {
-		if err := a.checkDemandFit(ctx, job.SizeBytes); err != nil {
+		if err := a.checkDemandFit(ctx, job.SizeBytes, job.Backend); err != nil {
 			return fail(err.Error())
 		}
 		result := a.labPull(ctx, artifactPullJob(job))
