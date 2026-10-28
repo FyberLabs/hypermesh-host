@@ -114,6 +114,7 @@ func (h *Handle) Serving() bool {
 
 // NVIDIA talks to docker with --runtime=nvidia.
 type NVIDIA struct {
+ cpu bool
 	Docker string
 	Run    func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
@@ -219,7 +220,7 @@ func StartArgs(spec Spec, ref string) []string {
 // A failed run removes a leftover Status=Created container so a
 // same-lease retry is not blocked on --name.
 func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
-	if spec.Runtime != "" && spec.Runtime != "nvidia" {
+	if !n.cpu && spec.Runtime != "" && spec.Runtime != "nvidia" {
 		return nil, ErrWrongRuntime
 	}
 	if strings.TrimSpace(spec.LeaseID) == "" {
@@ -232,6 +233,7 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if _, err := requireServeAlias(spec.CatalogID); err != nil {
 		return nil, err
 	}
+	if n.cpu {spec.Backend=BackendLlamaCppCPU}
 	name := ContainerName(spec.LeaseID)
 	if out, err := n.run(ctx, PullArgs(ref)...); err != nil {
 		if !n.imagePresent(ctx, ref) {
@@ -239,6 +241,7 @@ func (n *NVIDIA) Start(ctx context.Context, spec Spec) (*Handle, error) {
 		}
 	}
 	args := StartArgs(spec, ref)
+ if n.cpu {args = CPUStartArgs(spec,ref)}
 	for _, a := range args {
 		if a == "--gpus" || strings.HasPrefix(a, "--gpus=") {
 			return nil, ErrUsesGPUsFlag

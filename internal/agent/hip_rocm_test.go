@@ -52,9 +52,7 @@ func TestLeaseStartHIPROCmScaffold(t *testing.T) {
 			runArgs = c
 			break
 		}
-		if len(c) > 0 && c[0] == "pull" {
-			t.Fatalf("expected hip docker run without pull, calls=%v", hipCalls)
-		}
+
 	}
 	if runArgs == nil {
 		t.Fatalf("expected hip docker run, calls=%v", hipCalls)

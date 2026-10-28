@@ -10,6 +10,7 @@ const GiB int64 = 1 << 30
 // UMA allocation is a proposed workload budget, not installed physical RAM.
 // DiskFreeBytes is available space on the selected model-cache filesystem.
 type Resources struct {
+ CPU bool `json:"CPU,omitempty"`
 	SystemBytes          int64
 	AvailableSystemBytes int64
 	DiscreteVRAMBytes    int64
@@ -33,6 +34,17 @@ type Admission struct {
 // Aggregate discrete VRAM passes only this capacity gate; runtime preflight
 // must separately prove that the selected GPUs can execute the target model.
 func CheckResources(r Resources) Admission {
+ if r.CPU {
+  a:=Admission{Reasons:[]string{},RequiredDiskBytes:(12*GiB*11+4)/5}
+  if r.UMA||r.UMAAllocationBytes!=0||r.UMARuntime!=nil||r.DiscreteVRAMBytes!=0 {a.Reasons=append(a.Reasons,"CPU mode cannot claim accelerator allocations")}
+  if r.SystemBytes<16*GiB {a.Reasons=append(a.Reasons,"at least 16 GiB system memory is required")}
+  if r.AvailableSystemBytes<=12*GiB||r.AvailableSystemBytes>r.SystemBytes {a.Reasons=append(a.Reasons,"more than 12 GiB system memory must be free for minimum CPU installation")}
+  if r.DiskFreeBytes<a.RequiredDiskBytes {a.Reasons=append(a.Reasons,"model-cache filesystem needs minimum installation capacity")}
+  a.HostReserveBytes=2*GiB
+  a.Eligible=len(a.Reasons)==0
+  return a
+ }
+
 	if r.UMA && r.UMAAllocationBytes == 0 { return checkMinimumInstallationResources(r) }
 	a := Admission{Reasons: []string{}}
 	if r.SystemBytes < 16*GiB {

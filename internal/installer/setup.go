@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
+ "github.com/FyberLabs/hypermesh-host/internal/hardware"
 )
 
 // SetupProfile is a revisioned policy, not hardware certification. Changing
@@ -34,7 +35,9 @@ type SetupProfile struct {
 func setupProfiles() []SetupProfile {
 	packages := []string{"ca-certificates", "gnupg", "python3", "wireguard-tools", "iproute2", "iputils-ping"}
 	return []SetupProfile{
-		{"ubuntu-jetson-cuda", 3, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+		{"debian-arm64-cpu", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+ {"ubuntu-arm64-cpu", 1, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
+ {"ubuntu-jetson-cuda", 3, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
 		{"ubuntu-amd-hip", 3, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
 		{"ubuntu-discrete-cuda", 3, "candidate; physical acceptance pending", "preserve installed vendor stack", append([]string{}, packages...), []string{"wireguard-go"}},
 	}
@@ -178,14 +181,18 @@ func normalizedSetupArch(arch string) string {
 }
 
 func selectSetupProfile(p Plan, platform SetupPlatform, requested string) (*SetupProfile, error) {
-	if platform.OS != "ubuntu" || (platform.Version != "22.04" && platform.Version != "24.04") {
-		return nil, fmt.Errorf("no setup policy for this OS; use an explicitly supported Ubuntu release")
+	if !((platform.OS == "ubuntu" && (platform.Version == "22.04" || platform.Version == "24.04")) || (platform.OS=="debian" && (platform.Version=="12"||platform.Version=="13"))) {
+		return nil, fmt.Errorf("no setup policy for this OS; use a supported Ubuntu or Debian profile")
 	}
 	f := p.Hardware.Facts
 	arch := f.Arch
 	if arch == "aarch64" { arch = "arm64" }
 	id := ""
-	if p.Resources.Resources.UMA {
+	cpuSystem:=hardware.SystemID(f)
+ if p.Resources.MemoryMode=="cpu" && p.Resources.Resources.CPU && arch=="arm64" && (cpuSystem=="radxa-rock-5"||cpuSystem=="radxa-orion-o6n"||cpuSystem=="renesas-rz-v2h") {
+    id=platform.OS+"-arm64-cpu"
+ } else if platform.OS=="debian" {return nil,fmt.Errorf("Debian accelerator setup policies are not qualified")
+ } else if p.Resources.Resources.UMA {
 		r := p.Resources.Resources.UMARuntime
 		if !validUMARuntime(r) { return nil, fmt.Errorf("valid integrated CUDA/HIP runtime evidence is required") }
 		switch {
@@ -280,7 +287,7 @@ func buildSetupPlan(ctx context.Context, p Plan, requested, wireguardMode string
 			result.Changes = append(result.Changes, SetupChange{"prerequisite-packages", "packages", true, argv,
 				"Exact versions include the simulated dependency closure; package maintainer scripts may restart services, so apply needs explicit review and recovery."})
 		}
-		vendorKnown := false
+		vendorKnown := result.Profile.ID=="debian-arm64-cpu" || result.Profile.ID=="ubuntu-arm64-cpu"
 		for name := range installed {
 			base := packageBase(name)
 			if !hasNativePackage(installed, base, normalizedSetupArch(p.Hardware.Facts.Arch)) { continue }

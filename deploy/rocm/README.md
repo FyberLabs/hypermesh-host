@@ -41,3 +41,10 @@ Cert still means **Fyber-published hashes**. `image_digest` stays `repo@digest`.
 ## Out of scope here
 
 NVIDIA Jetson certified classes, public Thor, GHCR pull, fabricated tokens/sec, marketing TOPS as tokens/sec, `HSA_OVERRIDE`, and guessed gfx names.
+
+## Multi-platform candidate
+
+Linux AMD64 release payloads now use `rocm,cpu` build tags. HIP binds the exact
+GGUF and catalog alias and pulls the pinned image. The existing HIP SDK/driver,
+allocation, model-context and physical acceptance requirements still apply.
+See [the platform matrix](../../docs/platform-releases.md).

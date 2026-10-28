@@ -33,17 +33,17 @@ func RunResourceCheck(ctx context.Context, args []string, out, diagnostic io.Wri
 func runResourceCheck(ctx context.Context, args []string, out, diagnostic io.Writer, probe resourceProbe) int {
 	flags := flag.NewFlagSet("check-resources", flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
-	mode := flags.String("memory-mode", "", "required: uma or discrete; describes the selected accelerator")
+	mode := flags.String("memory-mode", "", "required: cpu, uma or discrete; describes the selected accelerator")
 	directory := flags.String("model-dir", "", "required: existing model-cache directory on the intended filesystem")
 	allocation := flags.Int64("uma-gib", 0, "optional explicit UMA diagnostic budget in GiB; zero checks installation minimum only")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp { return 0 }
 		return 2
 	}
-	if flags.NArg() != 0 || (*mode != "uma" && *mode != "discrete") || *directory == "" ||
+	if flags.NArg() != 0 || (*mode != "cpu" && *mode != "uma" && *mode != "discrete") || *directory == "" ||
 		(*mode == "uma" && (*allocation < 0 || *allocation > (1<<63-1)/GiB)) ||
-		(*mode == "discrete" && *allocation != 0) {
-		fmt.Fprintln(diagnostic, "require --model-dir and --memory-mode uma or discrete; optional --uma-gib must be positive and UMA-only")
+		(*mode != "uma" && *allocation != 0) {
+		fmt.Fprintln(diagnostic, "require --model-dir and --memory-mode cpu, uma or discrete; optional --uma-gib must be positive and UMA-only")
 		return 2
 	}
 	path, err := filepath.Abs(*directory)

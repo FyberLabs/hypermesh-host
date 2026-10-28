@@ -30,7 +30,7 @@ func TestHIPStartArgsNoNVIDIANoOverride(t *testing.T) {
 		t.Fatalf("publish/name: %v", args)
 	}
 	assertWorkloadJail(t, args)
-	if args[len(args)-1] != testRef {
+	if args[len(args)-3] != testRef {
 		t.Fatalf("ref last: %v", args)
 	}
 	for _, leak := range []string{"tok/s", "TOPS", "tokens/sec"} {
@@ -56,7 +56,7 @@ func TestStripHSAOverride(t *testing.T) {
 	}
 }
 
-func TestHIPStartMockNoPull(t *testing.T) {
+func TestHIPStartPinsImageAndModel(t *testing.T) {
 	var seen [][]string
 	h := &HIP{
 		Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
@@ -67,7 +67,7 @@ func TestHIPStartMockNoPull(t *testing.T) {
 			return []byte("cid-hip\n"), nil
 		},
 	}
-	got, err := h.Start(context.Background(), Spec{LeaseID: "lease-h", ImageDigest: testRef})
+	got, err := h.Start(context.Background(), Spec{LeaseID: "lease-h", CatalogID:"exact-model", ImageDigest: testRef})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,11 +84,10 @@ func TestHIPStartMockNoPull(t *testing.T) {
 	if runIdx < 0 {
 		t.Fatalf("missing run, calls=%v", seen)
 	}
-	for i := 0; i < runIdx; i++ {
-		if seen[i][0] == "pull" {
-			t.Fatalf("scaffold must not docker pull, calls=%v", seen)
-		}
-	}
+    if len(seen[0])!=2 || seen[0][0]!="pull" || seen[0][1]!=testRef {t.Fatalf("image pin not pulled: %v",seen)}
+    text:=strings.Join(seen[runIdx]," ")
+    if !strings.Contains(text, "HYPERMESH_SERVE_ALIAS=exact-model") || !strings.Contains(text,ContainerGGUFPath+":ro") {t.Fatal("model or alias unbound",text)}
+
 	assertWorkloadJail(t, seen[runIdx])
 	if err := h.Stop(context.Background(), got); err != nil {
 		t.Fatal(err)

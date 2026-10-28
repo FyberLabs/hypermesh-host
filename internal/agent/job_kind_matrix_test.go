@@ -451,7 +451,7 @@ func TestJobKindStubBackendExactReasons(t *testing.T) {
 	kinds := []api.JobKind{api.KindPathB, api.KindInstanceCheck, api.KindLeaseStart}
 	for _, kind := range kinds {
 		for _, backend := range backends {
-			if backend == "llama-cpp-cpu" && runtime.MetalImageEnabled() {
+			if backend == "llama-cpp-cpu" && (runtime.MetalImageEnabled() || runtime.CPUImageEnabled()) {
 				continue
 			}
 			if backend == "hip-rocm" && runtime.HIPImageEnabled() {

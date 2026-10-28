@@ -26,7 +26,7 @@ func TestResolveBackendStubsAndUnknown(t *testing.T) {
 		"not-a-backend",
 	}
 	for _, backend := range cases {
-		if backend == BackendLlamaCppCPU && MetalImageEnabled() {
+		if backend == BackendLlamaCppCPU && (MetalImageEnabled() || CPUImageEnabled()) {
 			continue
 		}
 		if backend == BackendHIPROCm && HIPImageEnabled() {

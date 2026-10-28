@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "minimum_memory_gib": 16,
+  "maximum_memory_gib": null,
+  "qualification": "Exact board, OS, runtime, model and context require physical acceptance before selling.",
+  "systems": [
+    {
+      "id": "radxa-rock-5",
+      "name": "Radxa ROCK 5 family",
+      "os": "linux",
+      "arch": "arm64",
+      "backend": "llama-cpp-cpu",
+      "accelerators_pending": [
+        "RK3588 GPU/Vulkan",
+        "RKNN NPU"
+      ],
+      "acceptance": "pending",
+      "runtime_status": "CPU container candidate; Debian 12/13 setup; physical acceptance pending",
+      "os_policy": "vendor Radxa OS (Debian); preserve firmware/kernel/GPU stack"
+    },
+    {
+      "id": "radxa-orion-o6n",
+      "name": "Radxa Orion O6N / CIX P1",
+      "os": "linux",
+      "arch": "arm64",
+      "backend": "llama-cpp-cpu",
+      "accelerators_pending": [
+        "CIX GPU/Vulkan",
+        "CIX NPU"
+      ],
+      "acceptance": "pending",
+      "runtime_status": "CPU container candidate; Debian 12/13 setup; physical acceptance pending",
+      "os_policy": "vendor Radxa OS (Debian); preserve firmware/kernel/GPU stack"
+    },
+    {
+      "id": "renesas-rz-v2h",
+      "name": "Renesas RZ/V2H",
+      "os": "linux",
+      "arch": "arm64",
+      "backend": "llama-cpp-cpu",
+      "accelerators_pending": [
+        "DRP-AI"
+      ],
+      "acceptance": "pending",
+      "runtime_status": "CPU container candidate; vendor Yocto installation policy pending",
+      "os_policy": "vendor RZ/V2H Linux BSP (Yocto); do not apply APT/Ubuntu policy"
+    },
+    {
+      "id": "seeed-j4012",
+      "name": "Seeed reComputer J4012 / Jetson Orin NX",
+      "os": "linux",
+      "arch": "arm64",
+      "backend": "cuda-jetson",
+      "accelerators_pending": [],
+      "acceptance": "exact image and model acceptance required",
+      "runtime_status": "candidate; physical model/context acceptance pending"
+    },
+    {
+      "id": "jetson-agx-orin",
+      "name": "Jetson AGX Orin (existing class)",
+      "os": "linux",
+      "arch": "arm64",
+      "backend": "cuda-jetson",
+      "accelerators_pending": [],
+      "acceptance": "exact image and model acceptance required",
+      "runtime_status": "candidate; physical model/context acceptance pending"
+    },
+    {
+      "id": "amd-ryzen-ai-max-395",
+      "name": "AMD Ryzen AI Max+ 395 / PRO 395",
+      "os": "linux",
+      "arch": "amd64",
+      "backend": "hip-rocm",
+      "accelerators_pending": [
+        "XDNA NPU"
+      ],
+      "acceptance": "pending",
+      "runtime_status": "candidate; physical model/context acceptance pending"
+    },
+    {
+      "id": "amd-ryzen-ai-max-495",
+      "name": "AMD Ryzen AI Max+ PRO 495",
+      "os": "linux",
+      "arch": "amd64",
+      "backend": "hip-rocm",
+      "accelerators_pending": [
+        "XDNA NPU"
+      ],
+      "acceptance": "pending",
+      "runtime_status": "candidate; physical model/context acceptance pending"
+    },
+    {
+      "id": "apple-silicon",
+      "name": "Apple silicon Mac mini and Mac Studio (all chips and RAM variants)",
+      "os": "darwin",
+      "arch": "arm64",
+      "backend": "llama-cpp-cpu",
+      "accelerators_pending": [
+        "Native Metal service lifecycle and qualification"
+      ],
+      "acceptance": "pending",
+      "runtime_status": "native Metal service lifecycle and setup policy pending"
+    }
+  ],
+  "accelerators": [
+    {
+      "id": "google-coral-edge-tpu",
+      "name": "Google Coral Edge TPU (USB, PCIe, M.2 single/dual)",
+      "host_os": "linux",
+      "runtime": "libedgetpu / TensorFlow Lite",
+      "model_format": "Edge TPU compiled TensorFlow Lite",
+      "qualification": "pending dedicated adapter and model-specific hardware acceptance",
+      "gguf_supported": false
+    },
+    {
+      "id": "radxa-aicore-ax-m1",
+      "name": "Radxa AICore AX-M1 / AXera AX8850 (M.2)",
+      "host_os": "linux",
+      "runtime": "AXCL / vendor-pinned SDK",
+      "model_format": "AXera compiled model and matching tokenizer/runtime assets",
+      "qualification": "pending dedicated adapter and model-specific hardware acceptance",
+      "gguf_supported": false
+    },
+    {
+      "id": "radxa-aicore-dx-m1",
+      "name": "Radxa AICore DX-M1 / DEEPX",
+      "host_os": "linux",
+      "runtime": "DX-RT and DXRT-NPU driver",
+      "model_format": "DX-COM compiled DXNN",
+      "connector": "M.2 M-key",
+      "qualification": "pending dedicated adapter and per-device model-specific hardware acceptance",
+      "gguf_supported": false
+    },
+    {
+      "id": "radxa-aicore-dx-m1m",
+      "name": "Radxa AICore DX-M1M / DEEPX",
+      "host_os": "linux",
+      "runtime": "DX-RT and DXRT-NPU driver",
+      "model_format": "DX-COM compiled DXNN",
+      "connector": "M.2 B+M-key",
+      "qualification": "pending dedicated adapter and per-device model-specific hardware acceptance",
+      "gguf_supported": false
+    },
+    {
+      "id": "radxa-aicore-sg2300x",
+      "name": "Radxa AICore SG2300X / SOPHON",
+      "host_os": "linux",
+      "runtime": "SOPHON vendor SDK/runtime",
+      "model_format": "SOPHON compiled model and matching runtime assets",
+      "connector": "Board-to-board carrier; SoC or PCIe endpoint mode",
+      "qualification": "pending dedicated adapter and per-device model-specific hardware acceptance",
+      "gguf_supported": false
+    }
+  ]
+}

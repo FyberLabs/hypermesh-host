@@ -52,7 +52,7 @@ class BootstrapTests(unittest.TestCase):
         subprocess.run(["gpgconf", "--homedir", str(cls.home), "--kill", "all"], capture_output=True)
         cls.workspace.cleanup()
 
-    def stage_verified(self, *args):
+    def stage_verified(self, *args, **kwargs):
         Path(args[6]).write_bytes(self.payload)
         return json.loads(self.meta)
 
@@ -62,11 +62,39 @@ class BootstrapTests(unittest.TestCase):
             with mock.patch.object(bootstrap.platform, "system", return_value="Linux"), mock.patch.object(
                     bootstrap.platform, "machine", return_value=machine):
                 self.assertEqual(bootstrap.detected_arch(), expected)
-        for system, machine in (("Darwin", "arm64"), ("Linux", "riscv64")):
+        for system, machine in (("Darwin", "x86_64"), ("Windows", "arm64"), ("Linux", "riscv64")):
             with mock.patch.object(bootstrap.platform, "system", return_value=system), mock.patch.object(
                     bootstrap.platform, "machine", return_value=machine):
                 with self.assertRaises(bootstrap.Rejected):
                     bootstrap.detected_arch()
+
+    def test_signed_darwin_payload_selection(self):
+        name = 'hypermesh-deploy_0.0.24_darwin_arm64'
+        payload = b'Apple silicon payload'
+        sums = (f'{hashlib.sha256(self.meta).hexdigest()}  release.json\n'
+                f'{hashlib.sha256(payload).hexdigest()}  {name}\n').encode()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'sums').write_bytes(sums)
+            self.gpg('--output', str(root / 'sig'), '--detach-sign', str(root / 'sums'))
+            files = {'checksums.txt': sums, 'checksums.txt.sig': (root / 'sig').read_bytes(),
+                     'release.json': self.meta, name: payload}
+            seen = []
+            def fetch(url, _limit):
+                seen.append(url.rsplit('/', 1)[-1])
+                return files[seen[-1]]
+            args = ('https://example.invalid/test/24-' + 'a'*12, 'test', 24, 'arm64', self.key, self.fingerprint, root / 'mac')
+            bootstrap.bootstrap(*args, fetcher=fetch, target_os='darwin')
+            self.assertEqual((root / 'mac').read_bytes(), payload)
+            self.assertIn(name, seen)
+            self.assertNotIn(self.name, seen)
+            with self.assertRaises(bootstrap.Rejected):
+                bootstrap.bootstrap(args[0], 'test', 24, 'amd64', self.key, self.fingerprint, root / 'intel', fetcher=fetch, target_os='darwin')
+
+    def test_detect_apple_silicon(self):
+        with mock.patch.object(bootstrap.platform, "system", return_value="Darwin"), mock.patch.object(bootstrap.platform, "machine", return_value="arm64"):
+            self.assertEqual(bootstrap.detected_arch(), "arm64")
+            self.assertEqual(bootstrap.detected_os(), "darwin")
 
     def test_discovery_binds_channel_and_immutable_identity(self):
         for channel in ("test", "prod"):
@@ -100,7 +128,7 @@ class BootstrapTests(unittest.TestCase):
                 argv = ["verifier", "--output", str(output)]
                 if channel == "test":
                     argv += ["--channel", "test"]
-                def verified(*args):
+                def verified(*args, **kwargs):
                     self.assertEqual(args[:4], (url, channel, 24, "arm64"))
                     Path(args[6]).write_bytes(self.payload)
                     return meta

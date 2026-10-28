@@ -21,6 +21,10 @@ import (
 )
 
 func Main() {
+ if len(os.Args)==2 && os.Args[1]=="platforms" {
+  if err:=json.NewEncoder(os.Stdout).Encode(hardware.Systems());err!=nil {os.Exit(1)}
+  return
+ }
  if len(os.Args)>1 && os.Args[1]=="qualify-host" {
   ctx,cancel:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
   defer cancel()
@@ -247,6 +251,7 @@ Commands:
                --plan FILE --approve-plan SHA256 [--state-dir DIR]
   setup-status show the persistent stage/error for a prerequisite application.
                --plan-sha SHA256 [--state-dir DIR]
+  platforms  list platform and accelerator release targets and qualification gaps.
   plan-setup  review versioned Linux prerequisite package and headless changes.
               Resource/readiness flags plus --profile auto and optional --headless.
               --wireguard-mode kernel (default) or userspace; only userspace needs wireguard-go.

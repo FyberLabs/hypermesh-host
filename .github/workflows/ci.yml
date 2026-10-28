@@ -51,11 +51,28 @@ jobs:
       - name: Verify release binary payload
         run: python3 packaging/release/test-release-binaries.py
 
+      - name: Build downloadable lab binaries
+        run: bash packaging/release/build-candidates.sh "$RUNNER_TEMP/host-lab-binaries"
+
+      - name: Upload lab binaries
+        # actions/upload-artifact v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: host-lab-binaries-${{ github.sha }}
+          path: ${{ runner.temp }}/host-lab-binaries/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Vet
         run: go vet ./...
 
       - name: Test
         run: go test -race ./...
+
+      - name: Test Linux release runtime variants
+        run: |
+          go test -race -tags cpu ./internal/runtime ./internal/agent
+          go test -race -tags rocm,cpu ./internal/runtime ./internal/agent
 
   actionlint:
     name: actionlint
@@ -117,3 +134,26 @@ jobs:
           AZ_FLAG_CHECK=core python3 packaging/release/check-az-flags.py
           az extension add --name storage-blob-preview --version 1.0.0b3 --yes
           AZ_FLAG_CHECK=preview python3 packaging/release/check-az-flags.py
+
+  macos:
+    name: Apple silicon build and runtime tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build Apple silicon agent and CLI
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: go build ./cmd/agent ./cmd/hypermesh-host
+      - name: Test native hardware and Metal runtime contracts
+        run: go test -race ./internal/hardware ./internal/runtime

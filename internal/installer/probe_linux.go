@@ -14,7 +14,7 @@ func probeResources(ctx context.Context, directory, mode string, allocation int6
 }
 
 func probeResourcesWithRuntime(ctx context.Context, directory, mode string, allocation int64, runtimeProbe func(context.Context) (*UMARuntime, error)) (Resources, error) {
-	r := Resources{UMA: mode == "uma", UMAAllocationBytes: allocation}
+	r := Resources{CPU:mode=="cpu", UMA: mode == "uma", UMAAllocationBytes: allocation}
 	info, err := os.Stat(directory)
 	if err != nil || !info.IsDir() {
 		return r, fmt.Errorf("model directory must exist and be accessible; choose the intended cache filesystem")
@@ -32,7 +32,8 @@ func probeResourcesWithRuntime(ctx context.Context, directory, mode string, allo
 	}
 	r.DiskFreeBytes = int64(fs.Bavail)*fs.Bsize
 	if err := ctx.Err(); err != nil { return r, fmt.Errorf("resource check interrupted") }
-	if r.UMA {
+	if r.CPU {return r,nil}
+ if r.UMA {
 		r.UMARuntime, err = runtimeProbe(ctx)
 		if err != nil { return r, err }
 		// Resample after driver initialization, which itself consumes memory.

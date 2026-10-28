@@ -68,7 +68,7 @@ func TestMetalStartEmptyDigest(t *testing.T) {
 }
 
 func TestMetalDefaultImageStubsLlamaCppCPU(t *testing.T) {
-	if MetalImageEnabled() {
+	if MetalImageEnabled() || CPUImageEnabled() {
 		t.Skip("darwin image: see metal_darwin_test.go")
 	}
 	path, reason := ResolveBackend(BackendLlamaCppCPU)

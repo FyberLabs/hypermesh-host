@@ -1364,7 +1364,7 @@ func TestLeaseStartBackends(t *testing.T) {
 		{name: "unknown", backend: "not-a-backend", wantPass: false, wantDocker: false, wantReason: "This image does not run not-a-backend."},
 	}
 	for _, tc := range cases {
-		if tc.backend == "llama-cpp-cpu" && runtime.MetalImageEnabled() {
+		if tc.backend == "llama-cpp-cpu" && (runtime.MetalImageEnabled() || runtime.CPUImageEnabled()) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Skip("darwin image: llama-cpp-cpu is the Metal lab path")
 			})
@@ -2249,7 +2249,7 @@ func TestStubBackendFailsLabSoakAndInstanceCheck(t *testing.T) {
 	kinds := []api.JobKind{api.KindPathB, api.KindInstanceCheck}
 	for _, kind := range kinds {
 		for _, backend := range backends {
-			if backend == "llama-cpp-cpu" && runtime.MetalImageEnabled() {
+			if backend == "llama-cpp-cpu" && (runtime.MetalImageEnabled() || runtime.CPUImageEnabled()) {
 				continue
 			}
 			if backend == "hip-rocm" && runtime.HIPImageEnabled() {
@@ -2723,6 +2723,7 @@ func TestInstanceCheckRejectsUnsafeWorkloadBeforeProbe(t *testing.T) {
 }
 
 func TestMetalInstanceCheckDoesNotInspectPIDWithDocker(t *testing.T) {
+ if !runtime.MetalImageEnabled() {t.Skip("native Metal only")}
 	dir := t.TempDir()
 	a := newTestAgent(t, "http://127.0.0.1:9", dir, filepath.Join(dir, "uptime"), "", "")
 	a.setLease(&runtime.Handle{ContainerID: "42", Backend: runtime.BackendLlamaCppCPU})
@@ -2736,4 +2737,15 @@ func TestMetalInstanceCheckDoesNotInspectPIDWithDocker(t *testing.T) {
 	if strings.Contains(got.Reason, "privacy") {
 		t.Fatalf("native check blocked by Docker inspection: %+v", got)
 	}
+}
+
+func TestCPUContainerInstanceCheckEnforcesDockerPrivacy(t *testing.T) {
+ if runtime.MetalImageEnabled() {t.Skip("native Metal uses a separate process path")}
+ dir:=t.TempDir()
+ a:=newTestAgent(t,"http://127.0.0.1:9",dir,filepath.Join(dir,"uptime"),"","")
+ a.setLease(&runtime.Handle{ContainerID:"cpu-container",Backend:runtime.BackendLlamaCppCPU})
+ inspected:=false
+ a.dockerRun=func(_ context.Context,args ...string)([]byte,error){inspected=true;return []byte(`{"LogConfig":{"Type":"json-file"},"Ulimits":[]}`),nil}
+ got:=a.runJob(context.Background(),api.Job{Kind:api.KindInstanceCheck})
+ if !inspected||got.Passed||got.Reason!="workload privacy configuration unsafe" {t.Fatalf("CPU container bypassed privacy: %+v inspected=%v",got,inspected)}
 }

@@ -29,6 +29,7 @@ type releaseMetadata struct {
 
 type downloadOptions struct {
 	BaseURL, Channel, Arch, Output string
+ TargetOS string
 	Artifact string
 	MatchInstaller bool
 	StateFile string
@@ -54,7 +55,8 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 	flags.StringVar(&opt.BaseURL, "release-url", "", "HTTPS directory containing release assets")
 	flags.StringVar(&opt.ChannelRoot, "channel-root", "", "discover channels/<channel>.json under this HTTPS root; requires --state-file")
 	flags.StringVar(&opt.Channel, "channel", "", "expected channel: test or prod")
-	flags.StringVar(&opt.Arch, "arch", runtime.GOARCH, "target Linux architecture: arm64 or amd64")
+	flags.StringVar(&opt.Arch, "arch", runtime.GOARCH, "target architecture: arm64 or amd64")
+ flags.StringVar(&opt.TargetOS, "os", runtime.GOOS, "target OS: linux or darwin (Apple silicon)")
 	flags.StringVar(&opt.Output, "output", "", "new output path; existing files are never overwritten")
 	flags.StringVar(&opt.StateFile, "state-file", "", "optional persistent cross-channel build floor in an owner-controlled directory")
 	flags.Int64Var(&opt.MinimumBuild, "min-build", -1, "required minimum accepted signed build")
@@ -90,13 +92,18 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 		fmt.Fprintln(diagnostic, err)
 		return 1
 	}
-	fmt.Fprintf(out, "Verified Linux/%s %s: channel=%s build=%d commit=%s\n", opt.Arch, downloadArtifact(opt), meta.Channel, meta.Build, meta.Commit)
+	fmt.Fprintf(out, "Verified %s/%s %s: channel=%s build=%d commit=%s\n", downloadOS(opt), opt.Arch, downloadArtifact(opt), meta.Channel, meta.Build, meta.Commit)
 	return 0
 }
 
 func downloadArtifact(opt downloadOptions) string {
 	if opt.Artifact == "" { return "deploy" } // Preserve existing callers.
 	return opt.Artifact
+}
+
+func downloadOS(opt downloadOptions) string {
+ if opt.TargetOS=="" {return "linux"} // Existing internal Linux installation plans.
+ return opt.TargetOS
 }
 
 func validateDownload(opt downloadOptions) error {
@@ -121,7 +128,8 @@ func validateDownload(opt downloadOptions) error {
 	}
 	if opt.Channel != "test" && opt.Channel != "prod" { return fmt.Errorf("expected channel must be test or prod") }
 	if opt.Arch != "arm64" && opt.Arch != "amd64" { return fmt.Errorf("target architecture must be arm64 or amd64") }
-	if opt.MinimumBuild < 0 || opt.Output == "" { return fmt.Errorf("explicit --min-build and --output are required") }
+	if osName:=downloadOS(opt); (osName!="linux" && osName!="darwin") || (osName=="darwin" && opt.Arch!="arm64") { return fmt.Errorf("target must be Linux ARM64/AMD64 or Darwin ARM64") }
+ if opt.MinimumBuild < 0 || opt.Output == "" { return fmt.Errorf("explicit --min-build and --output are required") }
 	return nil
 }
 
@@ -174,7 +182,7 @@ func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, 
 		meta.Version != buildinfo.CurrentVersion() || meta.Commit != buildinfo.Current()) {
 		return meta, fmt.Errorf("signed release does not match this installer; select its immutable release URL")
 	}
-	name := fmt.Sprintf("hypermesh-%s_%s_linux_%s", downloadArtifact(opt), meta.Version, opt.Arch)
+	name := fmt.Sprintf("hypermesh-%s_%s_%s_%s", downloadArtifact(opt), meta.Version, downloadOS(opt), opt.Arch)
 	payload, err := fetch(ctx, base+name, 128<<20)
 	if err != nil { return meta, err }
 	if err := update.CheckHash(sums, name, payload); err != nil { return meta, err }

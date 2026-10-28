@@ -42,6 +42,7 @@ const (
 	// LlamaCppHost is llama-cpp-cpu on a darwin binary (Metal). Jetson
 	// Linux builds still stub llama-cpp-cpu.
 	LlamaCppHost
+ CPUContainer
 )
 
 // NormalizeBackend maps omitted and cuda-sm87 to cuda-jetson.
@@ -77,6 +78,7 @@ func ResolveBackend(backend string) (Path, string) {
 		}
 		return StubFail, FailReason(name)
 	case BackendLlamaCppCPU:
+        if CPUImageEnabled() {return CPUContainer, ""}
 		if metalImageEnabled() {
 			return LlamaCppHost, ""
 		}
@@ -89,7 +91,7 @@ func ResolveBackend(backend string) (Path, string) {
 // Runnable is a start path this image may take (not StubFail).
 func (p Path) Runnable() bool {
 	switch p {
-	case NVIDIAContainer, HIPROCm, LlamaCppHost:
+	case NVIDIAContainer, HIPROCm, LlamaCppHost, CPUContainer:
 		return true
 	default:
 		return false
@@ -105,6 +107,8 @@ func LogLabel(backend string) string {
 		return NVIDIALogLabel
 	case HIPROCm:
 		return BackendHIPROCm
+	case CPUContainer:
+        return BackendLlamaCppCPU
 	case LlamaCppHost:
 		return MetalLogLabel
 	default:

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+ "runtime"
 	"strings"
 	"time"
 )
@@ -58,6 +59,11 @@ type Hooks struct {
 // agent keeps running and tries again later. Errors never carry a
 // SAS query string.
 func Tick(ctx context.Context, cfg Config, h Hooks) (Plan, error) {
+ return tickForOS(runtime.GOOS,ctx,cfg,h)
+}
+
+func tickForOS(goos string, ctx context.Context, cfg Config, h Hooks) (Plan,error) {
+ if goos!="linux" {return Plan{Action:ActionOff,Reason:"automatic updates require a qualified platform service lifecycle"},nil}
 	plan, err := tick(ctx, cfg, h)
 	if err != nil {
 		return Plan{}, scrub(err)

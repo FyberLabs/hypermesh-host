@@ -27,15 +27,24 @@ class ReleaseBinaries(unittest.TestCase):
                  "test", str(LAYOUT), str(ROOT), str(dist), str(probe)], check=True, cwd=ROOT)
             self.assertEqual(json.loads((dist / "buildinfo.json").read_text()),
                              {"channel": "test", "version": "0.0.57", "build": 57})
-            expected = {"release.json", "bootstrap.py"}
+            expected = {"release.json", "bootstrap.py", "platforms.json"}
             for program in ("agent", "deploy"):
-                for arch, machine in (("arm64", 183), ("amd64", 62)):
-                    name = f"hypermesh-{program}_0.0.57_linux_{arch}"
+                for target, machine in (("linux_arm64", 183), ("linux_amd64", 62), ("darwin_arm64", 0x100000c)):
+                    name = f"hypermesh-{program}_0.0.57_{target}"
                     expected.add(name)
                     header = (dist / name).read_bytes()[:20]
-                    self.assertEqual(header[:4], bytes([127]) + b"ELF")
-                    self.assertEqual(header[4:6], bytes([2, 1]))  # ELF64 little endian
-                    self.assertEqual(struct.unpack("<H", header[18:20])[0], machine)
+                    if target.startswith("darwin"):
+                        self.assertEqual(header[:4], bytes.fromhex("cffaedfe"))
+                        self.assertEqual(struct.unpack("<I", header[4:8])[0], machine)
+                    else:
+                        self.assertEqual(header[:4], bytes([127]) + b"ELF")
+                        self.assertEqual(header[4:6], bytes([2, 1]))
+                        self.assertEqual(struct.unpack("<H", header[18:20])[0], machine)
+                    metadata = subprocess.check_output(["go", "version", "-m", str(dist / name)], text=True)
+                    self.assertEqual("-tags=rocm,cpu" in metadata, target == "linux_amd64")
+                    self.assertEqual("-tags=cpu" in metadata, target == "linux_arm64")
+            self.assertEqual(json.loads((dist / "platforms.json").read_text()),
+                             json.loads((ROOT / "internal/hardware/systems.json").read_text()))
             manifest = (dist / "checksums.txt").read_text()
             self.assertEqual({line.split()[1] for line in manifest.splitlines()}, expected)
             subprocess.run(["sha256sum", "-c", "checksums.txt"], cwd=dist, check=True)
