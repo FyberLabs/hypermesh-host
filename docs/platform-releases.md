@@ -21,6 +21,20 @@ and architecture match. Neither command authorizes enrollment or selling.
 | Ryzen AI Max+ 395/PRO 395, PRO 495 | Linux AMD64 | `rocm,cpu` build tags; HIP requires compatible ROCm, KFD/DRI and pinned workload image; no HSA override |
 | Apple silicon Mac mini / Studio | Darwin ARM64 | Signed binaries and inspection; native Metal process/service lifecycle, installation and qualification remain pending |
 
+## Get binaries before physical testing
+
+Every host PR CI run uploads `host-lab-binaries-<commit>` containing all six
+executables, the platform matrix, a source-commit readme and SHA256SUMS. This
+happens before the full Go tests, so lab binaries remain downloadable even when
+an environment-specific test fails. Download from the Actions run artifacts.
+The binaries are unsigned build-0 lab artifacts, distinct from the signed
+installation channel. No signing keys or production permissions are used.
+For a local build, from a clean checkout run
+`bash packaging/release/build-candidates.sh /tmp/new-host-lab-binaries`.
+
+Signed test-channel publication follows the reviewed main-branch publisher;
+physical model qualification is needed for selling rather than lab download.
+
 ## Release payload and verification
 
 The publisher builds the agent and operator CLI for all three OS/architecture
