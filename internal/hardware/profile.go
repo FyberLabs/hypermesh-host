@@ -33,6 +33,7 @@ type Facts struct {
 }
 
 type Profile struct {
+    SystemID string `json:"system_id,omitempty"`
     MemoryEncryption *MemoryEncryption `json:"memory_encryption,omitempty"`
     Fingerprint string `json:"fingerprint"`
     Family string `json:"family"`
@@ -46,7 +47,7 @@ type Profile struct {
 }
 
 func Recommend(f Facts) Profile {
-    p := Profile{Facts:f, Family:"generic", Backend:"cpu",
+    p := Profile{SystemID:SystemID(f), Facts:f, Family:"generic", Backend:"cpu",
         Libraries:[]string{"llama.cpp CPU"}, Setup:[]string{"CMake", "C/C++ compiler"},
         BenchmarkArgs:[]string{"-p","512","-n","128","-ngl","0"},
         Notes:[]string{"Recommendations are not certification or measured throughput.",
@@ -85,7 +86,7 @@ func Recommend(f Facts) Profile {
         p.Backend = "metal"
         p.Libraries = []string{"llama.cpp Metal", "Accelerate"}
         p.Setup = []string{"Xcode command-line tools", "CMake -DGGML_METAL=ON"}
-    case f.Vulkan:
+    case f.Vulkan && p.SystemID!="radxa-rock-5" && p.SystemID!="radxa-orion-o6n" && p.SystemID!="renesas-rz-v2h":
         p.Backend = "vulkan"
         p.Libraries = []string{"llama.cpp Vulkan"}
         p.Setup = []string{"Vendor Vulkan driver and SDK", "CMake -DGGML_VULKAN=ON"}

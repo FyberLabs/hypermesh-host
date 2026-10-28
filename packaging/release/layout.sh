@@ -1080,38 +1080,48 @@ wipe_gnupg_home() {
   fi
 }
 
-# build_release_binaries ROOT DIST VERSION LDFLAGS
-# Both the agent and operator CLI ship for each supported Linux architecture.
-build_release_binaries() {
-  local root=$1 dist=$2 version=$3 ldflags=$4 arch
-  for arch in arm64 amd64; do
-    (
-      cd "$root" || exit 1
-      CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
-        go build -trimpath -ldflags "$ldflags" \
-        -o "${dist}/hypermesh-agent_${version}_linux_${arch}" ./cmd/agent || exit 1
-      CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
-        go build -trimpath -ldflags "$ldflags" \
-        -o "${dist}/hypermesh-deploy_${version}_linux_${arch}" ./cmd/hypermesh-host || exit 1
-    ) || return 1
+# release_payload_names VERSION: exact signed inputs for new releases.
+release_payload_names() {
+  local version=$1 target program
+  for target in linux_arm64 linux_amd64 darwin_arm64; do
+    for program in agent deploy; do
+      printf '%s\n' "hypermesh-${program}_${version}_${target}"
+    done
   done
-  cp "${root}/packaging/bootstrap.py" "${dist}/bootstrap.py"
+  printf '%s\n' bootstrap.py platforms.json release.json
 }
 
-# write_release_checksums DIST VERSION
-# This list is signed, then drives the blob/channel/GitHub asset lists.
+# Build platform payloads; ROCm is compiled only into Linux AMD64.
+# Libraries/drivers and model qualification remain on-box prerequisites.
+build_release_binaries() {
+  local root=$1 dist=$2 version=$3 ldflags=$4 target os arch tags program command
+  for target in linux_arm64 linux_amd64 darwin_arm64; do
+    os=${target%_*}
+    arch=${target#*_}
+    tags=""
+    if [ "$target" = linux_arm64 ]; then tags=cpu; fi
+    if [ "$target" = linux_amd64 ]; then tags=rocm,cpu; fi
+    for program in agent deploy; do
+      command=agent
+      if [ "$program" = deploy ]; then command=hypermesh-host; fi
+      (
+        cd "$root" || exit 1
+        CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+          go build -trimpath -tags "$tags" -ldflags "$ldflags" \
+          -o "${dist}/hypermesh-${program}_${version}_${target}" "./cmd/${command}"
+      ) || return 1
+    done
+  done
+  cp "${root}/packaging/bootstrap.py" "${dist}/bootstrap.py"
+  cp "${root}/internal/hardware/systems.json" "${dist}/platforms.json"
+}
+
+# The signed list drives storage/channel/GitHub asset lists.
 write_release_checksums() {
   local dist=$1 version=$2
-  (
-    cd "$dist" || exit 1
-    sha256sum \
-      "hypermesh-agent_${version}_linux_arm64" \
-      "hypermesh-agent_${version}_linux_amd64" \
-      "hypermesh-deploy_${version}_linux_arm64" \
-      "hypermesh-deploy_${version}_linux_amd64" \
-      bootstrap.py \
-      release.json > checksums.txt
-  )
+  local -a inputs=()
+  mapfile -t inputs < <(release_payload_names "$version")
+  ( cd "$dist" && sha256sum "${inputs[@]}" > checksums.txt )
 }
 
 # GPG signatures include creation time. Verify stored signatures against the

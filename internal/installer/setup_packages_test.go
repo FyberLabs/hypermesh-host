@@ -42,7 +42,7 @@ func TestRejectUnsafeSetupSimulation(t *testing.T) {
 	} {
 		if _,err:=parseSetupSimulation(text,map[string]string{"python3":"3.11"});err==nil {t.Fatalf("accepted %q",text)}
 	}
-	for _,name:=range []string{"linux-image-generic","nvidia-l4t-core","libnvidia-compute-550","cuda-toolkit","hip-runtime-amd","libhsa-runtime64","openssh-server","systemd","netplan.io","zfsutils-linux","samba"} {
+	for _,name:=range []string{"radxa-system-config", "rockchip-multimedia-config", "libmali-g610", "cix-firmware", "axcl-runtime", "dxrt-driver", "dx-runtime", "libsophon", "libedgetpu1-std", "u-boot-radxa", "renesas-drpai", "linux-image-generic","nvidia-l4t-core","libnvidia-compute-550","cuda-toolkit","hip-runtime-amd","libhsa-runtime64","openssh-server","systemd","netplan.io","zfsutils-linux","samba"} {
 		text:=fmt.Sprintf("Inst %s (1.0 Ubuntu [arm64])\nConf %s (1.0 Ubuntu [arm64])",name,name)
 		if _,err:=parseSetupSimulation(text,map[string]string{});err==nil {t.Fatalf("changed protected package %s",name)}
 	}

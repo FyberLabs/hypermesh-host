@@ -27,6 +27,16 @@ Other machines are not supported for hosting yet:
 - The guided setup has Ubuntu profiles for Jetson, AMD HIP and discrete CUDA hosts. Each is marked "candidate; physical acceptance pending" in the code.
 - ROCm and macOS (Metal) runtime paths exist as build-tagged scaffolds. See [deploy/rocm/README.md](deploy/rocm/README.md) and [deploy/mac/README.md](deploy/mac/README.md).
 
+## Expanded release candidates
+
+The next release payload covers Linux ARM64 (ROCK 5, Orion O6N, RZ/V2H and
+Jetson), Linux AMD64 with ROCm (Ryzen AI Max+ 395/PRO 495), and Darwin ARM64
+(Apple silicon Mac mini/Studio). The target range starts at 16 GiB with no
+software upper RAM ceiling. Run `hypermesh-host platforms` for the matrix and
+see [platform release candidates](docs/platform-releases.md) for implemented
+paths, vendor OS policies, add-on adapters and physical acceptance still needed.
+This target list does not extend the sales-qualified host table above.
+
 ## Requirements
 
 - A supported host from the table above, running Ubuntu with systemd. The manual `hypermesh-host agx` path requires Ubuntu 24.04.5, kernel 6.8, CUDA 13.2.1 and L4T R39.2.1, and refuses to run otherwise.

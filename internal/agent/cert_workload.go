@@ -37,10 +37,10 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		return fail("certification requires pinned file_hash")
 	}
 	backend, _ := runtime.ResolveBackend(job.Backend)
-	// HIP and Metal runners do not yet bind the verified GGUF and alias.
-	// Do not certify their scaffold as a pinned workload.
-	if backend != runtime.NVIDIAContainer || job.Runtime != "nvidia" {
-		return fail("pinned certification requires the NVIDIA runtime")
+	// Container backends all bind the verified GGUF and catalog alias.
+ // Native Metal still needs its own pinned service lifecycle.
+ if (backend!=runtime.NVIDIAContainer && backend!=runtime.HIPROCm && backend!=runtime.CPUContainer) || (backend==runtime.NVIDIAContainer && job.Runtime!="nvidia") {
+        return fail("pinned certification requires a supported container runtime")
 	}
 	if a.localLease() != nil {
 		return fail("certification refused while a lease is recorded")

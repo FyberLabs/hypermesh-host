@@ -1,28 +1,32 @@
 version: 2
-
 project_name: hypermesh-host
-
 builds:
-  - id: hypermesh-host
+  - id: linux-arm64
     main: ./cmd/hypermesh-host
     binary: hypermesh-host
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w
-
+    goos: [linux]
+    goarch: [arm64]
+    tags: [cpu]
+    ldflags: [-s -w]
+  - id: linux-amd64-rocm
+    main: ./cmd/hypermesh-host
+    binary: hypermesh-host
+    goos: [linux]
+    goarch: [amd64]
+    tags: [rocm, cpu]
+    ldflags: [-s -w]
+  - id: darwin-arm64
+    main: ./cmd/hypermesh-host
+    binary: hypermesh-host
+    goos: [darwin]
+    goarch: [arm64]
+    ldflags: [-s -w]
 archives:
   - id: hypermesh-host
-    ids:
-      - hypermesh-host
+    ids: [linux-arm64, linux-amd64-rocm, darwin-arm64]
     formats: [tar.gz]
     name_template: "hypermesh-host_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
 checksum:
   name_template: checksums.txt
-
 changelog:
   disable: true

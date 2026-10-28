@@ -324,18 +324,8 @@ PY
     reuse_test_signatures "$release_id" "$dist"
   fi
   gpg --batch --export --armor --output "${dist}/hypermesh-release.pub" "$fpr"
-  artifact_names=(
-    "hypermesh-agent_${version}_linux_arm64"
-    "hypermesh-agent_${version}_linux_amd64"
-    "hypermesh-deploy_${version}_linux_arm64"
-    "hypermesh-deploy_${version}_linux_amd64"
-    bootstrap.py
-    release.json
-    checksums.txt
-    checksums.txt.sig
-    checksums.txt.asc
-    hypermesh-release.pub
-  )
+  mapfile -t artifact_names < <(release_payload_names "$version")
+  artifact_names+=(checksums.txt checksums.txt.sig checksums.txt.asc hypermesh-release.pub)
 fi
 wipe_gnupg_home "$gnupg"
 gnupg=""

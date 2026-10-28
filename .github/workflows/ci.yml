@@ -57,6 +57,11 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: Test Linux release runtime variants
+        run: |
+          go test -race -tags cpu ./internal/runtime ./internal/agent
+          go test -race -tags rocm,cpu ./internal/runtime ./internal/agent
+
   actionlint:
     name: actionlint
     runs-on: ubuntu-24.04
@@ -117,3 +122,26 @@ jobs:
           AZ_FLAG_CHECK=core python3 packaging/release/check-az-flags.py
           az extension add --name storage-blob-preview --version 1.0.0b3 --yes
           AZ_FLAG_CHECK=preview python3 packaging/release/check-az-flags.py
+
+  macos:
+    name: Apple silicon build and runtime tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build Apple silicon agent and CLI
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: go build ./cmd/agent ./cmd/hypermesh-host
+      - name: Test native hardware and Metal runtime contracts
+        run: go test -race ./internal/hardware ./internal/runtime

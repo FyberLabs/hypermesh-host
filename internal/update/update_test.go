@@ -959,7 +959,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"build_release_binaries()", "CGO_ENABLED=0", "GOOS=linux", "./cmd/agent", "./cmd/hypermesh-host", "write_release_checksums()"} {
+	for _, want := range []string{"build_release_binaries()", "CGO_ENABLED=0", `GOOS="$os"`, "linux_arm64", "linux_amd64", "darwin_arm64", `"./cmd/${command}"`, "command=agent", "command=hypermesh-host", "release_payload_names()", "platforms.json", "write_release_checksums()"} {
 		if !strings.Contains(string(layout), want) {
 			t.Fatalf("release build helper missing %s", want)
 		}
@@ -967,9 +967,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	for _, want := range []string{
 		"build_release_binaries",
 		"write_release_checksums",
-		"linux",
-		"arm64",
-		"amd64",
+        "release_payload_names",
 		"buildinfo.Commit",
 		"buildinfo.Version",
 		"buildinfo.Build",

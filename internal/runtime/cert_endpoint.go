@@ -13,10 +13,16 @@ import (
 // isolated workload bridge. Internal networks may ignore Docker port publishing;
 // the host can still reach their bridge address without adding workload egress.
 func (n *NVIDIA) CertificationEndpoint(ctx context.Context, h *Handle) (string, error) {
+ return certificationEndpoint(ctx,n.run,h)
+}
+func (h *HIP) CertificationEndpoint(ctx context.Context, handle *Handle) (string, error) {
+ return certificationEndpoint(ctx,h.run,handle)
+}
+func certificationEndpoint(ctx context.Context, run DockerRunner, h *Handle) (string,error) {
 	if h == nil || strings.TrimSpace(h.ContainerID) == "" {
 		return "", fmt.Errorf("missing certification container identity")
 	}
-	out, err := n.run(ctx, "inspect", "--format", "{{json .}}", h.ContainerID)
+	out, err := run(ctx, "inspect", "--format", "{{json .}}", h.ContainerID)
 	if err != nil {
 		return "", fmt.Errorf("cannot inspect certification container")
 	}

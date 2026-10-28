@@ -172,6 +172,7 @@ func guidedTenant(ctx context.Context,n guidedNetwork)(string,error) {
 func guidedDefaults(p hardware.Profile)(string,int64,string) {
  mode:="discrete";allocation:=int64(0);class:=""
  if p.Facts.Tegra||p.Backend=="hip" {mode="uma"}
+ switch hardware.SystemID(p.Facts) {case "radxa-rock-5","radxa-orion-o6n","renesas-rz-v2h": mode="cpu"}
  model:=strings.ToLower(p.Facts.Model)
  if p.Facts.Tegra&&strings.Contains(model,"agx orin"){class="agx-large"}
  if p.Facts.Tegra&&strings.Contains(model,"orin nx"){class="nx-volume"}

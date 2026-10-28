@@ -37,6 +37,7 @@ type Agent struct {
 	pathb   pathb.Runner
 	runtime *runtime.NVIDIA
 	hip     *runtime.HIP
+ cpu *runtime.NVIDIA
 	metal   *runtime.Metal
 	tunnels tunnel.Applier
 	log     *slog.Logger
@@ -847,7 +848,7 @@ func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
 			if handle != nil {
 				container = handle.ContainerID
 			}
-			if handle != nil && handle.Backend == runtime.BackendLlamaCppCPU {
+			if handle != nil && runtime.MetalImageEnabled() && handle.Backend == runtime.BackendLlamaCppCPU {
 				a.log.Info("instance_check native Metal workload", "backend", handle.Backend)
 			} else {
 				run := a.dockerRun
@@ -1309,6 +1310,8 @@ func jobBackendLog(job api.Job) string {
 
 func runnerLog(path runtime.Path) string {
 	switch path {
+	case runtime.CPUContainer:
+        return runtime.BackendLlamaCppCPU
 	case runtime.HIPROCm:
 		return runtime.BackendHIPROCm
 	case runtime.LlamaCppHost:
@@ -1320,6 +1323,9 @@ func runnerLog(path runtime.Path) string {
 
 func (a *Agent) starterFor(path runtime.Path) runtime.Starter {
 	switch path {
+ case runtime.CPUContainer:
+        if a.cpu!=nil {return a.cpu}
+        return runtime.NewCPU()
 	case runtime.HIPROCm:
 		if a.hip != nil {
 			return a.hip

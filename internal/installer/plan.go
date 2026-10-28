@@ -37,7 +37,7 @@ func runPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	resources resourceProbe, detect func(context.Context) hardware.Profile, endpoint endpointProbe) int {
 	flags := flag.NewFlagSet("plan", flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
-	mode := flags.String("memory-mode", "", "uma or discrete")
+	mode := flags.String("memory-mode", "", "cpu, uma or discrete")
 	directory := flags.String("model-dir", "", "existing model-cache directory")
 	allocation := flags.Int64("uma-gib", 0, "optional diagnostic allocation in GiB; omit for minimum-only installation")
 	address := flags.String("aiuditor-check-url", "", "readiness URL; HTTPS, no credentials or query parameters")
@@ -71,7 +71,7 @@ func runPlan(ctx context.Context, args []string, out, diagnostic io.Writer,
 	default:
 		p.Blockers = append(p.Blockers, "CPU architecture is not supported by the current Linux agent builds")
 	}
-	if p.Hardware.Backend == "cpu" || p.Hardware.Backend == "" {
+	if (p.Hardware.Backend == "cpu" || p.Hardware.Backend == "") && p.Resources.MemoryMode!="cpu" {
 		p.Blockers = append(p.Blockers, "no accelerator backend detected; inspect GPU drivers and hardware recommendations")
 	}
 	if err := endpoint(ctx, *address); err != nil {

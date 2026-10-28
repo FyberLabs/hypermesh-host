@@ -1,8 +1,13 @@
-# Mac / Apple Silicon (lab scaffold)
+# Mac / Apple Silicon (release candidate; native lifecycle pending)
 
 This is **not** a certified host class. The certified Jetson classes (AGX Orin and Seeed Super J4012) stay first.
 
 Host-local experimental. Cert still means **Fyber-published hashes**. Do not market TOPS as tokens/sec. TOPS is not tok/s.
+
+The signed release payload now includes Darwin ARM64 agent and CLI binaries.
+Bootstrap selects and verifies the Darwin artifact; `inspect` and `platforms`
+are available. Guided service installation and sale activation remain pending.
+See [the platform release matrix](../../docs/platform-releases.md).
 
 ## Backend names (fixed)
 
@@ -10,9 +15,9 @@ The CP enum is unchanged: `cuda-jetson` | `cuda-sm87` | `llama-cpp-cpu` | `llama
 
 There is **no** CUDA on Mac. Do not send `cuda-jetson` and expect it to work on Apple Silicon (that path is still `docker --runtime=nvidia`).
 
-| `backend` | Darwin binary | Jetson / Linux binary |
+| `backend` | Darwin binary | Linux CPU-tagged binary |
 |---|---|---|
-| `llama-cpp-cpu` | Metal llama.cpp host runner (lab) | stub: `This image does not run llama-cpp-cpu.` |
+| `llama-cpp-cpu` | Metal llama.cpp host runner (lab) | isolated CPU container; default untagged builds retain the stub |
 | `llama-cpp-vulkan` | stub (same string) | stub |
 | `llama-cpp-metal` | **not in the enum** → `This image does not run llama-cpp-metal.` | same |
 | `hip-rocm` | stub unless `-tags rocm` | stub unless `-tags rocm` |

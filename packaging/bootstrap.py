@@ -165,9 +165,9 @@ def check_hash(checksums, name, payload):
         raise Rejected("artifact checksum mismatch")
 
 
-def bootstrap(release_url, channel, minimum, arch, key, fingerprint, output, fetcher=fetch):
+def bootstrap(release_url, channel, minimum, arch, key, fingerprint, output, fetcher=fetch, target_os="linux"):
     base = https_url(release_url)
-    if channel not in ("test", "prod") or arch not in ("arm64", "amd64") or minimum < 0:
+    if channel not in ("test", "prod") or arch not in ("arm64", "amd64") or minimum < 0 or target_os not in ("linux", "darwin") or (target_os == "darwin" and arch != "arm64"):
         raise Rejected("invalid channel, architecture or minimum build")
     sums = fetcher(base + "checksums.txt", 1 << 20)
     signature = fetcher(base + "checksums.txt.sig", 1 << 20)
@@ -187,7 +187,7 @@ def bootstrap(release_url, channel, minimum, arch, key, fingerprint, output, fet
             raise ValueError()
     except (ValueError, KeyError, TypeError):
         raise Rejected("signed metadata does not meet release constraints") from None
-    name = f"hypermesh-deploy_{version}_linux_{arch}"
+    name = f"hypermesh-deploy_{version}_{target_os}_{arch}"
     payload = fetcher(base + name, 128 << 20)
     check_hash(sums, name, payload)
     output = Path(output)
@@ -256,14 +256,20 @@ def publish_outputs(outputs, overwrite):
 
 
 
+def detected_os():
+    system = {"Linux": "linux", "Darwin": "darwin"}.get(platform.system())
+    if system is None:
+        raise Rejected("host downloads support Linux and Apple silicon macOS only")
+    return system
+
+
 def detected_arch():
-    if platform.system() != "Linux":
-        raise Rejected("host installation currently supports Linux only")
+    target_os = detected_os()
     machine = platform.machine().lower()
     arch = {"aarch64": "arm64", "arm64": "arm64",
             "x86_64": "amd64", "amd64": "amd64"}.get(machine)
-    if arch is None:
-        raise Rejected("unsupported processor architecture; Linux ARM64 or AMD64 is required")
+    if arch is None or (target_os == "darwin" and arch != "arm64"):
+        raise Rejected("unsupported processor architecture; Linux ARM64/AMD64 or Apple silicon is required")
     return arch
 
 
@@ -300,7 +306,8 @@ def main():
     parser.add_argument("--release-url", help="pin an immutable release directory instead of discovering the latest release")
     parser.add_argument("--channel", default="prod", choices=["test", "prod"])
     parser.add_argument("--min-build", default=0, type=int)
-    parser.add_argument("--arch", choices=["arm64", "amd64"], help="default: detect this Linux processor")
+    parser.add_argument("--os", choices=["linux", "darwin"], help="default: detect Linux or macOS")
+    parser.add_argument("--arch", choices=["arm64", "amd64"], help="default: detect this processor")
     parser.add_argument("--trusted-key", type=Path, help="explicit trust override; default is the bundled reviewed key")
     parser.add_argument("--fingerprint", default=TRUSTED_FINGERPRINT)
     parser.add_argument("--output", default=Path("./hypermesh-host"), type=Path)
@@ -315,6 +322,8 @@ def main():
     try:
         if args.min_build < 0:
             raise Rejected("minimum build must not be negative")
+        if args.os is None:
+            args.os = detected_os()
         if args.arch is None:
             args.arch = detected_arch()
         selected = None
@@ -334,7 +343,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix=".hypermesh-download-", dir=args.output.parent) as directory:
             staged_output = Path(directory) / "installer"
             meta = bootstrap(args.release_url, args.channel, args.min_build, args.arch,
-                             key, args.fingerprint, staged_output)
+                             key, args.fingerprint, staged_output, target_os=args.os)
             if selected is not None and any(meta.get(k) != selected[k]
                     for k in ("channel", "build", "version", "commit", "release_id")):
                 raise Rejected("signed release differs from the discovered channel identity")
@@ -348,11 +357,15 @@ def main():
         parser.exit(1, f"bootstrap: {error}\n")
     except OSError:
         parser.exit(1, "bootstrap: cannot read trust or write download files; check directory permissions. Existing files require --overwrite.\n")
-    print(f"Verified Linux/{args.arch} CLI: channel={meta['channel']} build={meta['build']}")
+    print(f"Verified {args.os}/{args.arch} CLI: channel={meta['channel']} build={meta['build']}")
     print("Verification complete. The installer has not run yet.")
     print("Keep the installer, public key and installation receipt together.")
-    print("Next: start guided setup (or resume it after an interruption):")
-    print("  sudo " + __import__("shlex").quote(str(args.output.resolve())))
+    if args.os == "linux":
+        print("Next: start guided setup (or resume it after an interruption):")
+        print("  sudo " + __import__("shlex").quote(str(args.output.resolve())))
+    else:
+        print("macOS candidate: inspect hardware before native service qualification; guided selling is not available yet.")
+        print("  " + __import__("shlex").quote(str(args.output.resolve())) + " inspect")
 
 
 if __name__ == "__main__":

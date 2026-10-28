@@ -65,12 +65,14 @@ func HIPStartArgs(spec Spec, ref string) []string {
 		"--device=" + driDevice,
 		"--group-add=video",
 		"-p", publishSpec(spec.HostPort, spec.BindAddress),
+        "-v", ggufBind(spec.GGUFPath),
 	}
 	args = append(args, JailArgs()...)
 	if name := ContainerName(spec.LeaseID); name != "hypermesh-" {
 		args = append(args, "--name", name)
 	}
-	args = append(args, ref)
+	args = append(args, llamaServerDockerOpts(spec)...)
+ args = append(args, ref, "-c", llamaServerCommand)
 	return args
 }
 
@@ -94,7 +96,11 @@ func (h *HIP) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if h.Run == nil && !HIPDevicesPresent() {
 		return nil, ErrNoROCm
 	}
-	name := ContainerName(spec.LeaseID)
+	if _, err:=requireServeAlias(spec.CatalogID);err!=nil {return nil,err}
+    if out,err:=h.run(ctx,PullArgs(ref)...);err!=nil {
+        if _,inspectErr:=h.run(ctx,"image","inspect","--format","{{.Id}}",ref);inspectErr!=nil {return nil,wrapDocker("pull",out,err)}
+    }
+    name := ContainerName(spec.LeaseID)
 	args := HIPStartArgs(spec, ref)
 	for _, a := range args {
 		if a == "--gpus" || strings.HasPrefix(a, "--gpus=") {

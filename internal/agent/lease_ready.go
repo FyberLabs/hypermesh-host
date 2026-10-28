@@ -154,7 +154,7 @@ func (a *Agent) ensureLeaseForwarder(ctx context.Context) {
 		return
 	}
 	h := a.currentLease()
-	if h == nil || !h.Serving() || h.Backend == runtime.BackendLlamaCppCPU {
+	if h == nil || !h.Serving() || (runtime.MetalImageEnabled() && h.Backend == runtime.BackendLlamaCppCPU) {
 		return
 	}
 	listen := a.leaseListenAddr()
