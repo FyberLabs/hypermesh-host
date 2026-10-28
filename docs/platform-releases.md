@@ -37,17 +37,18 @@ checksums, signature and release metadata cover each asset. The
 [test channel](https://github.com/FyberLabs/hypermesh-host/releases/tag/test)
 tracks subsequent test builds.
 
-For normal downloads, the verifier resolves the latest signed test release and
-selects the local platform:
+Download the individual `bootstrap.py` release asset. This verifier resolves
+the latest signed test release and selects the local platform:
 
 ```sh
-python3 ./hypermesh-bootstrap.py --channel test
+python3 ./bootstrap.py --channel test
 ```
 
-Use `--download-only` to verify and save without starting Linux setup. macOS
-builds stop after download for inspection. Explicit `--os` and `--arch` select a
-binary for another host. Keep the signing key and installation receipt with the
-verified executable.
+This release verifier only downloads and verifies; it does not start setup.
+On Linux, start guided setup separately with `sudo ./hypermesh-host`. On macOS,
+run `./hypermesh-host inspect` for inspection. Explicit `--os` and `--arch` select
+a binary for another host. Keep the signing key and installation receipt with
+the verified executable.
 
 ## Release payload and verification
 
