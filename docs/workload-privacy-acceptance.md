@@ -32,16 +32,20 @@ sudo python3 scripts/check-workload-privacy.py \
 The existing workload is only inspected. A separate temporary CPU container has
 32 MiB memory, 0.1 CPU, 16 PIDs, no network, no GPU, no model mount, a read-only
 root and a 1 MiB `/tmp` tmpfs. No image is pulled. Its logging/core controls are
-inspected before sending a fresh synthetic value on stdin. The value must reach
+inspected before sending a fresh synthetic value on stdin. Image-declared
+volumes are rejected by inspecting the cached image before container creation,
+and effective mounts are checked again before any payload is sent. The value must reach
 both stdout and stderr, while Docker logs, the local Docker container directory
 and the journal contain zero matches. The payload never enters argv, an
 environment variable, a report or a host file. Only its hash and counts leave
 the process. Command output and journal reads are bounded to 8 MiB; the disk
 scan is bounded to 64 MiB. An incomplete scan or unexpected Docker response
-cannot pass. The disk scan does not follow file symlinks.
+cannot pass. The disk scan does not follow file symlinks. See the official Docker documentation
+for [image-declared volume initialization](https://docs.docker.com/reference/dockerfile/#volume)
+and [anonymous-volume removal](https://docs.docker.com/reference/cli/docker/container/rm/#volumes).
 
 Cleanup removes only the container whose random ownership label matches this
-run. A cleanup failure leaves the report failed. Reports are mode 0600 and
+run, including its anonymous volumes. A cleanup failure leaves the report failed. Reports are mode 0600 and
 contain no container ID, hostname, model path, credentials or raw command output.
 Root is required for a complete journal/container-file scan. This is an I/O
 persistence check, not an inference benchmark or proof about swap, crash handlers,

@@ -124,6 +124,9 @@ def inspect(container):
 def canary(image):
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
         raise Rejected("canary_requires_cached_image_id")
+    declared_volumes = docker_json(["image", "inspect", "--format", "{{json .Config.Volumes}}", image])
+    if declared_volumes is not None and declared_volumes != {}:
+        raise Rejected("canary_image_declares_persistent_volumes")
     # The payload only enters Docker's stdin. Putting it in argv, env or a
     # file would itself persist it in Docker metadata or a host file.
     needle = ("hypermesh-privacy-" + secrets.token_hex(32)).encode()
@@ -143,6 +146,12 @@ def canary(image):
         if status:
             raise Rejected("canary_create_failed")
         result["effective_controls"] = inspect(name)
+        mounts = docker_json(["inspect", "--format", "{{json .Mounts}}", name])
+        if not isinstance(mounts, list) or any(
+                not isinstance(mount, dict) or mount.get("Type") != "tmpfs" or
+                mount.get("Destination") != "/tmp" for mount in mounts):
+            raise Rejected("canary_persistent_mount")
+        result["no_persistent_mounts"] = True
         status, output = command(DOCKER + ["start", "--attach", "--interactive", name], needle+b"\n")
         if status or output.count(needle) != 2:
             raise Rejected("canary_stdout_stderr_not_observed")
@@ -174,7 +183,7 @@ def canary(image):
         try:
             labels = docker_json(["inspect", "--format", "{{json .Config.Labels}}", name])
             if isinstance(labels, dict) and labels.get(label) == token:
-                status, _ = command(DOCKER + ["rm", "--force", name])
+                status, _ = command(DOCKER + ["rm", "--force", "--volumes", name])
                 result["cleanup"] = status == 0
         except (Rejected, OSError, subprocess.TimeoutExpired):
             pass

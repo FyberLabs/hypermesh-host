@@ -47,7 +47,7 @@ class PrivacyTests(unittest.TestCase):
         with patch.object(privacy, "LIMIT", 10), self.assertRaises(privacy.Rejected):
             privacy.command([sys.executable, "-c", "print('x'*100)"])
 
-    def exercise(self, unsafe=False, persist=False, cleanup=True, foreign=False):
+    def exercise(self, unsafe=False, persist=False, cleanup=True, foreign=False, volume=False):
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "containers").mkdir()
             seen = {"started": False, "removed": False, "token": None, "data": b""}
@@ -74,6 +74,10 @@ class PrivacyTests(unittest.TestCase):
                 return 0, b""
 
             def docker_json(args):
+                if "image" in args:
+                    return None
+                if "{{json .Mounts}}" in args:
+                    return [{"Type": "volume", "Destination": "/data"}] if volume else []
                 if "{{json .Config.Labels}}" in args:
                     return {"hypermesh.privacy-check": "another-run" if foreign else seen["token"]}
                 if "info" in args:
@@ -96,18 +100,24 @@ class PrivacyTests(unittest.TestCase):
         self.assertFalse(result["inference_executed"])
 
     def test_failure_still_cleans_own_container(self):
-        for args in [{"unsafe": True}, {"persist": True}, {"cleanup": False}]:
+        for args in [{"unsafe": True}, {"persist": True}, {"cleanup": False}, {"volume": True}]:
             with self.subTest(args=args):
                 result, seen = self.exercise(**args)
                 self.assertFalse(result["passed"])
                 self.assertTrue(seen["removed"])
-                if args.get("unsafe"):
+                if args.get("unsafe") or args.get("volume"):
                     self.assertFalse(seen["started"])
 
     def test_foreign_container_is_not_removed(self):
         result, seen = self.exercise(foreign=True)
         self.assertFalse(result["passed"])
         self.assertFalse(seen["removed"])
+
+    def test_image_volumes_rejected_before_create(self):
+        with patch.object(privacy, "docker_json", return_value={"/data": {}}), patch.object(privacy, "command") as command:
+            with self.assertRaises(privacy.Rejected):
+                privacy.canary("sha256:" + "a"*64)
+            command.assert_not_called()
 
     def test_requires_immutable_cached_image_id(self):
         with self.assertRaises(privacy.Rejected):

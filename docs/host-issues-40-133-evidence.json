@@ -3,8 +3,8 @@
   "scope": "owned AGX lab privacy and preflight handoff",
   "privacy": {
     "schema": 1,
-    "observed_at": "2026-10-29T04:14:54.542241+00:00",
-    "collector_sha256": "79e92393625d2402319d4ae59ce78b66f1f8a6298affa6e7cfbb6e7e5b0523e4",
+    "observed_at": "2026-10-29T04:20:02.884724+00:00",
+    "collector_sha256": "1cd26d04d789269427a9c0700564e7992b6ebe72f6b41f87eefa214b38856a3e",
     "existing_workload_modified": false,
     "passed": true,
     "workload_controls": {
@@ -15,13 +15,14 @@
     "canary": {
       "kind": "synthetic_container_io",
       "inference_executed": false,
-      "payload_sha256": "43a9574e137810db1c49ce7501356779df10c1c62424300fd9908128d4b7ec33",
+      "payload_sha256": "0fc7f0a7d0519827f41a6f373962f5cb897e320a3c2c31798f48a66f7be6db41",
       "cleanup": true,
       "effective_controls": {
         "log_driver": "none",
         "core_soft": 0,
         "core_hard": 0
       },
+      "no_persistent_mounts": true,
       "stdout_stderr_observed": true,
       "docker_logs_empty": true,
       "container_file_matches": 0,
