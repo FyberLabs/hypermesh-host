@@ -4,6 +4,8 @@ Host software for [Hypermesh](https://hyperme.sh), a network that rents AI infer
 
 A host enrolls with the control plane, sends heartbeats, brings up a WireGuard tunnel, and runs the jobs the control plane assigns: certification runs, model downloads and inference leases. Inference runs in a locked-down Docker container that is reachable only through the host's WireGuard address.
 
+[Recurring certification](docs/host-recertification.md) binds measurements to software inventory and expires them after 24 hours. Updated agents report drift; the control plane owns renewal and placement eligibility.
+
 Maintained by Fyber Labs TN LLC (Tennessee).
 
 ## Status
@@ -115,6 +117,10 @@ values of 0. Instance checks reject unsafe effective settings before sending a
 probe. On a lab host, use a unique synthetic prompt and confirm it is absent
 from container files and the journal after a lease; this requires an actual
 lab run and is not established by unit tests.
+
+The [repeatable privacy collector](docs/workload-privacy-acceptance.md) inspects
+effective settings and can run an explicit low-resource synthetic I/O test.
+See its recorded lab result and limits before treating it as inference acceptance.
 
 The product-owned [AGX soak preflight](deploy/agx/first-boot.md#soak-preflight)
 provides a JSON report of the pinned image and operating settings.

@@ -66,6 +66,7 @@ type EnrollResponse struct {
 // Health is additive. Older planes ignore it (pydantic extra='ignore').
 // Existing fields stay. A missing Health is the pre-health body.
 type HeartbeatRequest struct {
+	EnvironmentHash string      `json:"environment_hash,omitempty"`
 	HostName        string      `json:"host_name,omitempty"`
 	DeviceID        string      `json:"device_id"`
 	ImageHash       string      `json:"image_hash,omitempty"`
@@ -189,6 +190,7 @@ type ModelConfiguration struct {
 }
 
 type Job struct {
+	EnvironmentHash          string              `json:"environment_hash,omitempty"`
 	ModelConfiguration       *ModelConfiguration `json:"model_configuration,omitempty"`
 	ModelConfigurationSHA256 string              `json:"model_configuration_sha256,omitempty"`
 	JobID                    string              `json:"job_id"`
@@ -220,16 +222,18 @@ type Job struct {
 // DecodeTokS is omitted unless the probe returned completion_tokens.
 // Sustained stays false for one sample. Prompt text is not a field.
 type ScorecardReport struct {
-	DeviceID    string   `json:"device_id"`
-	CatalogID   string   `json:"catalog_id"`
-	ImageHash   string   `json:"image_hash"`
-	Runtime     string   `json:"runtime"`
-	PromptPack  string   `json:"prompt_pack"`
-	ImageDigest string   `json:"image_digest,omitempty"`
-	SampleMs    int      `json:"sample_ms,omitempty"`
-	DecodeTokS  float64  `json:"decode_tok_s,omitempty"`
-	ThermalC    *float64 `json:"thermal_c,omitempty"`
-	Sustained   bool     `json:"sustained"`
+	CertificationJobID string   `json:"certification_job_id,omitempty"`
+	EnvironmentHash    string   `json:"environment_hash,omitempty"`
+	DeviceID           string   `json:"device_id"`
+	CatalogID          string   `json:"catalog_id"`
+	ImageHash          string   `json:"image_hash"`
+	Runtime            string   `json:"runtime"`
+	PromptPack         string   `json:"prompt_pack"`
+	ImageDigest        string   `json:"image_digest,omitempty"`
+	SampleMs           int      `json:"sample_ms,omitempty"`
+	DecodeTokS         float64  `json:"decode_tok_s,omitempty"`
+	ThermalC           *float64 `json:"thermal_c,omitempty"`
+	Sustained          bool     `json:"sustained"`
 }
 
 // JobResultRequest is POST /agent/jobs/{job_id}/result.
@@ -239,13 +243,14 @@ type ScorecardReport struct {
 // EgressOk / EgressReason are host observations for lab quarantine
 // soaks; omit means unobserved (plane fails closed for admission).
 type JobResultRequest struct {
-	Passed       bool      `json:"passed"`
-	ImageHash    string    `json:"image_hash,omitempty"`
-	SellState    SellState `json:"sell_state,omitempty"`
-	Until        string    `json:"until,omitempty"`
-	DeviceID     string    `json:"device_id,omitempty"`
-	EgressOk     *bool     `json:"egress_ok,omitempty"`
-	EgressReason string    `json:"egress_reason,omitempty"`
+	EnvironmentHash string    `json:"environment_hash,omitempty"`
+	Passed          bool      `json:"passed"`
+	ImageHash       string    `json:"image_hash,omitempty"`
+	SellState       SellState `json:"sell_state,omitempty"`
+	Until           string    `json:"until,omitempty"`
+	DeviceID        string    `json:"device_id,omitempty"`
+	EgressOk        *bool     `json:"egress_ok,omitempty"`
+	EgressReason    string    `json:"egress_reason,omitempty"`
 }
 
 // TunnelStatus is the control-plane session state.

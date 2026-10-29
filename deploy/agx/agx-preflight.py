@@ -212,6 +212,12 @@ def _check(checks: list[dict[str, Any]], name: str, ok: bool, detail: str) -> No
     checks.append({"name": name, "ok": bool(ok), "detail": detail})
 
 
+def cuda_eligible(value: Any) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(r"13\.2\.[0-9]{1,10}", value):
+        return False
+    return 1 <= int(value.split(".")[-1]) <= 4294967295
+
+
 def evaluate(facts: dict[str, Any]) -> dict[str, Any]:
     """Return ``{ok, checks}``. ``ok`` is false when any check failed."""
 
@@ -256,8 +262,8 @@ def evaluate(facts: dict[str, Any]) -> dict[str, Any]:
             f"CUDA {CUDA_RESCUE} is the documented rescue, not the soak default ({CUDA})"
         )
     else:
-        cuda_detail = f"CUDA is {cuda!r}; host pin is {CUDA}"
-    _check(checks, "cuda", cuda == CUDA, cuda_detail)
+        cuda_detail = f"CUDA is {cuda!r}; eligible family is 13.2 patch >= 1; fresh certification required"
+    _check(checks, "cuda", cuda_eligible(cuda), cuda_detail)
     target = facts.get("default_target")
     _check(
         checks,
@@ -351,7 +357,8 @@ def evaluate(facts: dict[str, Any]) -> dict[str, Any]:
         True,
         "not required; llama.cpp CUDA decode does not need TensorRT",
     )
-    return {"ok": all(item["ok"] for item in checks), "checks": checks}
+    return {"policy_version": "agx-host-eligibility/v2", "certification_required": True,
+            "ok": all(item["ok"] for item in checks), "checks": checks}
 
 
 def collect_facts(

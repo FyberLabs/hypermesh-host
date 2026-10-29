@@ -389,8 +389,9 @@ func (a *Agent) releaseActivationPause() (SellPosture, error) {
 
 func jobResultBody(kind api.JobKind, res jobOutcome) api.JobResultRequest {
 	req := api.JobResultRequest{
-		Passed:    res.Passed,
-		ImageHash: res.ImageHash,
+		EnvironmentHash: res.EnvironmentHash,
+		Passed:          res.Passed,
+		ImageHash:       res.ImageHash,
 	}
 	if kind == api.KindSellPause {
 		req.SellState = res.SellState
