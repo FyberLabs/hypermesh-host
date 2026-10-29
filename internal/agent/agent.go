@@ -728,11 +728,14 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 		after, afterErr := a.telem.Collect(ctx)
 		if beforeErr != nil || afterErr != nil || before.EnvironmentHash == "" || before.EnvironmentHash != after.EnvironmentHash || (job.EnvironmentHash != "" && job.EnvironmentHash != before.EnvironmentHash) {
 			res.Result = pathb.Result{Passed: false, Reason: "software changed during certification or differs from assigned environment"}
-		} else if job.EnvironmentHash != "" && (!res.Measured || !res.WorkloadVerified) {
-			res.Result = pathb.Result{Passed: false, Reason: "renewal requires a verified timed workload"}
-		} else {
-			res.EnvironmentHash = before.EnvironmentHash
-		}
+        } else {
+            if job.EnvironmentHash != "" && (!res.Measured || !res.WorkloadVerified) {
+                res.Result = pathb.Result{Passed: false, Reason: "renewal requires a verified timed workload"}
+            }
+            // Stable inventory also binds genuine workload failures, allowing
+            // the plane to suspend this environment rather than ignore them.
+            res.EnvironmentHash = before.EnvironmentHash
+        }
 	}
 	if job.Kind == api.KindPathB && strings.TrimSpace(job.CatalogID) == "" {
 		a.attachEgressObservation(ctx, &res)
@@ -741,7 +744,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	// job result greens certification state. A lab soak keeps post-then-scorecard.
 	if job.Kind == api.KindCompactCert {
 		if err := a.reportScorecard(ctx, *job, res.Result); err != nil {
-			res.Result = pathb.Result{Passed: false, Reason: "cert scorecard not accepted"}
+			res.Result = pathb.Result{EnvironmentHash: res.EnvironmentHash, Passed: false, Reason: "cert scorecard not accepted"}
 		}
 		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
 			// The retry budget is spent. Staying busy would block a

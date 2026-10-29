@@ -13,13 +13,16 @@ import (
 )
 
 func TestRecertificationBindsMeasuredSoftware(t *testing.T) {
-	for _, drift := range []bool{false, true} {
-		name := "unchanged"
-		if drift {
-			name = "changed-during-run"
-		}
-		t.Run(name, func(t *testing.T) {
-			a, job, _ := certFixture(t, 200)
+	for _, tc := range []struct {
+		name   string
+		drift  bool
+		status int
+	}{
+		{"unchanged", false, 200}, {"changed-during-run", true, 200}, {"failed-workload", false, 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drift := tc.drift
+			a, job, _ := certFixture(t, tc.status)
 			file := filepath.Join(t.TempDir(), "toolkit")
 			if err := os.WriteFile(file, []byte("13.2.1"), 0600); err != nil {
 				t.Fatal(err)
@@ -66,6 +69,10 @@ func TestRecertificationBindsMeasuredSoftware(t *testing.T) {
 			if drift {
 				if result.Passed || len(scores) != 0 {
 					t.Fatalf("changed stack was accepted: %+v %+v", result, scores)
+				}
+			} else if tc.status != 200 {
+				if result.Passed || result.EnvironmentHash != job.EnvironmentHash || len(scores) != 0 {
+					t.Fatalf("failure lost its environment: %+v %+v", result, scores)
 				}
 			} else {
 				if !result.Passed || result.EnvironmentHash != job.EnvironmentHash || len(scores) != 1 {
