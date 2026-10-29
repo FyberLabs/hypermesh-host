@@ -47,6 +47,7 @@ jobs:
           python3 internal/installer/test_uma_probe.py
           python3 scripts/test-host-acceptance.py
           python3 scripts/test-workload-privacy.py
+          python3 scripts/test-model-privacy.py
           python3 deploy/agx/test-agx-preflight.py
 
       - name: Verify release binary payload

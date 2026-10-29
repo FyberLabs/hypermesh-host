@@ -61,8 +61,46 @@ privileged administrators or data written outside the workload's configured jail
 - The canary was removed; the existing workload's start time, restart count and
   running state stayed unchanged.
 
-The collector did not send a model prompt to the active workload or take over
-its lease. The issue's full renter-lease/model-prompt journey remains a separate
-controlled Bronze/end-to-end test; the canary establishes the Docker output
-persistence behavior on the real lab daemon. No completed inference or hardware
-qualification is claimed by this report.
+The initial I/O collector did not send a model prompt or take over a lease.
+After explicit owner approval for a synthetic model request, the separate model
+probe below completed on the current disposable lab workload. This completes
+#133's host-side model-prompt privacy check; public renter checkout, payment,
+Bronze qualification and hardware certification are separate acceptance work.
+
+## Explicitly approved model request
+
+Only use a disposable lab lease whose owner approved this test. The command
+sends one bounded synthetic completion request; it does not stop, restart or
+reconfigure the workload or acquire/settle a lease:
+
+```sh
+sudo python3 scripts/check-model-privacy.py \
+  --container APPROVED_DISPOSABLE_LAB_WORKLOAD --run \
+  --output /root/model-privacy.json
+```
+
+The probe resolves the selected container's immutable ID, verifies its effective
+logging/core controls, and derives the HTTP endpoint from its sole internal
+workload network. It disables environment proxies and rejects redirects. It
+reads the server's model alias, then asks for one fresh synthetic output marker
+with at most 96 completion tokens. Prompt/output stay in bounded memory and
+reports contain only hashes, usage and observations. Unsuccessful inference,
+missing usage, a mismatched marker, incomplete scans or changed workload state
+cannot pass. No model request is made by the I/O collector or by omitting `--run`.
+
+The recorded real AGX run used the pinned public Q4_K_M artifact (4,920,739,232
+bytes, SHA-256 `7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c`)
+and cached image ID
+`sha256:2d55427abb5fa0c5013985a7ef27a8821ae9046df165603219187c81923b2674`.
+The model bytes were read and verified against the public pin after the probe.
+The response consumed 97 prompt tokens and generated 25 completion tokens in
+3,631 ms, including the requested marker. Docker logs were empty; input and
+output markers had zero matches in container files and the journal. The
+workload's running state, start time and PID were unchanged. The original lease
+had ended before the first attempt, which sent no request; the successful test
+used the subsequently running disposable lab workload. No replacement model
+container was created by our attempts.
+
+This is a direct local-container inference/privacy test, not a public gateway,
+renter checkout or provider payment journey. It does not claim a sustained
+performance baseline or resolve the separate CUDA pin mismatch.

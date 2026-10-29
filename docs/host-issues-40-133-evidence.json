@@ -50,6 +50,43 @@
       }
     ]
   },
-  "actual_model_prompt_executed": false,
-  "hardware_qualification_passed": false
+  "actual_model_prompt_executed": true,
+  "hardware_qualification_passed": false,
+  "model_privacy": {
+    "schema": 1,
+    "observed_at": "2026-10-29T09:48:33.406703+00:00",
+    "collector_sha256": "02a3f58d4e1e232a8869d3f48188fa5514ca6f48f3a6fd1dcd04b69037299e3a",
+    "privacy_collector_sha256": "1cd26d04d789269427a9c0700564e7992b6ebe72f6b41f87eefa214b38856a3e",
+    "scope": "approved disposable lab lease, direct local container inference",
+    "inference_executed": true,
+    "public_renter_or_payment_journey_executed": false,
+    "image_id": "sha256:2d55427abb5fa0c5013985a7ef27a8821ae9046df165603219187c81923b2674",
+    "model_alias_sha256": "9069fc112a2af8f0d87de357df1f8247c529235ddf87af5143cfacc2a7184bae",
+    "prompt_sha256": "a5deead8011ab1ddaa7d3331a4f280641de4e3bf4d841986332f347f7ea17dbb",
+    "completion_sha256": "357c6267bf434ea2f5de52710b5da8df901aa07a6a18badc668e898ba4a5c127",
+    "completion_tokens": 25,
+    "prompt_tokens": 97,
+    "elapsed_ms": 3631,
+    "output_marker_returned": true,
+    "workload_controls": {
+      "log_driver": "none",
+      "core_soft": 0,
+      "core_hard": 0
+    },
+    "docker_logs_empty": true,
+    "container_file_matches": {
+      "input": 0,
+      "output": 0
+    },
+    "journal_matches": {
+      "input": 0,
+      "output": 0
+    },
+    "workload_running_unchanged": true,
+    "passed": true,
+    "model_sha256": "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c",
+    "model_size_bytes": 4920739232,
+    "model_sha256_verified_after_probe": true
+  },
+  "public_renter_or_payment_journey_executed": false
 }
