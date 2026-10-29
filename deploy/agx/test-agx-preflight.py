@@ -32,6 +32,13 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(re.search(r'\b' + name + r'\s*=\s*"([^"]+)"', source)[1], value)
         self.assertEqual(int(re.search(r'pinNvpmodelID\s*=\s*(\d+)', source)[1]), preflight.NVPMODEL_ID)
 
+    def test_unreviewed_observed_cuda_patch_fails(self):
+        facts = ready()
+        facts['cuda'] = '13.2.2'
+        report = preflight.evaluate(facts)
+        self.assertFalse(report['ok'])
+        self.assertTrue(any(check['name'] == 'cuda' and not check['ok'] for check in report['checks']))
+
     def test_ready_and_each_missing_required_fact(self):
         self.assertTrue(preflight.evaluate(ready())['ok'])
         for field in ready():

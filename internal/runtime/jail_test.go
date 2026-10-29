@@ -136,6 +136,10 @@ func TestInspectWorkloadPrivacy(t *testing.T) {
 		{"logs", `{"LogConfig":{"Type":"json-file"},"Ulimits":[{"Name":"core","Soft":0,"Hard":0}]}`, false},
 		{"default core", `{"LogConfig":{"Type":"none"}}`, false},
 		{"hard core", `{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":0,"Hard":1}]}`, false},
+		{"missing soft", `{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Hard":0}]}`, false},
+		{"missing hard", `{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":0}]}`, false},
+		{"null limits", `{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":null,"Hard":null}]}`, false},
+		{"duplicate core", `{"LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":1,"Hard":1},{"Name":"core","Soft":0,"Hard":0}]}`, false},
 		{"invalid", `{`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

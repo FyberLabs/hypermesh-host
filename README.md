@@ -116,6 +116,10 @@ probe. On a lab host, use a unique synthetic prompt and confirm it is absent
 from container files and the journal after a lease; this requires an actual
 lab run and is not established by unit tests.
 
+The [repeatable privacy collector](docs/workload-privacy-acceptance.md) inspects
+effective settings and can run an explicit low-resource synthetic I/O test.
+See its recorded lab result and limits before treating it as inference acceptance.
+
 The product-owned [AGX soak preflight](deploy/agx/first-boot.md#soak-preflight)
 provides a JSON report of the pinned image and operating settings.
 

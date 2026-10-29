@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "scope": "owned AGX lab privacy and preflight handoff",
+  "privacy": {
+    "schema": 1,
+    "observed_at": "2026-10-29T04:14:54.542241+00:00",
+    "collector_sha256": "79e92393625d2402319d4ae59ce78b66f1f8a6298affa6e7cfbb6e7e5b0523e4",
+    "existing_workload_modified": false,
+    "passed": true,
+    "workload_controls": {
+      "log_driver": "none",
+      "core_soft": 0,
+      "core_hard": 0
+    },
+    "canary": {
+      "kind": "synthetic_container_io",
+      "inference_executed": false,
+      "payload_sha256": "43a9574e137810db1c49ce7501356779df10c1c62424300fd9908128d4b7ec33",
+      "cleanup": true,
+      "effective_controls": {
+        "log_driver": "none",
+        "core_soft": 0,
+        "core_hard": 0
+      },
+      "stdout_stderr_observed": true,
+      "docker_logs_empty": true,
+      "container_file_matches": 0,
+      "journal_matches": 0,
+      "passed": true
+    },
+    "existing_workload_unchanged": true
+  },
+  "preflight_handoff": {
+    "observed_at": "2026-10-29T04:10:12.485158+00:00",
+    "source_revision": "604f3f63a1aee9dfafa93b122ad450fe253cca8a",
+    "script_sha256": "74d7a57b89982d74e7fdb2ee1452f32fda5eeb1af07e1bd9c95b3bb15a6a7194",
+    "root_owned_versioned_install": true,
+    "test_plane_hash_verified": true,
+    "test_plane_help_exit": 0,
+    "test_plane_run_exit": 3,
+    "test_plane_ready": false,
+    "agx_run_exit": 3,
+    "agx_ready": false,
+    "agx_failed_checks": [
+      {
+        "name": "cuda",
+        "ok": false,
+        "detail": "CUDA is '13.2.2'; host pin is 13.2.1"
+      }
+    ]
+  },
+  "actual_model_prompt_executed": false,
+  "hardware_qualification_passed": false
+}

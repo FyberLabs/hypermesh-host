@@ -154,20 +154,24 @@ func InspectWorkloadPrivacy(ctx context.Context, run DockerRunner, container str
 		LogConfig struct{ Type string }
 		Ulimits   []struct {
 			Name string
-			Soft int64
-			Hard int64
+			Soft *int64
+			Hard *int64
 		}
 	}
 	if err := json.Unmarshal(out, &config); err != nil {
 		return observation, fmt.Errorf("workload privacy inspection invalid")
 	}
 	observation.LogDriver = config.LogConfig.Type
+	coreCount := 0
 	for _, limit := range config.Ulimits {
 		if limit.Name == "core" {
-			observation.CoreSoft, observation.CoreHard = limit.Soft, limit.Hard
+			coreCount++
+			if limit.Soft != nil && limit.Hard != nil {
+				observation.CoreSoft, observation.CoreHard = *limit.Soft, *limit.Hard
+			}
 		}
 	}
-	if observation.LogDriver != "none" || observation.CoreSoft != 0 || observation.CoreHard != 0 {
+	if coreCount != 1 || observation.LogDriver != "none" || observation.CoreSoft != 0 || observation.CoreHard != 0 {
 		return observation, fmt.Errorf("workload privacy configuration unsafe")
 	}
 	return observation, nil
