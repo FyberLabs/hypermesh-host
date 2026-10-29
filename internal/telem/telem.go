@@ -21,10 +21,11 @@ import (
 
 // Snapshot is a point-in-time host reading.
 type Snapshot struct {
-	ImageHash string
-	UptimeS   int64
-	ThermalC  *float64
-	Nvpmodel  string
+	EnvironmentHash string
+	ImageHash       string
+	UptimeS         int64
+	ThermalC        *float64
+	Nvpmodel        string
 	// BootID is /proc/sys/kernel/random/boot_id when that file exists.
 	// Empty means the caller should fall back to boot time from uptime.
 	BootID string
@@ -32,16 +33,18 @@ type Snapshot struct {
 
 // Source reads host files and optional nvpmodel. Tests inject paths.
 type Source struct {
-	ImageHashEnv  string
-	ImageHashFile string
-	TegraRelease  string
-	OSRelease     string
-	UptimePath    string
-	BootIDPath    string
-	ThermalRoot   string
-	NvpmodelBin   string
-	LookPath      func(string) (string, error)
-	Run           func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// EnvironmentFiles overrides the version/configuration inventory in tests.
+	EnvironmentFiles []string
+	ImageHashEnv     string
+	ImageHashFile    string
+	TegraRelease     string
+	OSRelease        string
+	UptimePath       string
+	BootIDPath       string
+	ThermalRoot      string
+	NvpmodelBin      string
+	LookPath         func(string) (string, error)
+	Run              func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 // Default returns a Source aimed at a Jetson (or any Linux) host.
@@ -70,12 +73,14 @@ func (s Source) Collect(ctx context.Context) (Snapshot, error) {
 	if up < 0 {
 		up = 0
 	}
+	power := s.nvpmodel(ctx)
 	return Snapshot{
-		ImageHash: s.imageHash(),
-		UptimeS:   up,
-		ThermalC:  s.thermal(),
-		Nvpmodel:  s.nvpmodel(ctx),
-		BootID:    s.bootID(),
+		EnvironmentHash: s.environmentHash(power),
+		ImageHash:       s.imageHash(),
+		UptimeS:         up,
+		ThermalC:        s.thermal(),
+		Nvpmodel:        power,
+		BootID:          s.bootID(),
 	}, nil
 }
 

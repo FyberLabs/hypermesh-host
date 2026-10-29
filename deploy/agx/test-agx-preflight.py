@@ -32,12 +32,13 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(re.search(r'\b' + name + r'\s*=\s*"([^"]+)"', source)[1], value)
         self.assertEqual(int(re.search(r'pinNvpmodelID\s*=\s*(\d+)', source)[1]), preflight.NVPMODEL_ID)
 
-    def test_unreviewed_observed_cuda_patch_fails(self):
+    def test_maintained_cuda_patch_is_eligible_not_certification(self):
         facts = ready()
         facts['cuda'] = '13.2.2'
         report = preflight.evaluate(facts)
-        self.assertFalse(report['ok'])
-        self.assertTrue(any(check['name'] == 'cuda' and not check['ok'] for check in report['checks']))
+        self.assertTrue(report['ok'])
+        self.assertTrue(report['certification_required'])
+        self.assertTrue(any(check['name'] == 'cuda' and check['ok'] for check in report['checks']))
 
     def test_ready_and_each_missing_required_fact(self):
         self.assertTrue(preflight.evaluate(ready())['ok'])
@@ -48,7 +49,7 @@ class PreflightTests(unittest.TestCase):
                 facts = ready()
                 facts.pop(field)
                 self.assertFalse(preflight.evaluate(facts)['ok'])
-        for cuda in [preflight.CUDA_RESCUE, '13.2', '13.2.10']:
+        for cuda in [preflight.CUDA_RESCUE, '13.2', '13.2.0', '13.3.1', '13.2.2-rc1', '13.2.4294967296']:
             self.assertFalse(preflight.evaluate(ready() | {'cuda': cuda})['ok'])
         self.assertFalse(preflight.evaluate(ready() | {'jetson_clocks': True})['ok'])
         self.assertFalse(preflight.evaluate(ready() | {'kernel': '6.80'})['ok'])

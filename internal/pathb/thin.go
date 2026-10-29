@@ -41,7 +41,8 @@ const probeText = "Reply with the single word ready."
 // Measured / SampleMs / DecodeTokS are a separate scorecard report.
 // They stay unset unless the completion body included usage.completion_tokens.
 type Result struct {
-	ContextFit *ContextFit
+	EnvironmentHash string
+	ContextFit      *ContextFit
 	// WorkloadVerified is set only by the agent after pinned execution and cleanup.
 	WorkloadVerified bool
 	Passed           bool

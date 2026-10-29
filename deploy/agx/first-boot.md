@@ -29,7 +29,7 @@ Run it from a checkout of the reviewed hypermesh-host release on the AGX itself.
 It prints JSON and exits 0 only when every required fact matches; exit 3 means
 missing, mismatched, or unproven facts. It reads local files and commands and
 does not change firmware, power modes, packages, or Docker configuration.
-The pins match `hypermesh-host agx`: L4T R39.2.1, CUDA 13.2.1, kernel 6.8,
+The eligibility policy matches `hypermesh-host agx`: L4T R39.2.1, CUDA 13.2 patch >= 1, kernel 6.8,
 Ubuntu 24.04.5, aarch64, nvpmodel 2 / 30W, headless boot, and stopped clocks.
 Both preflight paths require `/proc/meminfo` `MemTotal` within the documented
 56–66 GiB range for the 64 GB AGX; matching software on a 32 GB module cannot
@@ -59,7 +59,7 @@ is `74d7a57b89982d74e7fdb2ee1452f32fda5eeb1af07e1bd9c95b3bb15a6a7194`.
 The deployed bytes were read back and verified, `--help` passed, and execution
 on the x86 test VM correctly exited 3. Those same bytes were then executed on
 the AGX. All observed checks passed except CUDA: actual 13.2.2 versus reviewed
-13.2.1. The AGX report remains not-ready; ownership handoff does not approve
+13.2.1. That historical report remains not-ready; ownership handoff does not approve
 a new toolkit pin or certify the hardware. See the
 [redacted acceptance evidence](../../docs/host-issues-40-133-evidence.json).
 
@@ -218,3 +218,5 @@ sudo find / -maxdepth 1 -name 'lab-pull-*.gguf' -delete
 ```
 
 `lease_start` bind-mounts the loaded file in `/var/lib/hypermesh/models/cache` after a `lab_pull`. With no loaded cache file it still requires `/var/lib/hypermesh/models/model.gguf`. The cache budget is `HYPERMESH_MODEL_CACHE_MAX_BYTES` (filesystem size minus the disk floor when unset). `hypermesh-deploy` writes that measured value.
+
+The subsequent [recertification policy](../../docs/host-recertification.md) makes CUDA 13.2.2 eligible for a fresh certification run. The updated probe passed on AGX64-1 on 2026-10-29; this does not replace the historical report or grant a new certificate.
