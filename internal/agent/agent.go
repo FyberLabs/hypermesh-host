@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
- "github.com/FyberLabs/hypermesh-host/internal/hardware"
 	"github.com/FyberLabs/hypermesh-host/internal/bench"
+	"github.com/FyberLabs/hypermesh-host/internal/hardware"
 	"github.com/FyberLabs/hypermesh-host/internal/logsafe"
 	"github.com/FyberLabs/hypermesh-host/internal/pathb"
 	"github.com/FyberLabs/hypermesh-host/internal/pull"
@@ -440,6 +440,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		DeviceID:        a.state.DeviceID,
 		ImageHash:       image,
 		LoadedModelHash: a.leaseImageDigest(),
+		EnvironmentHash: snap.EnvironmentHash,
 		UptimeS:         snap.UptimeS,
 		ThermalC:        snap.ThermalC,
 		SellState:       sell.SellState,
@@ -710,7 +711,32 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 		}
 	}()
 
-	res := a.runJob(ctx, *job)
+	// Bind both ends of certification to the same observed software state.
+	var before telem.Snapshot
+	var beforeErr error
+	certifying := job.Kind == api.KindCompactCert || job.Kind == api.KindPathB
+	if certifying {
+		before, beforeErr = a.telem.Collect(ctx)
+	}
+    var res jobOutcome
+    if certifying && (beforeErr != nil || before.EnvironmentHash == "" || (job.EnvironmentHash != "" && job.EnvironmentHash != before.EnvironmentHash)) {
+        res.Result = pathb.Result{Passed: false, Reason: "certification environment is unknown or differs from assigned environment"}
+    } else {
+        res = a.runJob(ctx, *job)
+    }
+    if certifying {
+		after, afterErr := a.telem.Collect(ctx)
+		if beforeErr != nil || afterErr != nil || before.EnvironmentHash == "" || before.EnvironmentHash != after.EnvironmentHash || (job.EnvironmentHash != "" && job.EnvironmentHash != before.EnvironmentHash) {
+			res.Result = pathb.Result{Passed: false, Reason: "software changed during certification or differs from assigned environment"}
+        } else {
+            if job.EnvironmentHash != "" && (!res.Measured || !res.WorkloadVerified) {
+                res.Result = pathb.Result{Passed: false, Reason: "renewal requires a verified timed workload"}
+            }
+            // Stable inventory also binds genuine workload failures, allowing
+            // the plane to suspend this environment rather than ignore them.
+            res.EnvironmentHash = before.EnvironmentHash
+        }
+	}
 	if job.Kind == api.KindPathB && strings.TrimSpace(job.CatalogID) == "" {
 		a.attachEgressObservation(ctx, &res)
 	}
@@ -718,7 +744,7 @@ func (a *Agent) pullAndRun(ctx context.Context) error {
 	// job result greens certification state. A lab soak keeps post-then-scorecard.
 	if job.Kind == api.KindCompactCert {
 		if err := a.reportScorecard(ctx, *job, res.Result); err != nil {
-			res.Result = pathb.Result{Passed: false, Reason: "cert scorecard not accepted"}
+			res.Result = pathb.Result{EnvironmentHash: res.EnvironmentHash, Passed: false, Reason: "cert scorecard not accepted"}
 		}
 		if err := a.postResult(ctx, job.JobID, a.state.DeviceID, jobResultBody(job.Kind, res)); err != nil {
 			// The retry budget is spent. Staying busy would block a
@@ -751,8 +777,10 @@ func (a *Agent) reportScorecard(ctx context.Context, job api.Job, res pathb.Resu
 		return nil
 	}
 	return a.client.PostScorecard(ctx, api.ScorecardReport{
-		DeviceID: a.state.DeviceID, CatalogID: job.CatalogID,
-		ImageHash: res.ImageHash, Runtime: job.Runtime, PromptPack: certSuite(job.SuiteID),
+		CertificationJobID: job.JobID,
+		DeviceID:           a.state.DeviceID, CatalogID: job.CatalogID,
+		EnvironmentHash: res.EnvironmentHash,
+		ImageHash:       res.ImageHash, Runtime: job.Runtime, PromptPack: certSuite(job.SuiteID),
 		ImageDigest: job.ImageDigest, SampleMs: res.SampleMs,
 		DecodeTokS: res.DecodeTokS, ThermalC: res.ThermalC, Sustained: false,
 	})
@@ -827,10 +855,11 @@ func (a *Agent) attachEgressObservation(ctx context.Context, res *jobOutcome) {
 }
 
 func (a *Agent) runJob(ctx context.Context, job api.Job) jobOutcome {
- a.maintenanceMu.Lock();defer a.maintenanceMu.Unlock()
- if a.maintenanceHeld()&&job.Kind!=api.KindModelEvict&&job.Kind!=api.KindLeaseStop&&job.Kind!=api.KindLeaseCancel&&job.Kind!=api.KindLeaseExpiry&&job.Kind!=api.KindSellPause{
-  return jobOutcome{Result:pathb.Result{Passed:false,Reason:"host maintenance hold"}}
- }
+	a.maintenanceMu.Lock()
+	defer a.maintenanceMu.Unlock()
+	if a.maintenanceHeld() && job.Kind != api.KindModelEvict && job.Kind != api.KindLeaseStop && job.Kind != api.KindLeaseCancel && job.Kind != api.KindLeaseExpiry && job.Kind != api.KindSellPause {
+		return jobOutcome{Result: pathb.Result{Passed: false, Reason: "host maintenance hold"}}
+	}
 	_ = a.effectiveSell()
 	switch job.Kind {
 	case api.KindPathB, api.KindInstanceCheck, api.KindCompactCert:
@@ -976,8 +1005,11 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 	if err != nil {
 		return err
 	}
-	lim,err := a.policyLimits(a.pullLimits(size));if err!=nil{return err}
- resolved, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
+	lim, err := a.policyLimits(a.pullLimits(size))
+	if err != nil {
+		return err
+	}
+	resolved, err := pull.ResolveSize(ctx, rawURL, lim.Expected, lim.Head)
 	if err != nil || resolved <= 0 {
 		free, statErr := lim.Stat(dest)
 		if statErr != nil || free < 0 {
@@ -1007,8 +1039,11 @@ func (a *Agent) doFetchWeights(ctx context.Context, dest, sourceRef, pin string,
 		}
 		return a.fetchWeights(ctx, dest, sourceRef, pin)
 	}
-	fetch,err:=a.modelFetcher();if err!=nil{return err}
- return pull.ToFileWith(ctx, dest, rawURL, pin, fetch, lim)
+	fetch, err := a.modelFetcher()
+	if err != nil {
+		return err
+	}
+	return pull.ToFileWith(ctx, dest, rawURL, pin, fetch, lim)
 }
 
 func (a *Agent) pullLimits(size int64) pull.Limits {
@@ -1526,27 +1561,48 @@ func firstNonEmpty(vs ...string) string {
 // resetEnrollmentWork runs before exchanging a fresh enrollment token.
 // Old work must stop successfully before a replacement identity is issued.
 func (a *Agent) resetEnrollmentWork(ctx context.Context, device string) error {
-    leasePath:=filepath.Join(a.cfg.StateDir,leaseFile)
-    if raw,err:=os.ReadFile(leasePath);err==nil {
-        var handle runtime.Handle
-        if err:=json.Unmarshal(raw,&handle);err!=nil {return fmt.Errorf("invalid old lease state: %w",err)}
-        if err:=a.stopHandle(ctx,&handle);err!=nil {return err}
-        a.dropCurrentLease()
-    } else if !os.IsNotExist(err) {return err}
-    if err:=a.tunnels.Teardown(ctx);err!=nil {return err}
-    for _,name:=range []string{leaseFile,sellFile,"boot.json"} {
-        if err:=os.Remove(filepath.Join(a.cfg.StateDir,name));err!=nil && !os.IsNotExist(err) {return err}
-    }
-    if dir,err:=modelCacheDir(a.cfg.GGUFHostPath());err==nil {
-        if _,err:=os.Stat(dir);err==nil {
-            idx,_,err:=readCacheIndex(dir)
-            if err!=nil {return err}
-            idx.Loaded="";idx.Pending=nil
-            if err:=writeCacheIndex(dir,idx);err!=nil {return err}
-        } else if !os.IsNotExist(err) {return err}
-    }
-    if err:=retireMachineIdentity(ctx,a.cfg,device);err!=nil{return err}
-    a.setLease(nil)
-    a.applied="";a.peerPosted=false;a.postedPub=""
-    return nil
+	leasePath := filepath.Join(a.cfg.StateDir, leaseFile)
+	if raw, err := os.ReadFile(leasePath); err == nil {
+		var handle runtime.Handle
+		if err := json.Unmarshal(raw, &handle); err != nil {
+			return fmt.Errorf("invalid old lease state: %w", err)
+		}
+		if err := a.stopHandle(ctx, &handle); err != nil {
+			return err
+		}
+		a.dropCurrentLease()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := a.tunnels.Teardown(ctx); err != nil {
+		return err
+	}
+	for _, name := range []string{leaseFile, sellFile, "boot.json"} {
+		if err := os.Remove(filepath.Join(a.cfg.StateDir, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if dir, err := modelCacheDir(a.cfg.GGUFHostPath()); err == nil {
+		if _, err := os.Stat(dir); err == nil {
+			idx, _, err := readCacheIndex(dir)
+			if err != nil {
+				return err
+			}
+			idx.Loaded = ""
+			idx.Pending = nil
+			if err := writeCacheIndex(dir, idx); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := retireMachineIdentity(ctx, a.cfg, device); err != nil {
+		return err
+	}
+	a.setLease(nil)
+	a.applied = ""
+	a.peerPosted = false
+	a.postedPub = ""
+	return nil
 }

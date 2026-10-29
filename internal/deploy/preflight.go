@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// Pins for the AGX image already used on this host class.
-// Fail closed: a missing or different fact stops the command.
+// Supported AGX configuration. CUDA maintenance patches are eligible for
+// requalification; preflight never grants or renews certification.
 const (
 	pinArch          = "aarch64"
 	pinL4T           = "R39.2.1"
@@ -68,8 +68,8 @@ func CheckAGX(f Facts) error {
 	if !ubuntuIs(f.Ubuntu, pinUbuntu) {
 		bad = append(bad, fmt.Sprintf("ubuntu: got %q, want %s", f.Ubuntu, pinUbuntu))
 	}
-	if f.CUDA != pinCUDA {
-		bad = append(bad, fmt.Sprintf("cuda: got %q, want %s", f.CUDA, pinCUDA))
+	if !cudaEligible(f.CUDA) {
+		bad = append(bad, fmt.Sprintf("cuda: got %q, want 13.2 patch >= 1 (requires current certification)", f.CUDA))
 	}
 	if f.DefaultTarget != pinTarget {
 		bad = append(bad, fmt.Sprintf("default target: got %q, want %s (headless)", f.DefaultTarget, pinTarget))
@@ -439,4 +439,13 @@ func parseNvpmodel(text string) (int, string) {
 		}
 	}
 	return id, watts
+}
+
+// cudaEligible is a preflight policy, never a certification grant.
+func cudaEligible(v string) bool {
+	if !regexp.MustCompile(`^13\.2\.[0-9]+$`).MatchString(v) {
+		return false
+	}
+	patch, err := strconv.ParseUint(strings.Split(v, ".")[2], 10, 32)
+	return err == nil && patch >= 1
 }

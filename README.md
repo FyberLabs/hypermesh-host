@@ -4,6 +4,8 @@ Host software for [Hypermesh](https://hyperme.sh), a network that rents AI infer
 
 A host enrolls with the control plane, sends heartbeats, brings up a WireGuard tunnel, and runs the jobs the control plane assigns: certification runs, model downloads and inference leases. Inference runs in a locked-down Docker container that is reachable only through the host's WireGuard address.
 
+[Recurring certification](docs/host-recertification.md) binds measurements to software inventory and expires them after 24 hours. Updated agents report drift; the control plane owns renewal and placement eligibility.
+
 Maintained by Fyber Labs TN LLC (Tennessee).
 
 ## Status

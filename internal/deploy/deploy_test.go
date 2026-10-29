@@ -684,3 +684,18 @@ func TestCUDACompilerBannerPreservesPatch(t *testing.T) {
 		}
 	}
 }
+
+func TestCUDAMaintenanceEligibility(t *testing.T) {
+	for _, v := range []string{"13.2.1", "13.2.2", "13.2.10"} {
+		facts := goodFacts()
+		facts.CUDA = v
+		if err := CheckAGX(facts); err != nil {
+			t.Fatalf("%s: %v", v, err)
+		}
+	}
+	for _, v := range []string{"13.2.0", "13.2", "13.3.1", "13.2.2-rc1", "13.2.4294967296"} {
+		if cudaEligible(v) {
+			t.Fatalf("accepted %q", v)
+		}
+	}
+}
