@@ -5,11 +5,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/FyberLabs/hypermesh-host/internal/runtime"
@@ -121,6 +123,60 @@ func TestLeaseStartFailsClosedWhenWireGuardDeviceMissing(t *testing.T) {
 	got := a.leaseStart(context.Background(), ingressJob("lease-nodev", hash))
 	if got.Passed || !strings.Contains(got.Reason, "ingress unreachable") {
 		t.Fatalf("result %+v", got)
+	}
+	assertLeaseClean(t, a, listen, docker)
+}
+
+func TestInitialLeaseIngressWaitsForAssignedAddress(t *testing.T) {
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	a.cfg.LeaseReadyWait = 5 * time.Second
+	a.setBindIP("192.0.2.123/32")
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	var logs syncBuf
+	a.log = slog.New(slog.NewTextHandler(&logs, nil))
+	done := make(chan bool, 1)
+	go func() {
+		result := a.leaseStart(context.Background(), ingressJob("lease-first-address", hash))
+		done <- result.Passed
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(logs.String(), "waiting for tunnel address") {
+		select {
+		case passed := <-done:
+			t.Fatalf("start ended before tunnel convergence: passed=%v", passed)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial unavailable address was not observed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.setBindIP("127.0.0.1/32")
+	select {
+	case passed := <-done:
+		if !passed {
+			t.Fatalf("start failed after convergence: %s", logs.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("start did not finish")
+	}
+	defer a.stopLeaseForwarder()
+	if h := a.currentLease(); h == nil || !h.Serving() || h.PublishAddr != listen {
+		t.Fatalf("lease handle %+v", h)
+	}
+}
+
+func TestInitialUnavailableIngressAddressRemainsBounded(t *testing.T) {
+	a, hash, listen, _ := newIngressAgent(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	a.cfg.LeaseReadyWait = 80 * time.Millisecond
+	a.setBindIP("192.0.2.123/32")
+	docker := &scriptedDocker{ip: "172.18.0.2"}
+	a.runtime = &runtime.NVIDIA{Run: docker.run}
+	started := time.Now()
+	got := a.leaseStart(context.Background(), ingressJob("lease-address-never-ready", hash))
+	if got.Passed || !strings.Contains(got.Reason, "ingress unreachable") || time.Since(started) > time.Second {
+		t.Fatalf("result %+v after %s", got, time.Since(started))
 	}
 	assertLeaseClean(t, a, listen, docker)
 }
