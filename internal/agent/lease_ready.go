@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/FyberLabs/hypermesh-host/internal/api"
@@ -280,11 +281,31 @@ func (a *Agent) waitLeaseHealth(ctx context.Context, listen string, h *runtime.H
 				return a.exitedError(diagCtx, h, state)
 			}
 			if err == nil && state.Running && state.IP != "" && containerURL == "" {
+				// Tunnel sync can replace the address before the first listener,
+				// while the model container is loading. Use the current address.
+				if want := a.leaseListenAddr(); want != "" {
+					listen = want
+				}
 				if err := a.startLeaseForwarder(listen, a.bridgeAddr(state.IP)); err != nil {
-					return &leaseReadyError{
+					failure := &leaseReadyError{
 						Kind: "ingress unreachable",
 						Fix:  "WireGuard client address or HYPERMESH_LISTEN_PORT",
 						Log:  redactLeaseText(err.Error()),
+					}
+					if !errors.Is(err, syscall.EADDRNOTAVAIL) {
+						return failure
+					}
+					// applyMatched publishes an assigned address while the
+					// interface is converging. Retry only this transient bind
+					// failure within the existing readiness deadline.
+					a.log.Warn("lease forwarder waiting for tunnel address", "listen", listen)
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-probeCtx.Done():
+						return failure
+					case <-time.After(interval):
+						continue
 					}
 				}
 				h.ContainerIP = state.IP
