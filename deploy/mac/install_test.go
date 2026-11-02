@@ -15,7 +15,7 @@ func TestAgentPlistRunsBinary(t *testing.T) {
 		"<string>/var/lib/hypermesh</string>",
 		"<key>KeepAlive</key>",
 		"<true/>",
-		"/opt/homebrew/bin",
+		"<string>/usr/local/libexec/hypermesh:/usr/bin:/bin:/usr/sbin:/sbin</string>",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("agent plist missing %s", needle)
@@ -24,20 +24,74 @@ func TestAgentPlistRunsBinary(t *testing.T) {
 	if strings.Contains(body, "/bin/sh") {
 		t.Fatal("agent plist must run hypermesh-agent, which reads agent.env itself")
 	}
+	assertNoHomebrew(t, body)
+	assertPathDirs(t, body, "/usr/local/libexec/hypermesh", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 }
 
 func TestWireGuardPlistOwnsUtun(t *testing.T) {
 	body := string(mustRead(t, "com.fyberlabs.hypermesh-wg.plist"))
 	for _, needle := range []string{
 		"<string>com.fyberlabs.hypermesh-wg</string>",
-		"<string>/opt/homebrew/bin/wireguard-go</string>",
+		"<string>/usr/local/libexec/hypermesh/wireguard-go</string>",
 		"<string>-f</string>",
 		"<string>utun8</string>",
 		"<key>KeepAlive</key>",
+		"<string>/usr/bin:/bin:/usr/sbin:/sbin</string>",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("wg plist missing %s", needle)
 		}
+	}
+	assertNoHomebrew(t, body)
+	assertPathDirs(t, body, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+}
+
+func TestInstallCopiesRootOwnedBinaries(t *testing.T) {
+	body := string(mustRead(t, "README.md"))
+	const rootBin = "/usr/local/libexec/hypermesh"
+	for _, needle := range []string{
+		"sudo mkdir -p " + rootBin,
+		"sudo chown root:wheel " + rootBin,
+		"sudo chmod 0755 " + rootBin,
+		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/wireguard-go\" " + rootBin + "/wireguard-go",
+		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/wg\" " + rootBin + "/wg",
+		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/llama-server\" " + rootBin + "/llama-server",
+		"Do not point a plist or `PATH` at",
+		"/opt/homebrew",
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("README missing %s", needle)
+		}
+	}
+	agent := string(mustRead(t, "com.fyberlabs.hypermesh-agent.plist"))
+	wg := string(mustRead(t, "com.fyberlabs.hypermesh-wg.plist"))
+	if strings.Contains(agent, "/opt/homebrew") || strings.Contains(wg, "/opt/homebrew") {
+		t.Fatal("launchd files still reference /opt/homebrew")
+	}
+}
+
+func assertNoHomebrew(t *testing.T, body string) {
+	t.Helper()
+	if strings.Contains(body, "homebrew") || strings.Contains(body, "/opt/") {
+		t.Fatalf("launchd file references a user-writable prefix:\n%s", body)
+	}
+}
+
+func assertPathDirs(t *testing.T, body string, want ...string) {
+	t.Helper()
+	const key = "<key>PATH</key>\n\t\t<string>"
+	i := strings.Index(body, key)
+	if i < 0 {
+		t.Fatal("PATH missing")
+	}
+	rest := body[i+len(key):]
+	end := strings.Index(rest, "</string>")
+	if end < 0 {
+		t.Fatal("PATH string not closed")
+	}
+	got := strings.Split(rest[:end], ":")
+	if strings.Join(got, ":") != strings.Join(want, ":") {
+		t.Fatalf("PATH %q want %q", got, want)
 	}
 }
 

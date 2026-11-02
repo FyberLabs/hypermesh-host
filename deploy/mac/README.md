@@ -15,8 +15,9 @@ on Darwin.
 - An Apple silicon Mac. Darwin AMD64 is not a release target.
 - `sudo`. The agent uses the same paths as Linux: `/etc/hypermesh/agent.env`, `/var/lib/hypermesh`, and `/etc/wireguard`. macOS will create `/var/lib` when you do. There is no second config directory.
 - GnuPG (`gpg`), for bootstrap.
-- `wireguard-go` and `wireguard-tools` (`wg`) from Homebrew. macOS has no WireGuard kernel module. The agent does not start `wireguard-go`; [`com.fyberlabs.hypermesh-wg.plist`](com.fyberlabs.hypermesh-wg.plist) does, on `utun8`.
-- For a Metal lease: `llama-server` on `PATH`. The launchd job's `PATH` includes `/opt/homebrew/bin`. If `llama-server` is missing, start fails and says so. Nothing fakes a completion.
+- `wireguard-go` and `wireguard-tools` (`wg`) from Homebrew, then copied into `/usr/local/libexec/hypermesh`. macOS has no WireGuard kernel module. The agent does not start `wireguard-go`; [`com.fyberlabs.hypermesh-wg.plist`](com.fyberlabs.hypermesh-wg.plist) runs `/usr/local/libexec/hypermesh/wireguard-go` on `utun8`.
+- For a Metal lease: copy `llama-server` into that same directory. The agent job's `PATH` lists it ahead of the system directories. If `llama-server` is missing, start fails and says so. Nothing fakes a completion.
+- The LaunchDaemons run as root. `/opt/homebrew` is writable by the user who installed Homebrew, so these jobs do not execute or `PATH`-search that prefix. `ifconfig`, `route`, `netstat`, and `sysctl` come from `/sbin` and `/usr/sbin`.
 
 ## Install
 
@@ -66,6 +67,23 @@ sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 
 That binary is not the signed release artifact.
 
+Copy `wireguard-go`, `wg`, and (for a Metal lease) `llama-server` out of
+the Homebrew prefix into a directory root owns. `install` follows a
+symlink and writes a new file, mode `0755`, owner `root:wheel`. The
+plists call those copies. Do not point a plist or `PATH` at
+`/opt/homebrew`.
+
+```sh
+sudo mkdir -p /usr/local/libexec/hypermesh
+sudo chown root:wheel /usr/local/libexec/hypermesh
+sudo chmod 0755 /usr/local/libexec/hypermesh
+prefix=$(brew --prefix)
+sudo install -o root -g wheel -m 0755 "$prefix/bin/wireguard-go" /usr/local/libexec/hypermesh/wireguard-go
+sudo install -o root -g wheel -m 0755 "$prefix/bin/wg" /usr/local/libexec/hypermesh/wg
+# Skip the next line when this Mac will not run a Metal lease.
+sudo install -o root -g wheel -m 0755 "$prefix/bin/llama-server" /usr/local/libexec/hypermesh/llama-server
+```
+
 Prepare the directories, the env file, and the two LaunchDaemons. Load
 WireGuard first so `utun8` exists before the agent configures it.
 
@@ -86,9 +104,8 @@ Confirm `utun8` is free (`ifconfig utun8` should fail). If it is in use,
 pick another `utunN`, set `HYPERMESH_WG_IFACE` to that name, and change
 the last argument of `wireguard-go` in
 [`com.fyberlabs.hypermesh-wg.plist`](com.fyberlabs.hypermesh-wg.plist) to
-the same name. `which wireguard-go` on Apple silicon is
-`/opt/homebrew/bin/wireguard-go`. If it is somewhere else, change the
-program path in that plist.
+the same name. Leave the program path as
+`/usr/local/libexec/hypermesh/wireguard-go`.
 
 ```sh
 sudo cp deploy/mac/com.fyberlabs.hypermesh-wg.plist /Library/LaunchDaemons/
@@ -134,7 +151,10 @@ Linux systemd uses `EnvironmentFile=/etc/hypermesh/agent.env`. Launchd
 cannot do that. [`com.fyberlabs.hypermesh-agent.plist`](com.fyberlabs.hypermesh-agent.plist)
 runs `/usr/local/bin/hypermesh-agent` directly, with `WorkingDirectory`
 `/var/lib/hypermesh` and `KeepAlive`. The only launchd environment
-variable is `PATH`, so `wg` from Homebrew is visible. On startup the
+variable is `PATH`: `/usr/local/libexec/hypermesh:/usr/bin:/bin:/usr/sbin:/sbin`.
+`wg` and `llama-server` resolve in the root-owned directory.
+`ifconfig`, `route`, `netstat`, and `sysctl` resolve under `/sbin` and
+`/usr/sbin`. `/opt/homebrew/bin` is not on that `PATH`. On startup the
 agent reads `/etc/hypermesh/agent.env` and sets each key that is not
 already in the environment. The keys are the same ones Linux uses.
 
@@ -155,10 +175,11 @@ Required for a first enroll:
 
 `HYPERMESH_WG_USERSPACE=1` tells the agent to configure an existing
 interface. [`com.fyberlabs.hypermesh-wg.plist`](com.fyberlabs.hypermesh-wg.plist)
-runs `wireguard-go -f utun8`. The agent then uses `wg`, `ifconfig`,
-`route`, and `netstat`. It does not run `wg-quick` and it does not
-spawn `wireguard-go`. Linux userspace still uses `ip` and the
-`hypermesh` interface owned by `hypermesh-wg.service`.
+runs `/usr/local/libexec/hypermesh/wireguard-go -f utun8` with a system
+`PATH`. The agent then uses `wg`, `ifconfig`, `route`, and `netstat`.
+It does not run `wg-quick` and it does not spawn `wireguard-go`. Linux
+userspace still uses `ip` and the `hypermesh` interface owned by
+`hypermesh-wg.service`.
 
 ## Backend names (fixed)
 

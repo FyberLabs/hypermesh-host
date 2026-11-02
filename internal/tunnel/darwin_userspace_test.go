@@ -31,6 +31,14 @@ func TestParseDarwinRoute(t *testing.T) {
 		ok   bool
 	}{
 		{"10.8.0.0/24        utun8              USc                 utun8", false, "10.8.0.0/24", true},
+		{"10.8/24            utun8              USc                 utun8", false, "10.8.0.0/24", true},
+		{"10.8.1/24          utun8              USc                 utun8", false, "10.8.1.0/24", true},
+		{"13.64/10           utun8              USc                 utun8", false, "13.64.0.0/10", true},
+		{"10                 utun8              USc                 utun8", false, "10.0.0.0/8", true},
+		{"10.8               utun8              USc                 utun8", false, "10.0.0.0/8", true},
+		{"10.8.1             utun8              USc                 utun8", false, "10.0.0.0/8", true},
+		{"172.16             utun8              USc                 utun8", false, "172.16.0.0/16", true},
+		{"192.168.1          utun8              USc                 utun8", false, "192.168.1.0/24", true},
 		{"10.8.0.2           10.8.0.2           UH                  utun8", false, "", false},
 		{"10.77.0.1          utun8              UHS                 utun8", false, "10.77.0.1/32", true},
 		{"default            192.168.1.1        UGScg               en0", false, "", false},
@@ -44,6 +52,44 @@ func TestParseDarwinRoute(t *testing.T) {
 		if ok != tc.ok || got != tc.want {
 			t.Fatalf("%q ok=%v got %q want ok=%v %q", tc.line, ok, got, tc.ok, tc.want)
 		}
+	}
+}
+
+func TestAbbreviatedDarwinRouteIsRemoved(t *testing.T) {
+	var deleted []string
+	r := &Runner{
+		Iface:  "utun8",
+		LinkOS: "darwin",
+		Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch name {
+			case "netstat":
+				if containsAll(args, "inet6") {
+					return []byte("Destination Gateway Flags Netif\n"), nil
+				}
+				return []byte(strings.Join([]string{
+					"Destination        Gateway            Flags           Netif Expire",
+					"10.8/24            utun8              USc             utun8",
+					"10.8.1             utun8              USc             utun8",
+					"172.16             utun8              USc             utun8",
+					"192.168.1          utun8              USc             utun8",
+					"10.77.0.1          utun8              UHS             utun8",
+				}, "\n")), nil
+			case "route":
+				if len(args) >= 5 && args[2] == "delete" {
+					deleted = append(deleted, args[4])
+				}
+				return nil, nil
+			default:
+				return nil, fmt.Errorf("unexpected %s", name)
+			}
+		},
+	}
+	if err := r.deleteDevRoutes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.8.0.0/24", "10.0.0.0/8", "172.16.0.0/16", "192.168.1.0/24", "10.77.0.1/32"}
+	if strings.Join(deleted, ",") != strings.Join(want, ",") {
+		t.Fatalf("deleted %v want %v", deleted, want)
 	}
 }
 

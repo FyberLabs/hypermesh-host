@@ -6,14 +6,14 @@
 	<string>com.fyberlabs.hypermesh-wg</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/opt/homebrew/bin/wireguard-go</string>
+		<string>/usr/local/libexec/hypermesh/wireguard-go</string>
 		<string>-f</string>
 		<string>utun8</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>
 	<key>KeepAlive</key>
 	<true/>

@@ -85,6 +85,7 @@ type Agent struct {
 	// workloadState overrides docker inspect during ingress. Tests set it.
 	workloadState func(ctx context.Context, containerID string) (runtime.WorkloadState, error)
 	// ingressIface is the device lease ingress binds to. Empty uses hypermesh.
+	// New copies the userspace tunnel interface (HYPERMESH_WG_IFACE) here.
 	// Tests set it to lo.
 	ingressIface string
 	fwdMu        sync.Mutex
@@ -206,8 +207,10 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	src := telem.Default()
 	wg := tunnel.NewRunnerMode(cfg.WGMode)
 	wg.Log = log
+	var ingressIface string
 	if wg.Userspace {
 		wg.Iface = tunnel.UserspaceIface(cfg.WGIface)
+		ingressIface = wg.Iface
 		log.Info("userspace wireguard", "service", tunnel.UserspaceService(), "iface", wg.Iface)
 	}
 	return &Agent{
@@ -219,15 +222,16 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 			Endpoint:  cfg.CompletionsEndpoint(),
 			Store:     pathb.FileStore{Dir: cfg.StateDir},
 		},
-		runtime:     runtime.NewNVIDIA(),
-		hip:         runtime.NewHIP(),
-		metal:       runtime.NewMetal(),
-		tunnels:     wg,
-		keyDir:      keyDirFor(cfg),
-		log:         log,
-		hbWake:      make(chan struct{}, 1),
-		metricsWake: make(chan struct{}, 1),
-		started:     time.Now().UTC(),
+		runtime:      runtime.NewNVIDIA(),
+		hip:          runtime.NewHIP(),
+		metal:        runtime.NewMetal(),
+		tunnels:      wg,
+		keyDir:       keyDirFor(cfg),
+		ingressIface: ingressIface,
+		log:          log,
+		hbWake:       make(chan struct{}, 1),
+		metricsWake:  make(chan struct{}, 1),
+		started:      time.Now().UTC(),
 	}, nil
 }
 

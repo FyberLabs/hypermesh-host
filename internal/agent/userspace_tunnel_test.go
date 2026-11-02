@@ -18,6 +18,41 @@ import (
 	"github.com/FyberLabs/hypermesh-host/internal/tunnel"
 )
 
+func TestNewPropagatesUserspaceIfaceToIngress(t *testing.T) {
+	newAgent := func(t *testing.T, mode, iface string) *Agent {
+		t.Helper()
+		a, err := New(Config{
+			ControlPlaneURL: "https://api.test.hyperme.sh",
+			TenantID:        testTenant,
+			StateDir:        t.TempDir(),
+			HeartbeatEvery:  time.Second,
+			JobEvery:        time.Second,
+			WGMode:          mode,
+			WGIface:         iface,
+		}, discardLog())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	over := newAgent(t, "1", "wg-lab0")
+	if over.ingressDevice() != "wg-lab0" {
+		t.Fatalf("ingress %q", over.ingressDevice())
+	}
+	runner, ok := over.tunnels.(*tunnel.Runner)
+	if !ok || runner.Iface != "wg-lab0" {
+		t.Fatalf("tunnel iface %#v", over.tunnels)
+	}
+	def := newAgent(t, "1", "")
+	if def.ingressDevice() != tunnel.UserspaceIface("") {
+		t.Fatalf("default ingress %q", def.ingressDevice())
+	}
+	kernel := newAgent(t, "0", "wg-lab0")
+	if kernel.ingressDevice() != "hypermesh" {
+		t.Fatalf("kernel ingress %q", kernel.ingressDevice())
+	}
+}
+
 // TestRestartHandshakingIfaceSurvivesFailedSync drives a real userspace
 // Runner. GET /agent/tunnel returns 503. The handshaking interface is not torn down.
 func TestRestartHandshakingIfaceSurvivesFailedSync(t *testing.T) {

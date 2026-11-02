@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -164,6 +165,7 @@ func parseIfconfigAddrs(out string) []string {
 
 func (r *Runner) listDarwinRoutes(ctx context.Context) ([]devRoute, error) {
 	var out []devRoute
+	seen := map[string]bool{}
 	for _, fam := range []struct {
 		flag string
 		v6   bool
@@ -177,6 +179,11 @@ func (r *Runner) listDarwinRoutes(ctx context.Context) ([]devRoute, error) {
 			if !ok {
 				continue
 			}
+			key := routeKey(cidr, fam.v6)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			out = append(out, devRoute{cidr: cidr, v6: fam.v6})
 		}
 	}
@@ -210,6 +217,9 @@ func normalizeDarwinDest(dest string, v6 bool) (string, bool) {
 		}
 		return "0.0.0.0/0", true
 	}
+	if !v6 {
+		return expandDarwinIPv4(dest)
+	}
 	if strings.Contains(dest, "/") {
 		p, err := netip.ParsePrefix(dest)
 		if err != nil {
@@ -222,14 +232,71 @@ func normalizeDarwinDest(dest string, v6 bool) (string, bool) {
 		return s, true
 	}
 	addr, err := netip.ParseAddr(dest)
-	if err != nil || addr.Is6() != v6 {
+	if err != nil || !addr.Is6() {
 		return "", false
 	}
-	bits := 32
-	if addr.Is6() {
-		bits = 128
+	return netip.PrefixFrom(addr, 128).String(), true
+}
+
+// expandDarwinIPv4 undoes the abbreviations in Apple's netname().
+// Trailing zero octets are omitted, so 10.8.0.0/24 is printed as 10.8/24.
+// A mask that matches the classful mask is omitted entirely: 10 is
+// 10.0.0.0/8, 172.16 is 172.16.0.0/16, and 192.168.1 and other class C/D/E
+// networks are /24. 10.8.1 is class A with that /8 omitted, so the masked
+// prefix is 10.0.0.0/8. Four octets and no slash is a host route from
+// routename(), so it is /32.
+// The result is masked, which is the prefix reconcileRoutes deletes.
+func expandDarwinIPv4(dest string) (string, bool) {
+	dest = strings.TrimSpace(dest)
+	if dest == "" || strings.ContainsAny(dest, ":%&") {
+		return "", false
 	}
-	return netip.PrefixFrom(addr, bits).String(), true
+	addrPart := dest
+	bits := -1
+	if i := strings.IndexByte(dest, '/'); i >= 0 {
+		addrPart = dest[:i]
+		n, err := strconv.Atoi(dest[i+1:])
+		if err != nil || n < 0 || n > 32 || dest[i+1:] == "" {
+			return "", false
+		}
+		bits = n
+	}
+	parts := strings.Split(addrPart, ".")
+	if len(parts) < 1 || len(parts) > 4 {
+		return "", false
+	}
+	var octets [4]byte
+	for i, part := range parts {
+		if part == "" {
+			return "", false
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 || n > 255 {
+			return "", false
+		}
+		octets[i] = byte(n)
+	}
+	if bits < 0 {
+		if len(parts) == 4 {
+			bits = 32
+		} else {
+			bits = darwinClassfulBits(octets[0])
+		}
+	}
+	return netip.PrefixFrom(netip.AddrFrom4(octets), bits).Masked().String(), true
+}
+
+// darwinClassfulBits is forgemask() in Apple's netstat: class A /8,
+// class B /16, and class C, D, and E /24.
+func darwinClassfulBits(first byte) int {
+	switch {
+	case first&0x80 == 0:
+		return 8
+	case first&0xc0 == 0x80:
+		return 16
+	default:
+		return 24
+	}
 }
 
 func (r *Runner) darwinRoute(ctx context.Context, v6 bool, op, cidr string) error {
