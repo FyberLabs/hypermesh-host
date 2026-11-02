@@ -19,7 +19,7 @@ and architecture match. Neither command authorizes enrollment or selling.
 | Renesas RZ/V2H | Linux ARM64 | Same CPU runtime; vendor Yocto installation policy still required; never route Yocto through APT |
 | Seeed J4012 / Orin NX | Linux ARM64 | Existing `cuda-jetson` runtime; retain the module's exact JetPack/L4T image |
 | Ryzen AI Max+ 395/PRO 395, PRO 495 | Linux AMD64 | `rocm,cpu` build tags; HIP requires compatible ROCm, KFD/DRI and pinned workload image; no HSA override |
-| Apple silicon Mac mini / Studio | Darwin ARM64 | Signed binaries and inspection; native Metal process/service lifecycle, installation and qualification remain pending |
+| Apple silicon Mac mini / Studio | Darwin ARM64 | Signed binaries and an experimental launchd install for dogfood. Not certified. Guided installation, sale activation, and qualification remain pending |
 
 ## Download from the test channel
 
@@ -46,7 +46,9 @@ python3 ./bootstrap.py --channel test
 
 This release verifier only downloads and verifies; it does not start setup.
 On Linux, start guided setup separately with `sudo ./hypermesh-host`. On macOS,
-run `./hypermesh-host inspect` for inspection. Explicit `--os` and `--arch` select
+run `./hypermesh-host inspect` for inspection. The experimental Darwin service
+install is [deploy/mac/README.md](../deploy/mac/README.md). It is dogfood, not
+certification. Explicit `--os` and `--arch` select
 a binary for another host. Keep the signing key and installation receipt with
 the verified executable.
 
@@ -129,8 +131,9 @@ For each exact board/chip/RAM/OS/driver/runtime combination record:
 5. Privacy controls and any separately requested memory-protection tier evidence.
 6. Reviewer approval bound to that evidence before catalog placement or selling.
 
-Pending slices: Renesas vendor-Yocto deployment; macOS launchd, pinned native
-Metal runtime, private process lifecycle and uninstall/update; Coral adapter;
+Pending slices: Renesas vendor-Yocto deployment; macOS qualification, guided
+installation, Metal runtime acceptance, private process lifecycle and
+uninstall/update; Coral adapter;
 AX-M1, DX-M1, DX-M1M and SG2300X adapters; physical acceptance and promotion. No new platform is declared
 sales-ready merely by adding it to the release matrix.
 

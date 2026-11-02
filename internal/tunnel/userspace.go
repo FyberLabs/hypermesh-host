@@ -107,7 +107,7 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 		return err
 	}
 	if !live.Exists {
-		return fmt.Errorf("hypermesh tunnel: interface %s does not exist; enable hypermesh-wg.service", r.iface())
+		return r.errNoUserspaceIface()
 	}
 	if r.liveMatches(ctx, live, sess) {
 		// Desired peer is already on the link. Do not syncconf or set the
@@ -139,11 +139,11 @@ func (r *Runner) applyUserspace(ctx context.Context, sess Session) error {
 		return err
 	}
 	if addr := strings.TrimSpace(sess.ClientAddress); addr != "" {
-		if _, err := r.runCmd(ctx, "ip", "addr", "replace", addr, "dev", r.iface()); err != nil {
+		if err := r.setIfaceAddr(ctx, addr); err != nil {
 			return err
 		}
 	}
-	if _, err := r.runCmd(ctx, "ip", "link", "set", "dev", r.iface(), "up"); err != nil {
+	if err := r.setLinkUp(ctx, true); err != nil {
 		return err
 	}
 	if err := r.reconcileRoutes(ctx, sess); err != nil {
@@ -175,8 +175,8 @@ func (r *Runner) teardownUserspace(ctx context.Context) error {
 			}
 		}
 		// Flush is best-effort: an address-less link still has to go down.
-		_, _ = r.runCmd(ctx, "ip", "addr", "flush", "dev", r.iface())
-		if _, err := r.runCmd(ctx, "ip", "link", "set", "dev", r.iface(), "down"); err != nil {
+		r.flushAddrs(ctx)
+		if err := r.setLinkUp(ctx, false); err != nil {
 			return err
 		}
 	}
@@ -604,9 +604,8 @@ func (r *Runner) inspect(ctx context.Context) (liveIface, error) {
 		return liveIface{}, err
 	}
 	live.Exists = true
-	addrOut, addrErr := r.runCmd(ctx, "ip", "-4", "-o", "addr", "show", "dev", r.iface())
-	if addrErr == nil {
-		live.Address = strings.Join(parseIfaceAddrs(string(addrOut)), ",")
+	if addr, addrErr := r.readIfaceAddrs(ctx); addrErr == nil {
+		live.Address = addr
 	}
 	return live, nil
 }
@@ -865,6 +864,9 @@ func (r *Runner) deleteDevRoutes(ctx context.Context) error {
 // address) and the IPv6 link-local fe80::/64 are not ours. AllowedIPs
 // prefixes, including a stale one from an earlier apply, are.
 func (r *Runner) listDevRoutes(ctx context.Context) ([]devRoute, error) {
+	if r.darwinLink() {
+		return r.listDarwinRoutes(ctx)
+	}
 	var out []devRoute
 	for _, v6 := range []bool{false, true} {
 		args := []string{"route", "show", "dev", r.iface()}
@@ -961,6 +963,9 @@ func (r *Runner) logRoute(action, cidr string) {
 }
 
 func (r *Runner) ipRoute(ctx context.Context, v6 bool, op, cidr string) error {
+	if r.darwinLink() {
+		return r.darwinRoute(ctx, v6, op, cidr)
+	}
 	args := []string{"route", op, cidr, "dev", r.iface()}
 	if v6 {
 		args = append([]string{"-6"}, args...)

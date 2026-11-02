@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.fyberlabs.hypermesh-agent</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/hypermesh-agent</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/var/lib/hypermesh</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/hypermesh-agent.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/hypermesh-agent.log</string>
+</dict>
+</plist>

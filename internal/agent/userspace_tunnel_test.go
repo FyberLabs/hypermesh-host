@@ -263,6 +263,7 @@ func userspaceRunner(t *testing.T, link *cmdLog, now time.Time) *tunnel.Runner {
 		Iface:     "hypermesh",
 		ConfigDir: t.TempDir(),
 		Userspace: true,
+		LinkOS:    "linux",
 		Now:       func() time.Time { return now },
 		Run:       link.run,
 		Quick: func(context.Context, ...string) error {

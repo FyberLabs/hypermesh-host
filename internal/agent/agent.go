@@ -207,7 +207,8 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	wg := tunnel.NewRunnerMode(cfg.WGMode)
 	wg.Log = log
 	if wg.Userspace {
-		log.Info("userspace wireguard", "unit", "hypermesh-wg.service")
+		wg.Iface = tunnel.UserspaceIface(cfg.WGIface)
+		log.Info("userspace wireguard", "service", tunnel.UserspaceService(), "iface", wg.Iface)
 	}
 	return &Agent{
 		cfg:    cfg,

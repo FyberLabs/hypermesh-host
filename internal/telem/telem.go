@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +47,11 @@ type Source struct {
 	NvpmodelBin      string
 	LookPath         func(string) (string, error)
 	Run              func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// GOOS overrides runtime.GOOS. Empty uses the process OS. Tests set
+	// darwin so a missing /proc/uptime takes the sysctl path on Linux.
+	GOOS string
+	// Now is the clock for a Darwin boot-time uptime. Nil uses time.Now.
+	Now func() time.Time
 }
 
 // Default returns a Source aimed at a Jetson (or any Linux) host.
@@ -66,7 +73,7 @@ func (s Source) Collect(ctx context.Context) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	up, err := s.uptime()
+	up, err := s.uptime(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -127,13 +134,23 @@ func hashFile(path string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func (s Source) uptime() (int64, error) {
+func (s Source) goos() string {
+	if s.GOOS != "" {
+		return s.GOOS
+	}
+	return runtime.GOOS
+}
+
+func (s Source) uptime(ctx context.Context) (int64, error) {
 	path := s.UptimePath
 	if path == "" {
 		path = "/proc/uptime"
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) && s.goos() == "darwin" {
+			return s.darwinUptime(ctx)
+		}
 		return 0, fmt.Errorf("telem: uptime: %w", err)
 	}
 	field := strings.Fields(string(b))
@@ -145,6 +162,52 @@ func (s Source) uptime() (int64, error) {
 		return 0, fmt.Errorf("telem: uptime: %w", err)
 	}
 	return int64(f), nil
+}
+
+// darwinBoottime is the `sysctl -n kern.boottime` shape on macOS:
+// `{ sec = 1710000000, usec = 123456 } ...`.
+var darwinBoottime = regexp.MustCompile(`sec\s*=\s*(\d+)`)
+
+// darwinUptime is seconds since boot. Darwin has no /proc/uptime, and a
+// missing uptime file would otherwise fail every heartbeat.
+func (s Source) darwinUptime(ctx context.Context) (int64, error) {
+	run := s.Run
+	if run == nil {
+		run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			return exec.CommandContext(ctx, name, args...).Output()
+		}
+	}
+	out, err := run(ctx, "sysctl", "-n", "kern.boottime")
+	if err != nil {
+		return 0, fmt.Errorf("telem: uptime: %w", err)
+	}
+	boot, err := parseDarwinBoottime(string(out))
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	d := now.Sub(boot)
+	if d < 0 {
+		return 0, nil
+	}
+	return int64(d.Seconds()), nil
+}
+
+func parseDarwinBoottime(text string) (time.Time, error) {
+	m := darwinBoottime.FindStringSubmatch(text)
+	if m == nil {
+		return time.Time{}, fmt.Errorf("telem: uptime: unrecognized kern.boottime")
+	}
+	sec, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil || sec <= 0 {
+		return time.Time{}, fmt.Errorf("telem: uptime: unrecognized kern.boottime")
+	}
+	return time.Unix(sec, 0), nil
 }
 
 func (s Source) thermal() *float64 {

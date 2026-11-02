@@ -98,6 +98,11 @@ type Runner struct {
 	// FindPID overrides the wireguard-go pid lookup for Snapshot.
 	// Nil scans /proc when Userspace is set. Kernel mode omits the pid.
 	FindPID func(iface string) (pid int, ok bool)
+	// LinkOS selects address and route commands. Empty uses the process
+	// GOOS. "linux" is iproute2. "darwin" is ifconfig, route, and netstat.
+	// Tests that stub `ip` set this to linux so a Darwin laptop still
+	// speaks the command language the stub implements.
+	LinkOS string
 
 	logTunnel   string
 	logLease    string

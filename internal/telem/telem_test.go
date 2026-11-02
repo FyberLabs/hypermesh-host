@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestCollectFromFiles(t *testing.T) {
@@ -137,5 +139,43 @@ func TestMissingThermalAndNvpmodelOK(t *testing.T) {
 	}
 	if snap.UptimeS != 0 {
 		t.Fatalf("uptime %d", snap.UptimeS)
+	}
+}
+
+func TestDarwinUptimeFromBoottime(t *testing.T) {
+	now := time.Unix(1_710_000_100, 0)
+	s := Source{
+		GOOS:       "darwin",
+		UptimePath: filepath.Join(t.TempDir(), "missing-uptime"),
+		Now:        func() time.Time { return now },
+		LookPath:   func(string) (string, error) { return "", os.ErrNotExist },
+		Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name != "sysctl" || len(args) != 2 || args[0] != "-n" || args[1] != "kern.boottime" {
+				t.Fatalf("command %s %v", name, args)
+			}
+			return []byte("{ sec = 1710000000, usec = 10 } Mon Mar  9 12:00:00 2026\n"), nil
+		},
+	}
+	snap, err := s.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.UptimeS != 100 {
+		t.Fatalf("uptime %d", snap.UptimeS)
+	}
+}
+
+func TestLinuxMissingUptimeStillFails(t *testing.T) {
+	s := Source{
+		GOOS:       "linux",
+		UptimePath: filepath.Join(t.TempDir(), "missing-uptime"),
+		Run: func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("linux uptime must not call sysctl")
+			return nil, nil
+		},
+	}
+	_, err := s.Collect(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "uptime") {
+		t.Fatal(err)
 	}
 }

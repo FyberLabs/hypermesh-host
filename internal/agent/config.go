@@ -89,10 +89,16 @@ type Config struct {
 	LlamaTimeout string
 	// WGMode selects the WireGuard backend (HYPERMESH_WG_USERSPACE).
 	// "auto" uses the kernel module when it is loaded or loadable, and
-	// otherwise configures the interface owned by hypermesh-wg.service.
-	// "1" / "userspace" forces that unit. "0" / "kernel" forces wg-quick.
-	// Empty stays on wg-quick (tests). The agent never spawns wireguard-go.
+	// otherwise configures the interface owned by hypermesh-wg.service
+	// (Linux) or com.fyberlabs.hypermesh-wg (Darwin). "1" / "userspace"
+	// forces that service. "0" / "kernel" forces wg-quick. Empty stays
+	// on wg-quick (tests). The agent never spawns wireguard-go.
 	WGMode string
+	// WGIface is the userspace interface name (HYPERMESH_WG_IFACE).
+	// Empty uses hypermesh on Linux and utun8 on Darwin. wireguard-go on
+	// Darwin can only create a utun device, so the launchd job and this
+	// value have to name the same interface.
+	WGIface string
 	// MetricsAddr is an explicit /metrics bind (HYPERMESH_METRICS_ADDR).
 	// Empty derives the hypermesh interface address, or 127.0.0.1:9464
 	// when the tunnel is down. Only loopback and that WireGuard address
@@ -162,6 +168,7 @@ func FromEnv() Config {
 		LlamaCtxSize:              envOr("HYPERMESH_LLAMA_CTX_SIZE", runtime.DefaultLlamaCtxSize),
 		LlamaTimeout:              envOr("HYPERMESH_LLAMA_TIMEOUT", runtime.DefaultLlamaTimeout),
 		WGMode:                    wgModeFromEnv(),
+		WGIface:                   strings.TrimSpace(os.Getenv("HYPERMESH_WG_IFACE")),
 		MetricsAddr:               strings.TrimSpace(os.Getenv("HYPERMESH_METRICS_ADDR")),
 		MetricsAllowNonLoopback:   envBool("HYPERMESH_METRICS_ALLOW_NON_LOOPBACK"),
 		HostType:                  strings.TrimSpace(os.Getenv("HYPERMESH_HOST_TYPE")),
