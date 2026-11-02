@@ -82,6 +82,7 @@ func TestHeartbeatHealthShape(t *testing.T) {
 	a.tunnels = &tunnel.Runner{
 		Iface:     "hypermesh",
 		Userspace: true,
+		LinkOS:    "linux",
 		Now:       func() time.Time { return hs },
 		FindPID:   func(string) (int, bool) { return 4242, true },
 		Run: func(_ context.Context, name string, _ ...string) ([]byte, error) {

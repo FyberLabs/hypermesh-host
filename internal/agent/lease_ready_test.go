@@ -582,14 +582,35 @@ func assertLeaseClean(t *testing.T, a *Agent, listen string, docker *scriptedDoc
 	}
 }
 
+// ingressPort stays below the usual ephemeral range (32768–60999). A
+// listener on :0, including httptest, will not be handed a port this
+// helper just closed.
+var (
+	ingressPortMu sync.Mutex
+	ingressPort   = 18000
+)
+
 func freeLocalPort(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	ingressPortMu.Lock()
+	defer ingressPortMu.Unlock()
+	for i := 0; i < 2000; i++ {
+		ingressPort++
+		if ingressPort >= 32000 {
+			ingressPort = 18001
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ingressPort))
+		if err != nil {
+			continue
+		}
+		port := ingressPort
+		if err := ln.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("%d", port)
 	}
-	defer ln.Close()
-	return fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port)
+	t.Fatal("no free ingress port")
+	return ""
 }
 
 // A docker that never answers inspect or logs must not hold lease_start past

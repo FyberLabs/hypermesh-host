@@ -27,9 +27,10 @@ has an inference adapter yet.
    Inspect is discovery, not certification. Review the files locally. The
    hardware fingerprint identifies class characteristics, not ownership.
 4. Follow the reviewed setup policy for that board/OS. Linux setup is a separate
-   `sudo ./hypermesh-host` command with your approval. Mac candidates currently
-   support download and inspection; native service setup is pending. Vendor
-   Yocto boards require their own installation policy. Report a missing adapter
+   `sudo ./hypermesh-host` command with your approval. Mac candidates can follow
+   the experimental launchd steps in [deploy/mac/README.md](../deploy/mac/README.md).
+   That path is dogfood, not a certified install, and it does not activate selling.
+   Vendor Yocto boards require their own installation policy. Report a missing adapter
    or unsupported stage; do not substitute a different backend to claim a pass.
 5. File a [test result](https://github.com/FyberLabs/hypermesh-host/issues/new?template=test-channel-feedback.yml).
    Link the hardware request and exact immutable test release. Successful,

@@ -18,6 +18,12 @@ import (
 
 func main() {
 	log := logsafe.New()
+	// Launchd has no EnvironmentFile. The same /etc/hypermesh/agent.env
+	// systemd loads on Linux is applied here when a key is still unset.
+	if err := agent.ApplyEnvFile(agent.DefaultEnvFile); err != nil {
+		log.Error("could not read agent env", "err", err)
+		os.Exit(2)
+	}
 	cfg := agent.FromEnv()
 
 	flag.StringVar(&cfg.ControlPlaneURL, "control-plane-url", cfg.ControlPlaneURL, "Hypermesh control-plane base URL (HYPERMESH_CONTROL_PLANE_URL)")

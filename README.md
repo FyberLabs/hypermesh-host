@@ -11,7 +11,7 @@ Maintained by Fyber Labs TN LLC (Tennessee).
 ## Status
 
 - Only **test** builds are published. Production builds are not released yet. On the test network, hosts and prices are for testing and host payouts are not paid; see [hyperme.sh/hosts](https://hyperme.sh/hosts).
-- Installation and production hosting are **Linux only**. macOS installation is not available. The agent also builds on macOS, where an experimental Metal runner exists as a lab scaffold. It is not a certified or supported host class; see [deploy/mac/README.md](deploy/mac/README.md).
+- Installation and production hosting are **Linux only**. An experimental Darwin path can enroll an Apple silicon Mac for dogfood. It is not certified and it does not activate selling. See [deploy/mac/README.md](deploy/mac/README.md).
 - The code is under active development. Interfaces and file formats can change between builds.
 
 ## Supported hardware

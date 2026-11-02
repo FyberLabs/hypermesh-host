@@ -546,7 +546,9 @@ AMD and Intel x86-64 use the same `amd64` instruction-set package name;
 RAM capacity belongs in measured profiles, not separate binary names. Linux
 Jetsons and Apple Silicon both use ARM64 but require different OS binaries.
 
-Mac support needs its own complete task sequence:
+An experimental launchd path for Apple silicon dogfood is documented in
+[deploy/mac/README.md](../deploy/mac/README.md). It is not this guided installer
+and it is not certified. Mac support still needs its own complete task sequence:
 
 - [ ] Build and publish Darwin arm64 agent and deploy artifacts with signatures.
 - [ ] Add macOS resource admission and Metal allocation/headroom checks.

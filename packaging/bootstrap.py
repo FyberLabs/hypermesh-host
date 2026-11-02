@@ -364,7 +364,7 @@ def main():
         print("Next: start guided setup (or resume it after an interruption):")
         print("  sudo " + __import__("shlex").quote(str(args.output.resolve())))
     else:
-        print("macOS candidate: inspect hardware before native service qualification; guided selling is not available yet.")
+        print("macOS: verified CLI only. Experimental launchd dogfood is in deploy/mac/README.md of the hypermesh-host repository. It is not certified, and guided selling is not available.")
         print("  " + __import__("shlex").quote(str(args.output.resolve())) + " inspect")
 
 
