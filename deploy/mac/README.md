@@ -37,6 +37,20 @@ optional and is not certification:
 ./hypermesh-host inspect
 ```
 
+Create the binary directories before either downloading or building the agent.
+A fresh Mac may have `/usr/local` without `/usr/local/bin`; `install` does not
+create its destination's parent directories.
+
+```sh
+sudo mkdir -p /usr/local/bin /usr/local/libexec/hypermesh
+sudo chown root:wheel /usr/local/bin /usr/local/libexec/hypermesh
+sudo chmod 0755 /usr/local/bin /usr/local/libexec/hypermesh
+```
+
+If any directory command fails, stop and resolve the reported path or permission
+error before continuing. Both binary directories must exist and be root-owned
+before copying the agent or runtime tools into them.
+
 Download the matching agent and install it:
 
 ```sh
@@ -74,9 +88,6 @@ plists call those copies. Do not point a plist or `PATH` at
 `/opt/homebrew`.
 
 ```sh
-sudo mkdir -p /usr/local/libexec/hypermesh
-sudo chown root:wheel /usr/local/libexec/hypermesh
-sudo chmod 0755 /usr/local/libexec/hypermesh
 prefix=$(brew --prefix)
 sudo install -o root -g wheel -m 0755 "$prefix/bin/wireguard-go" /usr/local/libexec/hypermesh/wireguard-go
 sudo install -o root -g wheel -m 0755 "$prefix/bin/wg" /usr/local/libexec/hypermesh/wg
