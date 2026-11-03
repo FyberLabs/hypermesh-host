@@ -796,7 +796,13 @@ the selected WireGuard mode, then extend the journal to that complete flow.
 Completed: `download --artifact agent` uses the same independently trusted GPG
 key, signed checksum manifest, metadata validation, bounded HTTPS transfer and
 persistent build floor as the deploy CLI. The default artifact remains
-`deploy`. Only these two executable names are accepted.
+`deploy`. Only these two executable names are accepted. Darwin ARM64 also has
+three fixed data selectors: `darwin-agent-plist`, `darwin-wg-plist` and
+`darwin-env`. They download the two LaunchDaemon plists and unfilled
+`agent.env.example` from the same signed release, with the same trust and build
+checks, but create 0600 non-executable outputs. They require `--os darwin` and `--arch arm64` and never overwrite an existing file or install a service. See the
+[Mac first-install guide](../deploy/mac/README.md) for individual verified
+downloads without a source checkout; older releases do not contain these files.
 
 For a release-built installer, add `--match-installer` to require the agent's
 signed version, build and commit to match that installer exactly. A development

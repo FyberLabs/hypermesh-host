@@ -1088,7 +1088,8 @@ release_payload_names() {
       printf '%s\n' "hypermesh-${program}_${version}_${target}"
     done
   done
-  printf '%s\n' bootstrap.py platforms.json release.json
+  printf '%s\n' bootstrap.py platforms.json release.json \
+    com.fyberlabs.hypermesh-agent.plist com.fyberlabs.hypermesh-wg.plist agent.env.example
 }
 
 # Build platform payloads; ROCm is compiled only into Linux AMD64.
@@ -1114,6 +1115,11 @@ build_release_binaries() {
   done
   cp "${root}/packaging/bootstrap.py" "${dist}/bootstrap.py"
   cp "${root}/internal/hardware/systems.json" "${dist}/platforms.json"
+  # Individual first-install resources share the existing signed checksum list.
+  local resource
+  for resource in com.fyberlabs.hypermesh-agent.plist com.fyberlabs.hypermesh-wg.plist agent.env.example; do
+    cp "${root}/deploy/mac/${resource}" "${dist}/${resource}" || return 1
+  done
 }
 
 # The signed list drives storage/channel/GitHub asset lists.

@@ -63,8 +63,12 @@ runtime-tool setup below are still required.
 
 ## Install
 
-Run this from a checkout that contains `deploy/mac/`. The signed release
-downloads the binaries. It does not include these plist files.
+Download the test-channel bootstrap from [Hypermesh hosts](https://hyperme.sh/hosts)
+and save it as `bootstrap.py` in an empty working directory. The publisher now
+includes the two LaunchDaemon plists and `agent.env.example` as individual files
+in the signed release checksum list, alongside the binaries. A source checkout
+is not required for this installation path. Use a release built with these
+resources and the matching CLI; earlier releases do not contain them.
 
 ```sh
 brew install gnupg wireguard-go wireguard-tools
@@ -112,16 +116,45 @@ FP=$(python3 -c 'import json; print(json.load(open("hypermesh-host.install.json"
 sudo install -m 0755 ./hypermesh-agent /usr/local/bin/hypermesh-agent
 ```
 
+Download the service files from that same immutable release, using the same
+trusted key, fingerprint and build floor as the agent. These downloads create
+private, non-executable files in the working directory and never overwrite an
+existing file:
+
+```sh
+for artifact in darwin-agent-plist darwin-wg-plist darwin-env; do
+  case "$artifact" in
+    darwin-agent-plist) file=com.fyberlabs.hypermesh-agent.plist ;;
+    darwin-wg-plist) file=com.fyberlabs.hypermesh-wg.plist ;;
+    darwin-env) file=agent.env.example ;;
+  esac
+  ./hypermesh-host download \
+    --artifact "$artifact" \
+    --release-url "$REL" \
+    --match-installer \
+    --channel test --os darwin --arch arm64 \
+    --min-build "$BUILD" \
+    --trusted-key ./hypermesh-host.pub \
+    --fingerprints "$FP" \
+    --output "./$file" || exit 1
+done
+```
+
+Stop if verification or a file download fails. An older release missing these
+files cannot satisfy this step; select a newer signed build. Downloads do not
+install services or modify `/etc/hypermesh/agent.env`.
+
 A branch that is not in a signed test release is not on that channel.
-On the Mac itself you can build the agent from that checkout and install
-that binary the same way:
+To build the agent instead, use a separate source checkout on the Mac. From
+its repository root, build and install that binary:
 
 ```sh
 go build -o hypermesh-agent ./cmd/agent
 sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 ```
 
-That binary is not the signed release artifact.
+That binary is not the signed release artifact. Return to the verified-download
+working directory for the service-file installation steps below.
 
 Copy `wireguard-go` and `wg` out of the Homebrew prefix into a directory
 root owns. Install the optional Metal runner separately below. `install` follows a
@@ -204,7 +237,7 @@ WireGuard first so `utun8` exists before the agent configures it.
 ```sh
 sudo mkdir -p /etc/hypermesh /var/lib/hypermesh /etc/wireguard
 sudo chmod 0700 /var/lib/hypermesh /etc/wireguard
-sudo cp deploy/mac/agent.env.example /etc/hypermesh/agent.env
+sudo cp ./agent.env.example /etc/hypermesh/agent.env
 sudo chmod 0600 /etc/hypermesh/agent.env
 ```
 
@@ -222,8 +255,8 @@ the same name. Leave the program path as
 `/usr/local/libexec/hypermesh/wireguard-go`.
 
 ```sh
-sudo cp deploy/mac/com.fyberlabs.hypermesh-wg.plist /Library/LaunchDaemons/
-sudo cp deploy/mac/com.fyberlabs.hypermesh-agent.plist /Library/LaunchDaemons/
+sudo cp ./com.fyberlabs.hypermesh-wg.plist /Library/LaunchDaemons/
+sudo cp ./com.fyberlabs.hypermesh-agent.plist /Library/LaunchDaemons/
 sudo chown root:wheel /Library/LaunchDaemons/com.fyberlabs.hypermesh-wg.plist \
   /Library/LaunchDaemons/com.fyberlabs.hypermesh-agent.plist
 sudo chmod 0644 /Library/LaunchDaemons/com.fyberlabs.hypermesh-wg.plist \
