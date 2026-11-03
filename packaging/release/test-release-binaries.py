@@ -27,7 +27,10 @@ class ReleaseBinaries(unittest.TestCase):
                  "test", str(LAYOUT), str(ROOT), str(dist), str(probe)], check=True, cwd=ROOT)
             self.assertEqual(json.loads((dist / "buildinfo.json").read_text()),
                              {"channel": "test", "version": "0.0.57", "build": 57})
-            expected = {"release.json", "bootstrap.py", "platforms.json"}
+            resources = ("com.fyberlabs.hypermesh-agent.plist", "com.fyberlabs.hypermesh-wg.plist", "agent.env.example")
+            expected = {"release.json", "bootstrap.py", "platforms.json", *resources}
+            for name in resources:
+                self.assertEqual((dist / name).read_bytes(), (ROOT / "deploy/mac" / name).read_bytes())
             for program in ("agent", "deploy"):
                 for target, machine in (("linux_arm64", 183), ("linux_amd64", 62), ("darwin_arm64", 0x100000c)):
                     name = f"hypermesh-{program}_0.0.57_{target}"
@@ -48,6 +51,13 @@ class ReleaseBinaries(unittest.TestCase):
             manifest = (dist / "checksums.txt").read_text()
             self.assertEqual({line.split()[1] for line in manifest.splitlines()}, expected)
             subprocess.run(["sha256sum", "-c", "checksums.txt"], cwd=dist, check=True)
+            # Service data is authenticated by the same manifest, too.
+            resource = dist / resources[0]
+            original = resource.read_bytes()
+            resource.write_bytes(original + b"tampered")
+            self.assertNotEqual(subprocess.run(["sha256sum", "-c", "checksums.txt"],
+                                               cwd=dist, capture_output=True).returncode, 0)
+            resource.write_bytes(original)
             # The deploy CLI is protected by the same checksums as the agent.
             with (dist / "hypermesh-deploy_0.0.57_linux_arm64").open("ab") as stream:
                 stream.write(b"tampered")

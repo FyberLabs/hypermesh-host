@@ -50,7 +50,7 @@ func RunDownload(ctx context.Context, args []string, out, diagnostic io.Writer) 
 	flags.SetOutput(diagnostic)
 	var opt downloadOptions
 	var keyPath, fingerprints string
-	flags.StringVar(&opt.Artifact, "artifact", "deploy", "signed executable: deploy or agent")
+	flags.StringVar(&opt.Artifact, "artifact", "deploy", "signed artifact: deploy, agent, darwin-agent-plist, darwin-wg-plist or darwin-env")
 	flags.BoolVar(&opt.MatchInstaller, "match-installer", false, "require the signed release to match this installer build, version and commit")
 	flags.StringVar(&opt.BaseURL, "release-url", "", "HTTPS directory containing release assets")
 	flags.StringVar(&opt.ChannelRoot, "channel-root", "", "discover channels/<channel>.json under this HTTPS root; requires --state-file")
@@ -101,14 +101,33 @@ func downloadArtifact(opt downloadOptions) string {
 	return opt.Artifact
 }
 
+// Only these fixed data filenames are selectable; callers cannot provide paths.
+func darwinServiceFile(artifact string) string {
+	switch artifact {
+	case "darwin-agent-plist":
+		return "com.fyberlabs.hypermesh-agent.plist"
+	case "darwin-wg-plist":
+		return "com.fyberlabs.hypermesh-wg.plist"
+	case "darwin-env":
+		return "agent.env.example"
+	default:
+		return ""
+	}
+}
+
 func downloadOS(opt downloadOptions) string {
  if opt.TargetOS=="" {return "linux"} // Existing internal Linux installation plans.
  return opt.TargetOS
 }
 
 func validateDownload(opt downloadOptions) error {
-	if artifact := downloadArtifact(opt); artifact != "deploy" && artifact != "agent" {
-		return fmt.Errorf("artifact must be deploy or agent")
+	artifact := downloadArtifact(opt)
+	serviceFile := darwinServiceFile(artifact)
+	if artifact != "deploy" && artifact != "agent" && serviceFile == "" {
+		return fmt.Errorf("artifact must be deploy, agent, darwin-agent-plist, darwin-wg-plist or darwin-env")
+	}
+	if serviceFile != "" && (downloadOS(opt) != "darwin" || opt.Arch != "arm64") {
+		return fmt.Errorf("Darwin service files require --os darwin --arch arm64")
 	}
 	if opt.MatchInstaller && (buildinfo.CurrentBuild() <= 0 ||
 		!releaseVersion.MatchString(buildinfo.CurrentVersion()) || !releaseCommit.MatchString(buildinfo.Current())) {
@@ -183,27 +202,31 @@ func downloadCLI(ctx context.Context, opt downloadOptions, fetch artifactFetch, 
 		return meta, fmt.Errorf("signed release does not match this installer; select its immutable release URL")
 	}
 	name := fmt.Sprintf("hypermesh-%s_%s_%s_%s", downloadArtifact(opt), meta.Version, downloadOS(opt), opt.Arch)
-	payload, err := fetch(ctx, base+name, 128<<20)
+	mode, limit := os.FileMode(0o700), int64(128<<20)
+	if serviceFile := darwinServiceFile(downloadArtifact(opt)); serviceFile != "" {
+		name, mode, limit = serviceFile, 0o600, 64<<10
+	}
+	payload, err := fetch(ctx, base+name, limit)
 	if err != nil { return meta, err }
 	if err := update.CheckHash(sums, name, payload); err != nil { return meta, err }
 	if err := ctx.Err(); err != nil { return meta, fmt.Errorf("download cancelled") }
-	// Persist before exposing executable bytes: a crash can advance the floor
+	// Persist before exposing verified bytes: a crash can advance the floor
 	// without an output, but cannot expose a newer binary with an older floor.
 	if persist != nil {
 		if err := persist(meta.Build); err != nil { return meta, err }
 	}
-	if err := writeVerifiedCLI(opt.Output, payload); err != nil { return meta, err }
+	if err := writeVerifiedArtifact(opt.Output, payload, mode); err != nil { return meta, err }
 	return meta, nil
 }
 
 // Stage privately, then link atomically without replacing any existing path.
-func writeVerifiedCLI(destination string, payload []byte) error {
+func writeVerifiedArtifact(destination string, payload []byte, mode os.FileMode) error {
 	file, err := os.CreateTemp(filepath.Dir(destination), ".hypermesh-download-")
-	if err != nil { return fmt.Errorf("cannot stage verified executable in output directory") }
+	if err != nil { return fmt.Errorf("cannot stage verified artifact in output directory") }
 	name := file.Name()
 	defer os.Remove(name)
 	if _, err := file.Write(payload); err != nil { _ = file.Close(); return err }
-	if err := file.Chmod(0o700); err != nil { _ = file.Close(); return err }
+	if err := file.Chmod(mode); err != nil { _ = file.Close(); return err }
 	if err := file.Sync(); err != nil { _ = file.Close(); return err }
 	if err := file.Close(); err != nil { return err }
 	if err := os.Link(name, destination); err != nil {
