@@ -10,14 +10,33 @@ The signed test release includes Darwin ARM64 agent and CLI binaries
 This directory is the manual service install. Automatic updates stay off
 on Darwin.
 
-For SSH-only owner enrollment, the [headless registration procedure](../../docs/host-installer.md#browser-approved-agent-registration-and-recovery)
-uses a verification URL and user code on a phone or laptop, followed by explicit
-portal approval. It needs no browser on the host. That orchestration currently
-runs on Linux; native Darwin `register-agent` and `registration-status` remain
-tracked in [#163](https://github.com/FyberLabs/hypermesh-host/issues/163).
-The Mac procedure below is the interim secondary token path, not a requirement
-caused by using SSH. Keep both enrollment modes; do not copy user access tokens
-or device credentials into support logs.
+## Enrollment modes
+
+**Default owner path:** run the installer, complete device-code sign-in, then
+review and approve the installation through the returned portal
+`host-registrations` approval link. Sign-in and host approval are separate steps.
+For SSH-only hosts, use the printed verification URL and user code on another
+device; no browser is needed on the host. See the
+[owner registration and recovery procedure](../../docs/host-installer.md#browser-approved-agent-registration-and-recovery).
+
+That orchestration currently runs on Linux. Native Darwin `register-agent` and
+`registration-status` are pending in [#163](https://github.com/FyberLabs/hypermesh-host/issues/163);
+the Mac CLI currently rejects those commands. Until that ships, this Mac guide
+uses the **secondary token path** for interim dogfood. Once native support is
+available, owner setup should use device-code sign-in and portal approval.
+
+**Rare secondary path:** an authorized non-owner or batch operator obtains a
+one-time enroll token through **Register a box** or the device-writer API,
+configures `HYPERMESH_TENANT_ID` and `HYPERMESH_ENROLL_TOKEN` in the protected
+`agent.env`, then starts WireGuard and the agent. The agent enrolls on its first
+start. This path stays supported; it is also the current Darwin dogfood path.
+Follow [secondary token setup](#secondary-token-setup) after installing the files
+below. SSH itself does not require token setup.
+
+The [control-plane enrollment contract](https://github.com/FyberLabs/panopticon/blob/main/products/hypermesh/docs/host-registration.md#choose-an-enrollment-mode)
+is the shared source of truth for both paths. Neither path certifies a Mac,
+qualifies its performance, or enables marketplace selling. This remains
+experimental, paused lab setup.
 
 ## What you need
 
@@ -250,11 +269,38 @@ sudo cp ./agent.env.example /etc/hypermesh/agent.env
 sudo chmod 0600 /etc/hypermesh/agent.env
 ```
 
-Edit `/etc/hypermesh/agent.env`. Set `HYPERMESH_TENANT_ID` to the tenant
-UUID and `HYPERMESH_ENROLL_TOKEN` to the one-time token from
-[host enroll](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll).
-Set `HYPERMESH_HOST_NAME` if the Mac's hostname is not the name you want
-reported. Leave `HYPERMESH_WG_USERSPACE=1`.
+### Secondary token setup
+
+Use this section for authorized non-owner/batch setup or interim Darwin dogfood,
+not as a replacement for an available owner device-code approval flow.
+
+1. Sign in to the correct portal and tenant with authority for the host's
+   organization. Open [Register a box](https://portal.test.hyperme.sh/dashboard/hypermesh/host/enroll),
+   select the experimental Apple silicon class `darwin-arm64-lab`, and use the
+   displayed one-time token and tenant UUID. If the class is unavailable, stop
+   and have an authorized operator check the deployed test class configuration;
+   do not register a Mac as an Orin/Jetson class.
+2. For operator/API minting, an authorized device writer calls
+   `POST /api/v1/hypermesh/devices` with the matching `X-Tenant-ID`, authorized
+   bearer session or scoped API key, and the class/serial/Path A request from the
+   [agent HTTP contract](https://github.com/FyberLabs/panopticon/blob/main/products/hypermesh/README.md#agent-contract-http).
+   Use truthful Apple hardware fields and the test-only Darwin class. Omit
+   `host_org_id` to use the caller's verified host organization; an internal
+   service token alone is not token-mint authority. The new-device response's
+   `issued_enroll_token` is shown once. For explicitly authorized recovery of an
+   existing device, `POST /api/v1/hypermesh/devices/{id}/enroll-token` returns
+   `enroll_token`. Normal restarts reuse `device.json` instead of minting again.
+3. Edit `/etc/hypermesh/agent.env` privately. Set `HYPERMESH_TENANT_ID` to that
+   tenant UUID and `HYPERMESH_ENROLL_TOKEN` to the one-time token, retaining mode
+   0600. Do not paste a browser access token or the saved device secret here, or
+   put any credentials in shell arguments, tickets or support logs.
+4. Set `HYPERMESH_HOST_NAME` if the Mac's hostname is not the intended reported
+   name. Leave `HYPERMESH_WG_USERSPACE=1`. Continue below to load WireGuard first,
+   then the agent; the agent exchanges the enroll token for its saved device
+   identity on first startup.
+
+See the [host identity and token ownership rules](https://github.com/FyberLabs/panopticon/blob/main/products/hypermesh/docs/host-identity-lifecycle.md)
+for host-organization authority and explicit recovery boundaries.
 
 Confirm `utun8` is free (`ifconfig utun8` should fail). If it is in use,
 pick another `utunN`, set `HYPERMESH_WG_IFACE` to that name, and change
@@ -319,7 +365,7 @@ Required for a first enroll:
 | Variable | Required | Notes |
 |---|---|---|
 | `HYPERMESH_TENANT_ID` | yes | UUID. Sent as `X-Tenant-ID` on every request, including enroll and heartbeat. |
-| `HYPERMESH_ENROLL_TOKEN` | yes, until `device.json` exists | One-time token. Same field the Linux agent sends. |
+| `HYPERMESH_ENROLL_TOKEN` | secondary first enroll only, until `device.json` exists | One-time token. Same field the Linux agent sends. |
 | `HYPERMESH_CONTROL_PLANE_URL` | no | Default `https://api.test.hyperme.sh`. |
 | `HYPERMESH_HOST_NAME` | no | Empty uses the output of `hostname`. |
 | `HYPERMESH_STATE_DIR` | no | Default `/var/lib/hypermesh`. |
