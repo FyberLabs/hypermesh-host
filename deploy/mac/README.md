@@ -19,6 +19,48 @@ on Darwin.
 - For a Metal lease: copy `llama-server` into that same directory. The agent job's `PATH` lists it ahead of the system directories. If `llama-server` is missing, start fails and says so. Nothing fakes a completion.
 - The LaunchDaemons run as root. `/opt/homebrew` is writable by the user who installed Homebrew, so these jobs do not execute or `PATH`-search that prefix. `ifconfig`, `route`, `netstat`, and `sysctl` come from `/sbin` and `/usr/sbin`.
 
+## Command Line Tools over SSH
+
+Prepare Apple's Command Line Tools before Homebrew or a local Go build. Check
+whether a developer directory is already selected:
+
+```sh
+/usr/bin/xcode-select --print-path
+/usr/bin/xcrun --find clang
+```
+
+If both commands succeed, keep the existing developer-tool selection. If the
+tools are missing, `xcode-select --install` requests a GUI dialog; it does not
+complete an unattended SSH installation. From the SSH session, list the updates
+Apple offers for this Mac:
+
+```sh
+/usr/sbin/softwareupdate --list
+```
+
+Find the Command Line Tools entry and copy its exact `Label` value, excluding
+`Label:` itself. Replace the placeholder below with that label; do not guess a
+version or install all available updates. The install command accepts the
+package license, so review it before proceeding.
+
+```sh
+sudo /usr/sbin/softwareupdate --install "<exact Command Line Tools label>" --agree-to-license
+/usr/bin/xcode-select --print-path
+/usr/bin/xcrun --find clang
+```
+
+Wait for installation to finish and both checks to succeed before running
+`brew install` or `go build`. If no compatible Command Line Tools package is
+listed, use [Apple's Command Line Tools installation instructions](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools/)
+to obtain the package for this macOS version. A successful download or a queued
+GUI request alone does not mean the tools are installed. See also Apple's
+[developer-directory selection guide](https://developer.apple.com/documentation/xcode/configuring-command-line-tools-settings/).
+
+Downloading the signed agent below avoids installing Go or compiling the agent;
+it does not require Command Line Tools for that binary itself. Homebrew and
+building runtime tools can still need them. The manual LaunchDaemon files and
+runtime-tool setup below are still required.
+
 ## Install
 
 Run this from a checkout that contains `deploy/mac/`. The signed release
