@@ -49,10 +49,31 @@ func TestWireGuardPlistOwnsUtun(t *testing.T) {
 func TestInstallCopiesRootOwnedBinaries(t *testing.T) {
 	body := string(mustRead(t, "README.md"))
 	const rootBin = "/usr/local/libexec/hypermesh"
+	firstInstall := strings.Index(body, "sudo install ")
+	if firstInstall < 0 {
+		t.Fatal("README missing binary installation")
+	}
+	// Accept combined or separate commands, but require both destinations to
+	// be prepared before the first binary copy on a fresh Mac.
+	for _, dir := range []string{"/usr/local/bin", rootBin} {
+		for _, command := range []string{"sudo mkdir -p", "sudo chown root:wheel", "sudo chmod 0755"} {
+			found := false
+			for _, line := range strings.Split(body[:firstInstall], "\n") {
+				if !strings.HasPrefix(line, command+" ") {
+					continue
+				}
+				for _, arg := range strings.Fields(strings.TrimPrefix(line, command)) {
+					if arg == dir {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("README must prepare %s with %s before installing binaries", dir, command)
+			}
+		}
+	}
 	for _, needle := range []string{
-		"sudo mkdir -p " + rootBin,
-		"sudo chown root:wheel " + rootBin,
-		"sudo chmod 0755 " + rootBin,
 		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/wireguard-go\" " + rootBin + "/wireguard-go",
 		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/wg\" " + rootBin + "/wg",
 		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/llama-server\" " + rootBin + "/llama-server",
