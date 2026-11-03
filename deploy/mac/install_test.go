@@ -76,7 +76,7 @@ func TestInstallCopiesRootOwnedBinaries(t *testing.T) {
 	for _, needle := range []string{
 		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/wireguard-go\" " + rootBin + "/wireguard-go",
 		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/wg\" " + rootBin + "/wg",
-		"sudo install -o root -g wheel -m 0755 \"$prefix/bin/llama-server\" " + rootBin + "/llama-server",
+		"sudo install -o root -g wheel -m 0755 llama.cpp-v0.5.0/build/bin/llama-server " + rootBin + "/llama-server",
 		"Do not point a plist or `PATH` at",
 		"/opt/homebrew",
 	} {
