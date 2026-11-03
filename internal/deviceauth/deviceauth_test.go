@@ -138,8 +138,14 @@ func TestPendingSlowDownAndSuccess(t *testing.T) {
 	if !reflect.DeepEqual(delays, []time.Duration{5 * time.Second, 5 * time.Second, 10 * time.Second, 10 * time.Second}) {
 		t.Fatalf("poll delays: %v", delays)
 	}
-	if !strings.Contains(output, f.server.URL+"/verify") || !strings.Contains(output, "ABCD-EFGH") {
-		t.Fatal("browser instructions missing")
+	for _, line := range []string{
+		"Verification URL: " + f.server.URL + "/verify\n",
+		"User code: ABCD-EFGH\n",
+		"Open the verification URL on another device (phone or laptop). Keep this terminal open.\n",
+	} {
+		if strings.Count(output, line) != 1 {
+			t.Fatalf("missing or repeated SSH instruction %q", line)
+		}
 	}
 	for _, secret := range []string{deviceSecret, accessSecret, f.verifier, "private-refresh-token", "device_code="} {
 		if strings.Contains(output, secret) {

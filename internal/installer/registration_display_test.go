@@ -1,0 +1,30 @@
+package installer
+
+import (
+	"bytes"
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestHeadlessHostApprovalInstructions(t *testing.T) {
+	const address = "https://portal.example.test/dashboard/hypermesh/host/approve/request-id"
+	var diagnostic bytes.Buffer
+	if err := displayHostApproval(&diagnostic, address); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(diagnostic.String(), "Host approval URL: "+address+"\n") != 1 ||
+		!strings.Contains(diagnostic.String(), "on another device after signing in") {
+		t.Fatalf("SSH approval instructions incomplete: %s", diagnostic.String())
+	}
+	if err := displayHostApproval(failedApprovalDisplay{}, address); err == nil ||
+		err.Error() != "cannot display host approval instructions" {
+		t.Fatalf("unredacted display failure: %v", err)
+	}
+}
+
+type failedApprovalDisplay struct{}
+
+func (failedApprovalDisplay) Write([]byte) (int, error) {
+	return 0, errors.New("private credential in terminal transport failure")
+}

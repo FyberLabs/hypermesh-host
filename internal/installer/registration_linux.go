@@ -329,7 +329,7 @@ func finishRegistration(ctx context.Context,j *registrationJournal,remote regist
   case "denied","retired":return fmt.Errorf("registration %s; identity retained and service inactive",s.State)
   case "approved":s,err=remote.Complete(ctx,j.Request)
   case "pending":
-   if !printed {fmt.Fprintln(display,"Approve this host installation in your dashboard:",j.Dashboard+s.ApprovalPath);printed=true}
+   if !printed {if err=displayHostApproval(display,j.Dashboard+s.ApprovalPath);err!=nil{return err};printed=true}
    if err=wait(ctx,5*time.Second);err!=nil{return err}
    s,err=remote.Get(ctx,j.Request)
   default:return fmt.Errorf("unknown registration state")
