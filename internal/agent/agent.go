@@ -198,6 +198,18 @@ func keyDirFor(cfg Config) string {
 
 // New builds an agent. log may be nil.
 func New(cfg Config, log *slog.Logger) (*Agent, error) {
+	// Report all missing enrollment keys together when the tenant is absent.
+	// Valid configurations still load identity in Run, immediately before use.
+	if strings.TrimSpace(cfg.TenantID) == "" && strings.TrimSpace(cfg.StateDir) != "" {
+		probe := &Agent{cfg: cfg}
+		st, err := probe.loadState()
+		if err != nil {
+			return nil, err
+		}
+		if err := missingEnrollmentConfig(cfg, st); err != nil {
+			return nil, err
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -356,7 +368,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		st.DeviceSecret = a.cfg.DeviceSecret
 	}
 	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) != "" &&
-        !(a.cfg.Reenroll && a.cfg.EnrollToken != "" && st.EnrollTokenHash != tokenHash) {
+        !(a.cfg.Reenroll && strings.TrimSpace(a.cfg.EnrollToken) != "" && st.EnrollTokenHash != tokenHash) {
         if st.WGKeyDir != "" {
             a.keyDir = st.WGKeyDir
         }
@@ -369,8 +381,8 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) == "" && !a.cfg.Reenroll {
 		return fmt.Errorf("hypermesh: this box has an id on disk but no secret; it cannot enroll again — ask for a new enroll-token")
 	}
-	if strings.TrimSpace(a.cfg.EnrollToken) == "" {
-		return fmt.Errorf("hypermesh: this box has no saved identity and no enroll token")
+	if err := missingEnrollmentConfig(a.cfg, st); err != nil {
+		return err
 	}
 
     if st.DeviceID != "" && a.cfg.Reenroll {
