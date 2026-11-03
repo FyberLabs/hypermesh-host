@@ -256,7 +256,7 @@ func authorize(ctx context.Context, issuer string, display io.Writer, client *ht
 	if ctx.Err() != nil {
 		return empty, errors.New("device authorization expired")
 	}
-	if _, err := fmt.Fprintf(display, "Open %s in your browser and enter code %s. Approve only the sign-in you initiated.\n", code.VerificationURI, code.UserCode); err != nil {
+	if _, err := fmt.Fprintf(display, "Open the verification URL on another device (phone or laptop). Keep this terminal open.\nVerification URL: %s\nUser code: %s\nApprove only the sign-in you initiated.\n", code.VerificationURI, code.UserCode); err != nil {
 		return empty, errors.New("cannot display browser authorization instructions")
 	}
 	interval := time.Duration(code.Interval) * time.Second

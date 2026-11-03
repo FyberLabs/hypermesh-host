@@ -10,6 +10,15 @@ The signed test release includes Darwin ARM64 agent and CLI binaries
 This directory is the manual service install. Automatic updates stay off
 on Darwin.
 
+For SSH-only owner enrollment, the [headless registration procedure](../../docs/host-installer.md#browser-approved-agent-registration-and-recovery)
+uses a verification URL and user code on a phone or laptop, followed by explicit
+portal approval. It needs no browser on the host. That orchestration currently
+runs on Linux; native Darwin `register-agent` and `registration-status` remain
+tracked in [#163](https://github.com/FyberLabs/hypermesh-host/issues/163).
+The Mac procedure below is the interim secondary token path, not a requirement
+caused by using SSH. Keep both enrollment modes; do not copy user access tokens
+or device credentials into support logs.
+
 ## What you need
 
 - An Apple silicon Mac. Darwin AMD64 is not a release target.

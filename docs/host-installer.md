@@ -1006,11 +1006,46 @@ sudo ./hypermesh-host register-agent \
 sudo ./hypermesh-host registration-status --plan-sha AGENT_PLAN_SHA256
 ```
 
-The headless command displays the device-login URL and code on stderr. Sign in
-there, then open the separately displayed host approval URL. Review the host,
-tenant, measured hardware and key fingerprint and approve the installation.
-There is no pasted enrollment token or manual device-UUID comparison. stdout
-contains only redacted registration status; session tokens remain in memory.
+The headless command displays instructions on stderr using these stable labels:
+
+```text
+Verification URL: https://AUTH_HOST/realms/REALM/device
+User code: CODE-FROM-THIS-RUN
+```
+
+Keep the SSH terminal open. On another device (a phone or laptop), open the
+verification URL and enter the user code shown by this run. No browser or GUI
+is opened on the host. After sign-in, the terminal separately displays:
+
+```text
+Host approval URL: https://DASHBOARD_HOST/dashboard/hypermesh/host/approve/REQUEST_ID
+```
+
+Open that URL on the other device, using the same owner account. Review the
+host, tenant, measured hardware and key fingerprint and explicitly approve the
+installation. Sign-in alone does not approve a host. The approval URL is printed
+once while the request is pending; polling does not flood the SSH terminal.
+The command stops if it cannot display the approval instructions, preserving the
+pending journal for recovery.
+
+stdout contains only redacted registration status; session tokens remain in
+memory. You may redirect stdout to a status JSON file while leaving stderr on
+the terminal. Do not capture the interactive instructions in shared logs or
+support bundles. The private device grant code, PKCE verifier and access/refresh
+tokens are never printed; the user code is for this short-lived sign-in only.
+
+After an interrupted SSH session, rerun the same `register-agent` command with
+the same approved plan and original owner account. This preserves the immutable
+host request and keys and reconciles any server approval. `registration-status`
+shows saved redacted state; it does not recreate a transient login code or
+require a new enrollment token. Do not delete the private journal to recover.
+
+This owner flow currently runs on Linux. The device-login display and approval
+prompt are shared platform-neutral code, with no local browser dependency.
+Native Darwin registration orchestration remains tracked in
+[host #163](https://github.com/FyberLabs/hypermesh-host/issues/163); this SSH UX
+does not claim that the Darwin entrypoint is implemented. The secondary token
+path remains available for non-owner/batch setup; SSH alone does not require it.
 
 Before registration the CLI verifies all installed payload hashes/modes, the
 original install journal, inactive services, systemd search paths and the
