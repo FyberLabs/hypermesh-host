@@ -11,7 +11,7 @@ Maintained by Fyber Labs TN LLC (Tennessee).
 ## Status
 
 - Only **test** builds are published. Production builds are not released yet. On the test network, hosts and prices are for testing and host payouts are not paid; see [hyperme.sh/hosts](https://hyperme.sh/hosts).
-- Installation and production hosting are **Linux only**. An experimental Darwin path can enroll an Apple silicon Mac for dogfood. It is not certified and it does not activate selling. See [deploy/mac/README.md](deploy/mac/README.md).
+- Guided owner installation is **Linux only** today: device-code sign-in, then portal approval. Experimental Apple silicon Darwin dogfood currently uses the supported secondary tenant-ID/enroll-token path while native registration is pending. It is uncertified and does not activate selling. See [Mac enrollment modes](deploy/mac/README.md#enrollment-modes).
 - The code is under active development. Interfaces and file formats can change between builds.
 
 ## Supported hardware
@@ -87,7 +87,7 @@ Full walkthrough: [docs/first-install-guide.md](docs/first-install-guide.md). Ha
 
 The agent (`hypermesh-agent`, systemd unit `hypermesh-agent.service`) runs one loop:
 
-1. **Enroll** once with a one-time token (`POST /api/v1/hypermesh/agent/enroll`). The returned device secret is written to `$STATE_DIR/device.json` with mode 0600. The enroll token itself is never stored; only a hash is kept so a new token can be recognized.
+1. **Use the enrolled identity.** The default owner installer completes device-code sign-in and explicit portal approval, then writes the private identity to `$STATE_DIR/device.json` (0600). In the supported secondary token path, the agent enrolls once (`POST /api/v1/hypermesh/agent/enroll`) and saves the returned identity there. The enroll token itself is never stored; only a hash is kept so a new token can be recognized.
 2. **Heartbeat** every 30 seconds, including build commit, sell state and host health.
 3. **Tunnel.** The agent generates a WireGuard key on the host (mode 0600), registers only the public key, and applies the session the control plane allocates. The private key never leaves the host. A fresh enrollment stores it at `$STATE_DIR/enrollment-keys/<token-hash>/hypermesh.key` (guided installs use `/var/lib/hypermesh/registration-keys/<request-id>/hypermesh.key`), and `device.json` records the directory. Only older state without a recorded directory uses `/etc/wireguard/hypermesh.key`. Hosts without the WireGuard kernel module (the AGX Orin image) use `wireguard-go` through `hypermesh-wg.service`; see `HYPERMESH_WG_USERSPACE`.
 4. **Jobs.** Every 15 seconds the agent pulls one job and posts a result. Job kinds are defined in [internal/api/types.go](internal/api/types.go):
