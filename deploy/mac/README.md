@@ -16,7 +16,7 @@ on Darwin.
 - `sudo`. The agent uses the same paths as Linux: `/etc/hypermesh/agent.env`, `/var/lib/hypermesh`, and `/etc/wireguard`. macOS will create `/var/lib` when you do. There is no second config directory.
 - GnuPG (`gpg`), for bootstrap.
 - `wireguard-go` and `wireguard-tools` (`wg`) from Homebrew, then copied into `/usr/local/libexec/hypermesh`. macOS has no WireGuard kernel module. The agent does not start `wireguard-go`; [`com.fyberlabs.hypermesh-wg.plist`](com.fyberlabs.hypermesh-wg.plist) runs `/usr/local/libexec/hypermesh/wireguard-go` on `utun8`.
-- For a Metal lease: copy `llama-server` into that same directory. The agent job's `PATH` lists it ahead of the system directories. If `llama-server` is missing, start fails and says so. Nothing fakes a completion.
+- For a Metal lease: install the [pinned llama-server build](#optional-metal-runner) below into that same directory. Enrollment and heartbeats work without it; Metal leases require it. The agent job's `PATH` lists the directory ahead of the system directories.
 - The LaunchDaemons run as root. `/opt/homebrew` is writable by the user who installed Homebrew, so these jobs do not execute or `PATH`-search that prefix. `ifconfig`, `route`, `netstat`, and `sysctl` come from `/sbin` and `/usr/sbin`.
 
 ## Command Line Tools over SSH
@@ -123,8 +123,8 @@ sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 
 That binary is not the signed release artifact.
 
-Copy `wireguard-go`, `wg`, and (for a Metal lease) `llama-server` out of
-the Homebrew prefix into a directory root owns. `install` follows a
+Copy `wireguard-go` and `wg` out of the Homebrew prefix into a directory
+root owns. Install the optional Metal runner separately below. `install` follows a
 symlink and writes a new file, mode `0755`, owner `root:wheel`. The
 plists call those copies. Do not point a plist or `PATH` at
 `/opt/homebrew`.
@@ -133,9 +133,70 @@ plists call those copies. Do not point a plist or `PATH` at
 prefix=$(brew --prefix)
 sudo install -o root -g wheel -m 0755 "$prefix/bin/wireguard-go" /usr/local/libexec/hypermesh/wireguard-go
 sudo install -o root -g wheel -m 0755 "$prefix/bin/wg" /usr/local/libexec/hypermesh/wg
-# Skip the next line when this Mac will not run a Metal lease.
-sudo install -o root -g wheel -m 0755 "$prefix/bin/llama-server" /usr/local/libexec/hypermesh/llama-server
 ```
+
+### Optional Metal runner
+
+For enrollment/heartbeat-only dogfood, skip this section and continue with the
+LaunchDaemon setup below. Those operations do not need `llama-server`. Keep the
+host paused for model use until a runner and model have been qualified. A Metal
+`lease_start` without the runner fails with `llama-server not on PATH`.
+
+For Metal experiments, build **llama.cpp v0.5.0**, pinned to commit
+`7fe450e19305b828c199d602c23a8337aaa1f03b`. This is the same source revision as
+the AGX workload baseline, compiled here for Apple silicon. It is a lab build
+recipe; it does not establish Metal model compatibility or physical acceptance.
+The agent's signed release does not include this third-party runner or a GGUF.
+
+Complete the Command Line Tools checks above, then run these commands in a fresh
+working directory on the Apple silicon Mac. Homebrew supplies CMake; the
+llama.cpp source is pinned independently:
+
+```sh
+brew install cmake
+LLAMA_CPP_COMMIT=7fe450e19305b828c199d602c23a8337aaa1f03b
+git clone --depth 1 --branch v0.5.0 https://github.com/ggml-org/llama.cpp.git llama.cpp-v0.5.0
+if [ "$(git -C llama.cpp-v0.5.0 rev-parse HEAD)" != "$LLAMA_CPP_COMMIT" ]; then
+  printf '%s\n' 'llama.cpp revision mismatch; stop before building or installing.' >&2
+  exit 1
+fi
+cmake -S llama.cpp-v0.5.0 -B llama.cpp-v0.5.0/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_BACKEND_DL=OFF \
+  -DGGML_METAL=ON \
+  -DGGML_METAL_EMBED_LIBRARY=ON \
+  -DGGML_OPENMP=OFF \
+  -DLLAMA_OPENSSL=OFF \
+  -DLLAMA_USE_PREBUILT_UI=OFF \
+  -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_BUILD_SERVER=ON
+cmake --build llama.cpp-v0.5.0/build --config Release --target llama-server --parallel 4
+file llama.cpp-v0.5.0/build/bin/llama-server
+otool -L llama.cpp-v0.5.0/build/bin/llama-server
+```
+
+Stop if cloning, the revision check, configuring or building fails. Confirm that
+`file` reports `arm64`. The static llama/ggml libraries and embedded Metal sources
+let the runner move out of the build directory. Check `otool -L` for macOS system
+libraries/frameworks only; a dependency on a build directory or Homebrew prefix
+must be resolved before installing into the root-owned runtime directory.
+See the [build instructions at the pinned revision](https://github.com/ggml-org/llama.cpp/blob/7fe450e19305b828c199d602c23a8337aaa1f03b/docs/build.md).
+
+After the checks succeed, copy the built runner into the directory prepared
+above, then check that it starts with the LaunchDaemon's restricted PATH:
+
+```sh
+sudo install -o root -g wheel -m 0755 llama.cpp-v0.5.0/build/bin/llama-server /usr/local/libexec/hypermesh/llama-server
+env -i PATH=/usr/local/libexec/hypermesh:/usr/bin:/bin:/usr/sbin:/sbin /usr/local/libexec/hypermesh/llama-server --version
+```
+
+Record the commit and version output with the lab report. `--version` checks
+binary startup only; it does not load a model or qualify a Metal lease. Updating
+the runner later requires a new software inventory and model qualification.
+
+### LaunchDaemon setup
 
 Prepare the directories, the env file, and the two LaunchDaemons. Load
 WireGuard first so `utun8` exists before the agent configures it.
