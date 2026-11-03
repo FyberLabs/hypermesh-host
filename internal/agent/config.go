@@ -237,7 +237,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("hypermesh: control-plane URL is required")
 	}
 	if !uuidRE.MatchString(strings.TrimSpace(c.TenantID)) {
-		return fmt.Errorf("hypermesh: tenant id must be a UUID (X-Tenant-ID)")
+		return fmt.Errorf("hypermesh: tenant id must be a UUID (HYPERMESH_TENANT_ID / X-Tenant-ID)")
 	}
 	if strings.TrimSpace(c.StateDir) == "" {
 		return fmt.Errorf("hypermesh: state dir is required")

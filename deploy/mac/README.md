@@ -283,6 +283,13 @@ Required for a first enroll:
 | `HYPERMESH_STATE_DIR` | no | Default `/var/lib/hypermesh`. |
 | `HYPERMESH_WG_USERSPACE` | yes on a Mac | Set to `1`. `auto` also lands on userspace when no kernel module exists. Do not set `0`. |
 
+For the secondary token path, a first startup without `device.json` requires
+both `HYPERMESH_TENANT_ID` and `HYPERMESH_ENROLL_TOKEN`. Empty or whitespace-only
+values stop startup with one error naming the missing keys, before enrollment
+requests, telemetry collection or enrollment-key creation. Fix the env file,
+then restart the agent. A saved device identity needs no enroll token; it still
+needs the tenant ID. Whitespace in an unused token does not force re-enrollment.
+
 `HYPERMESH_DEVICE_SECRET` is a recovery override. Leave it unset.
 
 ## WireGuard
