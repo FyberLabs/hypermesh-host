@@ -109,10 +109,13 @@ func newMacFixture(t *testing.T) *macFixture {
 		detect: func(context.Context) hardware.Profile {
 			return hardware.Recommend(hardware.Facts{Arch: "arm64", Model: "Macmini9,1", Processor: "Apple M1", Metal: true, MemoryBytes: 16 << 30, AvailableBytes: 10 << 30})
 		},
-		remote:    func(string, string) (macRegistrationRemote, error) { return f.r, nil },
-		authorize: func(context.Context, string, io.Writer) (string, error) { f.authorized++; return "browser-secret", nil },
-		absent:    func(err error) bool { return errors.Is(err, macAbsent) },
-		wait:      func(context.Context, time.Duration) error { f.r.approved = true; return nil },
+		remote: func(string, string) (macRegistrationRemote, error) { return f.r, nil },
+		authorize: func(context.Context, string, string, string, io.Writer) (string, error) {
+			f.authorized++
+			return "browser-secret", nil
+		},
+		absent: func(err error) bool { return errors.Is(err, macAbsent) },
+		wait:   func(context.Context, time.Duration) error { f.r.approved = true; return nil },
 	}
 	f.d.command = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		f.commands = append(f.commands, name+" "+strings.Join(args, " "))

@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -43,6 +44,27 @@ func (Token) MarshalJSON() ([]byte, error) {
 // pending installation, tenant and organization before creating a device.
 func Authorize(ctx context.Context, issuer string, display io.Writer) (Token, error) {
 	return authorize(ctx, issuer, display, &http.Client{}, wait)
+}
+
+// AuthorizeRegistration keeps the browser on a request-specific portal page
+// while the device grant runs. No credential or owner identity enters that URL.
+func AuthorizeRegistration(ctx context.Context, issuer, dashboard, requestID string, display io.Writer) (Token, error) {
+	return authorizeRegistration(ctx, issuer, dashboard, requestID, display, &http.Client{}, wait)
+}
+
+func authorizeRegistration(ctx context.Context, issuer, dashboard, requestID string, display io.Writer, client *http.Client, pause func(context.Context, time.Duration) error) (Token, error) {
+	u, err := url.Parse(dashboard)
+	if !endpoint(dashboard) || err != nil || (u.Path != "" && u.Path != "/") ||
+		!regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`).MatchString(requestID) || display == nil {
+		return Token{}, errors.New("require a trusted dashboard origin and installation request UUID")
+	}
+	address := strings.TrimRight(dashboard, "/") + "/dashboard/hypermesh/host/connect/" + requestID
+	// Display the continuation before starting the grant. Retain direct IdP
+	// instructions below for browsers that cannot open a second window.
+	if _, err := fmt.Fprintf(display, "Host setup URL: %s\nOpen this page to sign in and continue automatically to installation approval. Keep this terminal open.\n", address); err != nil {
+		return Token{}, errors.New("cannot display host setup instructions")
+	}
+	return authorizeWithInstructions(ctx, issuer, display, client, pause, true)
 }
 
 var errTimeout = errors.New("device authorization request timed out")
@@ -199,6 +221,10 @@ func validToken(t tokenResponse) bool {
 }
 
 func authorize(ctx context.Context, issuer string, display io.Writer, client *http.Client, pause func(context.Context, time.Duration) error) (Token, error) {
+	return authorizeWithInstructions(ctx, issuer, display, client, pause, false)
+}
+
+func authorizeWithInstructions(ctx context.Context, issuer string, display io.Writer, client *http.Client, pause func(context.Context, time.Duration) error, handoff bool) (Token, error) {
 	empty := Token{}
 	if !endpoint(issuer) || display == nil {
 		return empty, errors.New("require a trusted HTTPS issuer and display")
@@ -256,7 +282,11 @@ func authorize(ctx context.Context, issuer string, display io.Writer, client *ht
 	if ctx.Err() != nil {
 		return empty, errors.New("device authorization expired")
 	}
-	if _, err := fmt.Fprintf(display, "Open the verification URL on another device (phone or laptop). Keep this terminal open.\nVerification URL: %s\nUser code: %s\nApprove only the sign-in you initiated.\n", code.VerificationURI, code.UserCode); err != nil {
+	instructions := "Open the verification URL on another device (phone or laptop). Keep this terminal open."
+	if handoff {
+		instructions = "Use the Host setup URL above. Direct sign-in fallback (return to the setup page afterward):"
+	}
+	if _, err := fmt.Fprintf(display, "%s\nVerification URL: %s\nUser code: %s\nApprove only the sign-in you initiated.\n", instructions, code.VerificationURI, code.UserCode); err != nil {
 		return empty, errors.New("cannot display browser authorization instructions")
 	}
 	interval := time.Duration(code.Interval) * time.Second

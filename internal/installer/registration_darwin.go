@@ -28,8 +28,8 @@ func RunRegisterAgent(ctx context.Context, args []string, out, diagnostic io.Wri
 		return 1
 	}
 	d := macRegistrationDeps{detect: hardware.Detect, remote: func(base, tenant string) (macRegistrationRemote, error) { return hostregistration.New(base, tenant) }, wait: waitRegistration,
-		authorize: func(ctx context.Context, issuer string, out io.Writer) (string, error) {
-			token, err := deviceauth.Authorize(ctx, issuer, out)
+		authorize: func(ctx context.Context, issuer, dashboard, requestID string, out io.Writer) (string, error) {
+			token, err := deviceauth.AuthorizeRegistration(ctx, issuer, dashboard, requestID, out)
 			return token.Bearer(), err
 		},
 		command: func(ctx context.Context, name string, args ...string) ([]byte, error) {

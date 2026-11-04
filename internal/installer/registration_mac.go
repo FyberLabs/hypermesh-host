@@ -33,7 +33,7 @@ type macRegistrationDeps struct {
 	root      string // Fixtures only; never exposed as a CLI flag.
 	detect    func(context.Context) hardware.Profile
 	remote    func(string, string) (macRegistrationRemote, error)
-	authorize func(context.Context, string, io.Writer) (string, error)
+	authorize func(context.Context, string, string, string, io.Writer) (string, error)
 	command   func(context.Context, string, ...string) ([]byte, error)
 	absent    func(error) bool
 	wait      func(context.Context, time.Duration) error
@@ -327,7 +327,7 @@ func runMacRegister(ctx context.Context, args []string, out, diagnostic io.Write
 		return fail(err)
 	}
 	login := func(ctx context.Context) error {
-		token, e := d.authorize(ctx, c.Issuer, diagnostic)
+		token, e := d.authorize(ctx, c.Issuer, c.Dashboard, j.Request.RequestID, diagnostic)
 		if e != nil {
 			return e
 		}
