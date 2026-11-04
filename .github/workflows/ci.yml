@@ -146,4 +146,6 @@ jobs:
           CGO_ENABLED: "0"
         run: go build ./cmd/agent ./cmd/hypermesh-host
       - name: Test native hardware and Metal runtime contracts
-        run: go test -race ./internal/hardware ./internal/runtime
+        run: |
+          go test -race ./internal/hardware ./internal/runtime
+          go test -race ./internal/installer -run '^TestMac'
