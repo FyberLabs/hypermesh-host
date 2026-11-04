@@ -40,6 +40,7 @@ jobs:
     #   prod: repo:FyberLabs/hypermesh-host:ref:refs/tags/v*
     permissions:
       contents: write
+      actions: write
       id-token: write
     steps:
       - name: Azure config dir
@@ -160,3 +161,9 @@ jobs:
           gpgconf --kill all || true
           az logout || true
           rm -rf "${AZURE_CONFIG_DIR:-}"
+
+      - name: Automatically release successful main
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 packaging/release/promote-main.py

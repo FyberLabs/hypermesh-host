@@ -19,13 +19,21 @@ Test storage directories remain `test/<build>-<commit-prefix>/`, and permanent
 GitHub test tags remain `test-<build>-<commit-prefix>`. Previously signed
 `0.0.0` releases remain unchanged and downloadable while retained.
 
-Production continues to require an explicitly selected `vX.Y.Z` tag. Automatic
-test versioning does not promote a release or advance the production channel.
-The global build number remains the host's update/rollback ordering authority.
+Successful main publication now automatically queues production. After signing
+and publishing the test build, the workflow wipes its signing material, waits
+for the exact main revision's CI to succeed, allocates the next stable patch
+tag, and dispatches the existing production publisher on that tag. Main is
+the release decision; no reviewer or operator promotion step is required.
+Superseded queued main revisions do not dispatch production. Retries reuse an
+existing stable tag for the same commit, and tag-allocation failures stop.
 
-Completed: per-build test patch versions, stable allocation retries, real
-ARM64/AMD64 nonzero-version payload checks, and signed verifier regression
-coverage. Production promotion remains an explicit operator choice.
+The explicit workflow dispatch is necessary because tags written with the
+built-in GitHub token do not trigger another push workflow. It uses that token's
+Actions permission, without introducing a PAT, GitHub App or expanded Azure
+production identity. The existing tag-scoped OIDC identity, signed production
+artifacts, storage lease, immutable release directories and global build floor
+remain in force. Production publication retains its own version/build metadata;
+this native host exception does not use the web-app OCI promotion adapter.
 
 ## Installed channel and update ordering
 
