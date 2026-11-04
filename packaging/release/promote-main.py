@@ -12,12 +12,12 @@ import time
 REPO = 'FyberLabs/hypermesh-host'
 STABLE = re.compile(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
 
-def choose_tag(tags, revision):
+def choose_tag(tags):
     stable = [(tuple(map(int, STABLE.fullmatch(tag).groups())), tag, commit)
               for tag, commit in tags.items() if STABLE.fullmatch(tag)]
-    same = [row for row in stable if row[2] == revision]
-    if same:
-        return max(same)[1], False
+    # A main rerun has published a new test build. A partially published prod
+    # tag may now be below that global floor, so allocate a fresh patch even
+    # for the same commit. Tag-workflow reruns retain existing immutable reuse.
     highest = max(stable)[0] if stable else (0, 1, -1)
     return 'v%d.%d.%d' % (highest[0], highest[1], highest[2] + 1), True
 
@@ -64,7 +64,7 @@ def promote(env):
                 continue
             # Dereference annotated tags through the commit endpoint as well.
             tags[tag] = api(f'commits/{tag}')['sha']
-    tag, create = choose_tag(tags,revision)
+    tag, create = choose_tag(tags)
     if create:
         api('git/refs',dict(ref=f'refs/tags/{tag}',sha=revision))
     # workflow_dispatch is deliberately triggered with the built-in token;

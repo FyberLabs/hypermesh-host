@@ -5,10 +5,10 @@ from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('promote',Path(__file__).with_name('promote-main.py'))
 p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 class PromotionTests(unittest.TestCase):
-    def test_next_stable_tag_and_retry(self):
-        self.assertEqual(p.choose_tag({},'a'),('v0.1.0',True))
-        self.assertEqual(p.choose_tag({'v1.2.9':'a','v1.2.10':'b','v9.0.0-rc.1':'c'},'d'),('v1.2.11',True))
-        self.assertEqual(p.choose_tag({'v1.2.9':'a','v1.2.10':'b'},'a'),('v1.2.9',False))
+    def test_main_retry_allocates_fresh_patch_after_new_test_build(self):
+        self.assertEqual(p.choose_tag({}),('v0.1.0',True))
+        self.assertEqual(p.choose_tag({'v1.2.9':'a','v1.2.10':'b','v9.0.0-rc.1':'c'}),('v1.2.11',True))
+        self.assertEqual(p.choose_tag({'v1.2.9':'a','v1.2.10':'a'}),('v1.2.11',True))
     def test_other_branches_cannot_create_release(self):
         with patch.object(p,'api') as api, self.assertRaises(ValueError):
             p.promote(dict(GITHUB_REPOSITORY=p.REPO,GITHUB_REF='refs/heads/feature',GITHUB_SHA='a'*40))

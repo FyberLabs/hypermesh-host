@@ -24,8 +24,9 @@ and publishing the test build, the workflow wipes its signing material, waits
 for the exact main revision's CI to succeed, allocates the next stable patch
 tag, and dispatches the existing production publisher on that tag. Main is
 the release decision; no reviewer or operator promotion step is required.
-Superseded queued main revisions do not dispatch production. Retries reuse an
-existing stable tag for the same commit, and tag-allocation failures stop.
+Superseded queued main revisions do not dispatch production. Main retries allocate a fresh patch because their new test build can invalidate
+a partially published production build. Direct tag-workflow retries retain the
+existing immutable reuse rules. Tag-allocation failures stop.
 
 The explicit workflow dispatch is necessary because tags written with the
 built-in GitHub token do not trigger another push workflow. It uses that token's
