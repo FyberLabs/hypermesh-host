@@ -2094,3 +2094,7 @@ Guided Linux enrollment uses the same browser handoff as `register-agent`.
 If restart or expiry recovery replaces the installation request, the installer
 prints the current Host setup URL again alongside the actual Host approval URL.
 Use that new setup link rather than an older request-specific browser page.
+
+Public bootstrap downloads identify themselves as `hypermesh-host-bootstrap/1`.
+This is a client identifier, not a credential. HTTPS enforcement, signature and
+checksum verification, redirect checks and transfer deadlines remain required.
