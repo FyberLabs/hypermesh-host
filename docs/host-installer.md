@@ -2089,3 +2089,8 @@ and keys; do not delete them or start a second installer to work around an error
 Deploy the portal handoff route before releasing an installer that links to it.
 Apple silicon enrollment remains experimental, paused and uncertified; neither
 this browser flow nor successful sign-in establishes hardware acceptance.
+
+Guided Linux enrollment uses the same browser handoff as `register-agent`.
+If restart or expiry recovery replaces the installation request, the installer
+prints the current Host setup URL again alongside the actual Host approval URL.
+Use that new setup link rather than an older request-specific browser page.

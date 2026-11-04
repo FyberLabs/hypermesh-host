@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/FyberLabs/hypermesh-host/internal/deviceauth"
 	"github.com/FyberLabs/hypermesh-host/internal/hostregistration"
 	"io"
 	"time"
@@ -100,7 +101,11 @@ func finishRegistration(ctx context.Context, j *registrationJournal, remote regi
 			s, err = remote.Complete(ctx, j.Request)
 		case "pending":
 			if !printed {
-				if err = displayHostApproval(display, j.Dashboard+s.ApprovalPath); err != nil {
+				setupURL, setupErr := deviceauth.RegistrationURL(j.Dashboard, j.Request.RequestID)
+				if setupErr != nil {
+					return setupErr
+				}
+				if err = displayHostApproval(display, j.Dashboard+s.ApprovalPath, setupURL); err != nil {
 					return err
 				}
 				printed = true

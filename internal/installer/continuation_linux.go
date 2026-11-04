@@ -50,11 +50,18 @@ func continuationPrompt(label string) bool {
 }
 
 func earlyEnrollment(ctx context.Context, dir string, s *guidedState, p SetupPlan, out io.Writer) error {
- if err:=completeEarlyEnrollment(ctx,dir,s,p,out);err!=nil{return err}
- var j registrationJournal
- if err:=guidedRead(filepath.Join(dir,"enrollment.json"),&j,true);err!=nil{return err}
- n,err:=installationNetwork(s.Network);if err!=nil{return err}
- return bindMachineIdentity(ctx,n.Plane,s.Tenant,j)
+	if err := completeEarlyEnrollment(ctx, dir, s, p, out); err != nil {
+		return err
+	}
+	var j registrationJournal
+	if err := guidedRead(filepath.Join(dir, "enrollment.json"), &j, true); err != nil {
+		return err
+	}
+	n, err := installationNetwork(s.Network)
+	if err != nil {
+		return err
+	}
+	return bindMachineIdentity(ctx, n.Plane, s.Tenant, j)
 }
 func completeEarlyEnrollment(ctx context.Context, dir string, s *guidedState, p SetupPlan, out io.Writer) error {
 	n, err := installationNetwork(s.Network)
@@ -113,7 +120,7 @@ func completeEarlyEnrollment(ctx context.Context, dir string, s *guidedState, p 
 		}
 	}
 	login := func(ctx context.Context) error {
-		token, e := deviceauth.Authorize(ctx, n.Issuer, out)
+		token, e := deviceauth.AuthorizeRegistration(ctx, n.Issuer, n.Dashboard, j.Request.RequestID, out)
 		if e != nil {
 			return e
 		}
@@ -249,6 +256,7 @@ func runningContinuation() ([]byte, error) {
 	}
 	return binary, nil
 }
+
 // continuationImages holds the verified, root-owned images selected by session.json.
 var continuationImages = filepath.Join(filepath.Dir(continuationBinary), "images")
 

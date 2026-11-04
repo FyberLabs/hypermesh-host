@@ -53,18 +53,27 @@ func AuthorizeRegistration(ctx context.Context, issuer, dashboard, requestID str
 }
 
 func authorizeRegistration(ctx context.Context, issuer, dashboard, requestID string, display io.Writer, client *http.Client, pause func(context.Context, time.Duration) error) (Token, error) {
-	u, err := url.Parse(dashboard)
-	if !endpoint(dashboard) || err != nil || (u.Path != "" && u.Path != "/") ||
-		!regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`).MatchString(requestID) || display == nil {
-		return Token{}, errors.New("require a trusted dashboard origin and installation request UUID")
+	address, err := RegistrationURL(dashboard, requestID)
+	if err != nil || display == nil {
+		return Token{}, errors.New("require a trusted dashboard origin, installation request UUID and display")
 	}
-	address := strings.TrimRight(dashboard, "/") + "/dashboard/hypermesh/host/connect/" + requestID
 	// Display the continuation before starting the grant. Retain direct IdP
 	// instructions below for browsers that cannot open a second window.
 	if _, err := fmt.Fprintf(display, "Host setup URL: %s\nOpen this page to sign in and continue automatically to installation approval. Keep this terminal open.\n", address); err != nil {
 		return Token{}, errors.New("cannot display host setup instructions")
 	}
 	return authorizeWithInstructions(ctx, issuer, display, client, pause, true)
+}
+
+// RegistrationURL builds only a trusted dashboard origin and fixed request path.
+// It can be displayed again after a server-confirmed request replacement.
+func RegistrationURL(dashboard, requestID string) (string, error) {
+	u, err := url.Parse(dashboard)
+	if !endpoint(dashboard) || err != nil || (u.Path != "" && u.Path != "/") ||
+		!regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`).MatchString(requestID) {
+		return "", errors.New("require a trusted dashboard origin and installation request UUID")
+	}
+	return strings.TrimRight(dashboard, "/") + "/dashboard/hypermesh/host/connect/" + requestID, nil
 }
 
 var errTimeout = errors.New("device authorization request timed out")
