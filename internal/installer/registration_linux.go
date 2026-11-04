@@ -350,7 +350,7 @@ func RunRegisterAgent(ctx context.Context,args []string,out,diagnostic io.Writer
   fmt.Fprintln(diagnostic,"Prepared a fresh installation request before sign-in; the previous request is archived.")
  }
  login:=func(ctx context.Context)error{
- token,e:=deviceauth.Authorize(ctx,*issuer,diagnostic);if e!=nil{return e}
+ token,e:=deviceauth.AuthorizeRegistration(ctx,*issuer,*dashboard,j.Request.RequestID,diagnostic);if e!=nil{return e}
  return remote.Login(ctx,token.Bearer(),func(owner string)error{
   if j.Owner!=""&&j.Owner!=owner{return fmt.Errorf("login belongs to a different owner; use the original account")}
   if j.Owner==""{j.Owner=owner;return save(j)}

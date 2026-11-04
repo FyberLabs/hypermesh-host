@@ -2068,3 +2068,29 @@ never created a checkpoint (an older enroll-token install) also binds a signing
 key after re-enrollment; supervisor hosts keep their enrollment secret. Binding/renewal keeps a 15-second maximum HTTP timeout
 even when the installer injects a zero-timeout client, and preserves shorter client
 timeouts. The matching control-plane build and the certification program support must deploy before this build.
+
+## Browser sign-in and approval handoff
+
+Owner registration prints a request-specific **Host setup URL**. Open it on a
+phone or laptop, use the same owner account and tenant, and choose **Continue
+device sign-in**. Enter the terminal's user code in the second window. Keep the
+setup page and installer running: the setup page waits for that exact owner-scoped
+request, closes the sign-in window when possible, and continues to installation
+review. Review the hardware and fingerprint, then explicitly approve or deny.
+Sign-in by itself never approves a host.
+
+The terminal still displays the direct verification URL and code as a fallback.
+After successful sign-in and creation of the pending request, it also prints the
+actual **Host approval URL**. Use that backup if the browser blocks the second
+window, cannot return automatically, or the handoff times out. It is the same
+installation request, not another enrollment attempt. Errors retain the request
+and keys; do not delete them or start a second installer to work around an error.
+
+Deploy the portal handoff route before releasing an installer that links to it.
+Apple silicon enrollment remains experimental, paused and uncertified; neither
+this browser flow nor successful sign-in establishes hardware acceptance.
+
+Guided Linux enrollment uses the same browser handoff as `register-agent`.
+If restart or expiry recovery replaces the installation request, the installer
+prints the current Host setup URL again alongside the actual Host approval URL.
+Use that new setup link rather than an older request-specific browser page.

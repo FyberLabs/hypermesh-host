@@ -420,3 +420,40 @@ func TestDeviceRejectionHasSafeStatusAndDoesNotPoll(t *testing.T) {
 		}
 	}
 }
+
+func TestRegistrationHandoffKeepsDirectLoginFallback(t *testing.T) {
+	f := newFixture(t)
+	var output bytes.Buffer
+	requestID := "f9fbdc96-2530-464b-9117-5fa906cfc93c"
+	token, err := authorizeRegistration(context.Background(), f.issuer, "https://portal.test.example", requestID, &output, f.server.Client(), func(context.Context, time.Duration) error { return nil })
+	if err != nil || token.Bearer() != accessSecret {
+		t.Fatalf("authorization failed: %v", err)
+	}
+	for _, expected := range []string{
+		"Host setup URL: https://portal.test.example/dashboard/hypermesh/host/connect/" + requestID,
+		"Verification URL: " + f.server.URL + "/verify",
+		"User code: ABCD-EFGH",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("missing browser instruction %q", expected)
+		}
+	}
+	for _, secret := range []string{deviceSecret, accessSecret, f.verifier} {
+		if strings.Contains(output.String(), secret) {
+			t.Error("credential leaked into browser instructions")
+		}
+	}
+}
+
+func TestRegistrationHandoffRejectsUntrustedDestinationBeforeRequests(t *testing.T) {
+	for _, dashboard := range []string{"http://portal.example", "https://user@portal.example", "https://portal.example/path", "https://portal.example?next=https://evil.example", "https://portal.example#fragment"} {
+		var output bytes.Buffer
+		if _, err := authorizeRegistration(context.Background(), "https://issuer.example", dashboard, "f9fbdc96-2530-464b-9117-5fa906cfc93c", &output, &http.Client{}, wait); err == nil || output.Len() != 0 {
+			t.Errorf("accepted invalid dashboard %q", dashboard)
+		}
+	}
+	var output bytes.Buffer
+	if _, err := authorizeRegistration(context.Background(), "https://issuer.example", "https://portal.example", "../../approve/other", &output, &http.Client{}, wait); err == nil || output.Len() != 0 {
+		t.Error("accepted invalid request UUID")
+	}
+}

@@ -245,6 +245,11 @@ func TestExpiredApprovalRenewsAndCompletesInSameRun(t *testing.T) {
  if err:=recoverRegistrationExpiry(run,renew,&display);err!=nil{t.Fatal(err)}
  if !archived||!published||j.State!="registered-inactive"||j.Owner!=old.Owner||j.Request.RequestID==old.Request.RequestID{t.Fatal("incomplete recovery")}
  if remote.completes!=1||!strings.Contains(display.String(),old.Request.RequestID)||!strings.Contains(display.String(),j.Request.RequestID){t.Fatal("new approval not requested")}
+ for _,requestID:=range []string{old.Request.RequestID,j.Request.RequestID}{
+  if !strings.Contains(display.String(),"Host setup URL: "+j.Dashboard+"/dashboard/hypermesh/host/connect/"+requestID+"\n") ||
+  !strings.Contains(display.String(),"Host approval URL: "+j.Dashboard+"/dashboard/hypermesh/host/approve/"+requestID+"\n") { t.Fatal("expiry replacement did not refresh browser handoff and approval fallback") }
+ }
+
 }
 
 func TestRegistrationAllowsUnrelatedPackageChangesOnly(t *testing.T) {

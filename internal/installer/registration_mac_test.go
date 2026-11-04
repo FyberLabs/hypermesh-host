@@ -109,10 +109,13 @@ func newMacFixture(t *testing.T) *macFixture {
 		detect: func(context.Context) hardware.Profile {
 			return hardware.Recommend(hardware.Facts{Arch: "arm64", Model: "Macmini9,1", Processor: "Apple M1", Metal: true, MemoryBytes: 16 << 30, AvailableBytes: 10 << 30})
 		},
-		remote:    func(string, string) (macRegistrationRemote, error) { return f.r, nil },
-		authorize: func(context.Context, string, io.Writer) (string, error) { f.authorized++; return "browser-secret", nil },
-		absent:    func(err error) bool { return errors.Is(err, macAbsent) },
-		wait:      func(context.Context, time.Duration) error { f.r.approved = true; return nil },
+		remote: func(string, string) (macRegistrationRemote, error) { return f.r, nil },
+		authorize: func(context.Context, string, string, string, io.Writer) (string, error) {
+			f.authorized++
+			return "browser-secret", nil
+		},
+		absent: func(err error) bool { return errors.Is(err, macAbsent) },
+		wait:   func(context.Context, time.Duration) error { f.r.approved = true; return nil },
 	}
 	f.d.command = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		f.commands = append(f.commands, name+" "+strings.Join(args, " "))
@@ -388,7 +391,8 @@ func TestMacRegistrationDeniedRestartRequiresServerAndFreshApproval(t *testing.T
 	f.r.request = hostregistration.Request{}
 	f.r.state = "denied"
 	f.d.wait = func(context.Context, time.Duration) error { return errors.New("new browser approval needed") }
-	if code, _, _ := f.run("--restart-approval"); code == 0 {
+	code, _, diagnostic := f.run("--restart-approval")
+	if code == 0 {
 		t.Fatal("restart bypassed approval")
 	}
 	paths, _ := filepath.Glob(filepath.Join(macPath(f.d.root, macRegistrationState), "registration-history-*.json"))
@@ -404,6 +408,10 @@ func TestMacRegistrationDeniedRestartRequiresServerAndFreshApproval(t *testing.T
 	raw, _ = macRead(filepath.Join(macPath(f.d.root, macRegistrationState), "registration-"+old.PlanSHA256+".json"), 0o600, 2<<20)
 	var next registrationJournal
 	json.Unmarshal(raw, &next)
+	if !strings.Contains(diagnostic, "Host setup URL: "+next.Dashboard+"/dashboard/hypermesh/host/connect/"+next.Request.RequestID+"\n") ||
+		!strings.Contains(diagnostic, "Host approval URL: "+next.Dashboard+"/dashboard/hypermesh/host/approve/"+next.Request.RequestID+"\n") {
+		t.Fatal("replacement request did not refresh browser handoff and approval fallback")
+	}
 	if next.State != "pending" || f.r.completes != 0 || next.PrivateKey == old.PrivateKey || next.Request.RequestID == old.Request.RequestID {
 		t.Fatal("restart reused identity")
 	}
