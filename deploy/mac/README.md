@@ -305,7 +305,7 @@ and a private WireGuard key under `/var/lib/hypermesh/registration-keys/<request
 No enroll token is needed. With `--start-services`, it bootstraps WireGuard,
 waits for `utun8`, then bootstraps the agent. Without that flag it leaves both
 services unloaded. A pre-existing unowned `utun8` blocks startup. This path never
-stops or replaces a running service. The server's `registered-inactive` state
+stops or replaces a running service. The CLI's `registered-inactive` state
 means the host stays paused and unqualified even when its local agent is running.
 
 The final JSON includes a `plan_sha256` identifying this installed configuration.
