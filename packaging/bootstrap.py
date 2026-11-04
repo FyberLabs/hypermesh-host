@@ -101,6 +101,9 @@ def transfer_deadline(seconds):
 
 def fetch(address, limit):
     opener = urllib.request.build_opener(HTTPSRedirect())
+    # Identify the supported client; generic Python user agents are rejected by
+    # the public release edge. Keep this truthful, stable and credential-free.
+    opener.addheaders = [("User-Agent", "hypermesh-host-bootstrap/1")]
     with transfer_deadline(TRANSFER_DEADLINE_SECONDS):
         try:
             with opener.open(address, timeout=30) as response:

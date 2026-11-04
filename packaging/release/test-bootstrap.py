@@ -273,6 +273,30 @@ class BootstrapTests(unittest.TestCase):
 
 
 class TransferDeadlineTests(unittest.TestCase):
+    def test_public_download_identifies_supported_client(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.headers.get("User-Agent") != "hypermesh-host-bootstrap/1":
+                    self.send_error(403)
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"public release data")
+
+            def log_message(self, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            self.assertEqual(bootstrap.fetch(f"http://127.0.0.1:{server.server_port}/release", 100),
+                             b"public release data")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_trickling_body_hits_total_deadline(self):
         stopped = threading.Event()
         class Handler(http.server.BaseHTTPRequestHandler):
