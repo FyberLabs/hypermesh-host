@@ -19,19 +19,20 @@ For SSH-only hosts, use the printed verification URL and user code on another
 device; no browser is needed on the host. See the
 [owner registration and recovery procedure](../../docs/host-installer.md#browser-approved-agent-registration-and-recovery).
 
-That orchestration currently runs on Linux. Native Darwin `register-agent` and
-`registration-status` are pending in [#163](https://github.com/FyberLabs/hypermesh-host/issues/163);
-the Mac CLI currently rejects those commands. Until that ships, this Mac guide
-uses the **secondary token path** for interim dogfood. Once native support is
-available, owner setup should use device-code sign-in and portal approval.
+Darwin `register-agent` now implements this owner flow for the test-only
+`darwin-arm64-lab` class. Install the agent, protected configuration and exact
+LaunchDaemon files below, then follow [owner device-code registration](#owner-device-code-registration).
+Use a signed test release containing this change; earlier CLIs still reject the
+Darwin command. Enrollment stays separate from qualification and selling.
 
 **Rare secondary path:** an authorized non-owner or batch operator obtains a
 one-time enroll token through **Register a box** or the device-writer API,
 configures `HYPERMESH_TENANT_ID` and `HYPERMESH_ENROLL_TOKEN` in the protected
 `agent.env`, then starts WireGuard and the agent. The agent enrolls on its first
-start. This path stays supported; it is also the current Darwin dogfood path.
-Follow [secondary token setup](#secondary-token-setup) after installing the files
-below. SSH itself does not require token setup.
+start. This path stays supported for non-owner/batch setup and explicitly authorized dogfood.
+Choose [owner registration](#owner-device-code-registration) or
+[secondary token setup](#secondary-token-setup) after installing the files below.
+SSH itself does not require token setup.
 
 The [control-plane enrollment contract](https://github.com/FyberLabs/panopticon/blob/main/products/hypermesh/docs/host-registration.md#choose-an-enrollment-mode)
 is the shared source of truth for both paths. Neither path certifies a Mac,
@@ -269,6 +270,72 @@ sudo cp ./agent.env.example /etc/hypermesh/agent.env
 sudo chmod 0600 /etc/hypermesh/agent.env
 ```
 
+### Owner device-code registration
+
+Prepare `/etc/hypermesh/agent.env` privately with the HTTPS control-plane URL,
+matching tenant UUID and explicit host name. Keep `HYPERMESH_STATE_DIR=/var/lib/hypermesh`
+and `HYPERMESH_WG_USERSPACE=1`. Leave `HYPERMESH_ENROLL_TOKEN` empty; do not set
+`HYPERMESH_DEVICE_SECRET`, `HYPERMESH_REENROLL` or `HYPERMESH_WG_KEY_DIR`.
+The owner path uses the reviewed plists unchanged and `utun8`. A customized utun
+or plist requires explicit operator recovery; it cannot silently resume an
+existing approval. Keep WireGuard and agent LaunchDaemons unloaded until approval.
+
+Copy the verified plists **without bootstrapping them**:
+
+```sh
+sudo cp ./com.fyberlabs.hypermesh-wg.plist /Library/LaunchDaemons/
+sudo cp ./com.fyberlabs.hypermesh-agent.plist /Library/LaunchDaemons/
+sudo chown root:wheel /Library/LaunchDaemons/com.fyberlabs.hypermesh-{wg,agent}.plist
+sudo chmod 0644 /Library/LaunchDaemons/com.fyberlabs.hypermesh-{wg,agent}.plist
+sudo ./hypermesh-host register-agent \
+  --issuer https://AUTH_HOST/realms/REALM \
+  --dashboard-url https://portal.test.hyperme.sh \
+  --start-services
+```
+
+Use the realm issuer configured for your environment; it must be a trusted
+operator input. Sign in using the displayed device code, then separately open
+the printed host-approval URL, review this host's hardware and approve it in the
+portal. The CLI never approves its own request or attaches an existing device
+by hostname. The test plane must expose the experimental class and approval API;
+a missing class or API is a deployment blocker, not permission to use a Jetson class.
+
+After server-confirmed completion, the CLI publishes `/var/lib/hypermesh/device.json`
+and a private WireGuard key under `/var/lib/hypermesh/registration-keys/<request-id>/`.
+No enroll token is needed. With `--start-services`, it bootstraps WireGuard,
+waits for `utun8`, then bootstraps the agent. Without that flag it leaves both
+services unloaded. A pre-existing unowned `utun8` blocks startup. This path never
+stops or replaces a running service. The server's `registered-inactive` state
+means the host stays paused and unqualified even when its local agent is running.
+
+The final JSON includes a `plan_sha256` identifying this installed configuration.
+The root-only registration journal uses the same schema and recovery identity
+fields as Linux, under `/var/lib/hypermesh/installer/registration-<plan_sha256>.json`.
+Its digest binds the installed agent/runtime binaries, plists, env file, stable
+hardware, issuer and dashboard. These hashes detect changes after the initial
+manual installation; use the signed-download checks above to establish its origin.
+The reported model memory is a current conservative estimate, not a qualified
+Metal allocation limit, benchmark or certificate.
+
+After an interrupted login, pending approval, lost completion response or startup
+failure, rerun the same command with the original configuration and owner account.
+The existing request and keys are reused. To inspect local state without sign-in:
+
+```sh
+sudo ./hypermesh-host registration-status --plan-sha <plan_sha256>
+```
+
+For a denied or expired request, rerun with `--restart-approval`. The CLI requires
+a fresh login as the original owner and a server-confirmed terminal decision,
+archives the previous private request, and generates new keys requiring new portal
+approval. Retirement, changed configuration, an existing unrelated identity and
+conflicting key files require explicit recovery; do not delete journals or overwrite
+`device.json`. Status and diagnostic output exclude private keys and credentials.
+
+After this owner path, skip the secondary token and manual bootstrap commands
+below. Use the [service logs](#service-observation) to verify actual enrollment and
+heartbeats; tests and a successful CLI return do not establish live acceptance.
+
 ### Secondary token setup
 
 Use this section for authorized non-owner/batch setup or interim Darwin dogfood,
@@ -323,8 +390,11 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.fyberlabs.hypermesh-a
 Older macOS uses `sudo launchctl load -w` on those two plist paths
 instead of `launchctl bootstrap system`.
 
-The agent enrolls on startup when `/var/lib/hypermesh/device.json` does
-not exist yet. There is no separate enroll command. Watch the log:
+### Service observation
+
+On the secondary token path, the agent enrolls on startup when
+`/var/lib/hypermesh/device.json` does not exist yet. The owner path already
+published that identity after portal approval. Watch the log:
 
 ```sh
 sudo launchctl print system/com.fyberlabs.hypermesh-wg

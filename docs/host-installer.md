@@ -1040,12 +1040,13 @@ host request and keys and reconciles any server approval. `registration-status`
 shows saved redacted state; it does not recreate a transient login code or
 require a new enrollment token. Do not delete the private journal to recover.
 
-This owner flow currently runs on Linux. The device-login display and approval
-prompt are shared platform-neutral code, with no local browser dependency.
-Native Darwin registration orchestration remains tracked in
-[host #163](https://github.com/FyberLabs/hypermesh-host/issues/163); this SSH UX
-does not claim that the Darwin entrypoint is implemented. The secondary token
-path remains available for non-owner/batch setup; SSH alone does not require it.
+The Linux owner flow uses the reviewed agent installation plan below. Native
+Darwin owner registration uses the protected manual installation and fixed
+experimental Apple silicon class; see the [Mac owner procedure](../deploy/mac/README.md#owner-device-code-registration)
+for its flags, private journal, explicit expiry/denial restart and ordered launchd
+startup. Both paths share device-login display and browser-approval sequencing.
+The secondary token path remains available for non-owner/batch setup; SSH alone
+does not require it. Native enrollment does not qualify hardware or enable selling.
 
 Before registration the CLI verifies all installed payload hashes/modes, the
 original install journal, inactive services, systemd search paths and the
