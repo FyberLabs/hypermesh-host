@@ -206,17 +206,22 @@ func deviceEnrolled(stateDir string) bool {
 	return strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) != ""
 }
 
-func (s *Supervisor) watchEnroll(ctx context.Context) {
+func (s *Supervisor) watchEnroll(ctx context.Context) error {
+	// The agent enrolls beside this watcher. Refuse here as well so a
+	// host that has not accepted the Terms never looks enrolled.
+	if !s.Agent.TermsPreaccepted() {
+		return agent.ErrTermsNotAccepted
+	}
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		if deviceEnrolled(s.StateDir) {
 			_ = s.SaveCredentials()
-			return
+			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-tick.C:
 		}
 	}
@@ -318,6 +323,11 @@ func (s *Supervisor) runHost(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	acceptedCfg, err := a.AcceptHostTerms()
+	if err != nil {
+		return err
+	}
+	s.Agent = acceptedCfg
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	// The caller may release state storage as soon as Run returns. Cancel and
@@ -327,8 +337,13 @@ func (s *Supervisor) runHost(ctx context.Context) error {
 		workers.Wait()
 	}()
 	workers.Add(3)
-	go func() { defer workers.Done(); s.watchEnroll(ctx) }()
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
+	go func() {
+		defer workers.Done()
+		if err := s.watchEnroll(ctx); err != nil {
+			errCh <- err
+		}
+	}()
 	go func() { defer workers.Done(); errCh <- Supervise(ctx, s.Runtime, s.backoff()) }()
 	go func() { defer workers.Done(); errCh <- a.Run(ctx) }()
 	select {

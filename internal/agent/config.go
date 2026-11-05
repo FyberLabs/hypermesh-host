@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -138,6 +139,19 @@ type Config struct {
 	// UpdateBinary is the path replaced on install. Empty uses the
 	// running executable.
 	UpdateBinary string
+	// LicenseAccept is true only when --license accept was passed.
+	// An install --yes flag never sets this.
+	LicenseAccept bool
+	// LicenseAcceptEnv is HYPERMESH_LICENSE_ACCEPT. Only yes counts.
+	LicenseAcceptEnv string
+	// LicenseEnvFile is the agent.env consulted when LicenseAcceptEnv
+	// is empty. Empty uses DefaultEnvFile.
+	LicenseEnvFile string
+	// TermsStdin, TermsStdout, and TermsTTY control the interactive
+	// prompt. Nil uses the process terminal.
+	TermsStdin  io.Reader
+	TermsStdout io.Writer
+	TermsTTY    *bool
 }
 
 // FromEnv fills defaults and environment variables. Flags should overwrite
@@ -180,6 +194,7 @@ func FromEnv() Config {
 		UpdateFingerprints:        fps,
 		UpdateFingerprintsInvalid: fpErr != nil,
 		UpdateBinary:              strings.TrimSpace(os.Getenv("HYPERMESH_UPDATE_BINARY")),
+		LicenseAcceptEnv:          strings.TrimSpace(os.Getenv("HYPERMESH_LICENSE_ACCEPT")),
 	}
 }
 

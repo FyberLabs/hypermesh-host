@@ -39,6 +39,10 @@ is the shared source of truth for both paths. Neither path certifies a Mac,
 qualifies its performance, or enables marketplace selling. This remains
 experimental, paused lab setup.
 
+## Terms
+
+A Mac that already has Hypermesh installed still ships with the Terms unaccepted. Enrollment does not run until you set `HYPERMESH_LICENSE_ACCEPT=yes` in `/etc/hypermesh/agent.env`, or run `hypermesh-agent enroll --license accept`. At a terminal, `hypermesh-agent enroll` prints the Terms and continues only if you type `accept`. The LaunchDaemon has no terminal, so it cannot ask. `hypermesh-host --yes` answers install questions only. It does not accept the Terms.
+
 ## What you need
 
 - An Apple silicon Mac. Darwin AMD64 is not a release target.
@@ -359,7 +363,9 @@ not as a replacement for an available owner device-code approval flow.
    `enroll_token`. Normal restarts reuse `device.json` instead of minting again.
 3. Edit `/etc/hypermesh/agent.env` privately. Set `HYPERMESH_TENANT_ID` to that
    tenant UUID and `HYPERMESH_ENROLL_TOKEN` to the one-time token, retaining mode
-   0600. Do not paste a browser access token or the saved device secret here, or
+   0600. Set `HYPERMESH_LICENSE_ACCEPT=yes` only after you accept the Terms, or
+   enroll from a terminal with `hypermesh-agent enroll --license accept` before
+   loading the agent. Do not paste a browser access token or the saved device secret here, or
    put any credentials in shell arguments, tickets or support logs.
 4. Set `HYPERMESH_HOST_NAME` if the Mac's hostname is not the intended reported
    name. Leave `HYPERMESH_WG_USERSPACE=1`. Continue below to load WireGuard first,
@@ -393,7 +399,8 @@ instead of `launchctl bootstrap system`.
 ### Service observation
 
 On the secondary token path, the agent enrolls on startup when
-`/var/lib/hypermesh/device.json` does not exist yet. The owner path already
+`/var/lib/hypermesh/device.json` does not exist yet and the Terms have been
+accepted. The owner path already
 published that identity after portal approval. Watch the log:
 
 ```sh
@@ -436,6 +443,7 @@ Required for a first enroll:
 |---|---|---|
 | `HYPERMESH_TENANT_ID` | yes | UUID. Sent as `X-Tenant-ID` on every request, including enroll and heartbeat. |
 | `HYPERMESH_ENROLL_TOKEN` | secondary first enroll only, until `device.json` exists | One-time token. Same field the Linux agent sends. |
+| `HYPERMESH_LICENSE_ACCEPT` | before the first enroll | Set to `yes` to accept the Hypermesh Terms. Unset means not accepted. `hypermesh-agent enroll --license accept` is the other way. Install `--yes` does not set this. |
 | `HYPERMESH_CONTROL_PLANE_URL` | no | Default `https://api.test.hyperme.sh`. |
 | `HYPERMESH_HOST_NAME` | no | Empty uses the output of `hostname`. |
 | `HYPERMESH_STATE_DIR` | no | Default `/var/lib/hypermesh`. |

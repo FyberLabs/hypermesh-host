@@ -126,6 +126,7 @@ func TestEnvExampleKeepsLinuxPathsAndDisablesUpdate(t *testing.T) {
 		"HYPERMESH_STATE_DIR=/var/lib/hypermesh",
 		"HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf",
 		"HYPERMESH_WG_USERSPACE=1",
+		"HYPERMESH_LICENSE_ACCEPT",
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("env example missing %s", needle)
@@ -135,6 +136,9 @@ func TestEnvExampleKeepsLinuxPathsAndDisablesUpdate(t *testing.T) {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "HYPERMESH_UPDATE_CHANNEL=") {
 			t.Fatalf("darwin example must not set an update channel: %s", line)
+		}
+		if strings.HasPrefix(line, "HYPERMESH_LICENSE_ACCEPT=") {
+			t.Fatalf("darwin example accepted the Terms: %s", line)
 		}
 	}
 }

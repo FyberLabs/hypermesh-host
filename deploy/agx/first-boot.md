@@ -108,6 +108,8 @@ sudo cp deploy/agx/hypermesh-wg.service /etc/systemd/system/
 sudo cp deploy/agx/agent.env.example /etc/hypermesh/agent.env
 ```
 
+Copying `agent.env.example` does not accept the Hypermesh Terms. An image that already has Hypermesh installed is the same: the Terms start out unaccepted. Before you start the agent, set `HYPERMESH_LICENSE_ACCEPT=yes` in `/etc/hypermesh/agent.env`, or enroll from a terminal with `sudo hypermesh-agent enroll --license accept`. At a terminal, `hypermesh-agent enroll` prints the Terms and continues only if you type `accept`. The service has no terminal, so it stops until the setting or the flag is there. `hypermesh-host --yes` answers install questions only. It does not accept the Terms.
+
 Set tenant id and enroll token. `agent.env.example` already sets `HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf` (the binary default when the variable is omitted). Replace that line only when this box should keep a different file. The agent creates `models/` on start (root:root, mode 0755). `/var/lib/hypermesh` stays 0700, and downloaded weight files are 0600 root, so 0755 on `models/` does not make the weights readable to other users. Rootful Docker bind-mounts them as root. On the AGX set `HYPERMESH_WG_USERSPACE=1` (there is no wireguard kernel module). `chmod 0600` the env file. Install `wireguard-go` so `/usr/bin/wireguard-go` exists, plus `wireguard-tools` (`wg`, and `ip` from iproute2).
 
 ```bash

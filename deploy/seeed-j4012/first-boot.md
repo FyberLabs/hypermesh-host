@@ -102,6 +102,8 @@ sudo cp deploy/seeed-j4012/hypermesh-agent.service /etc/systemd/system/
 sudo cp deploy/seeed-j4012/agent.env.example /etc/hypermesh/agent.env
 ```
 
+Copying `agent.env.example` does not accept the Hypermesh Terms. A Seeed image that already includes the agent is the same: the Terms start out unaccepted. Before you start the agent, set `HYPERMESH_LICENSE_ACCEPT=yes` in `/etc/hypermesh/agent.env`, or enroll from a terminal with `sudo hypermesh-agent enroll --license accept`. At a terminal, `hypermesh-agent enroll` prints the Terms and continues only if you type `accept`. The service has no terminal, so it stops until the setting or the flag is there. `hypermesh-host --yes` answers install questions only. It does not accept the Terms.
+
 Set tenant id and enroll token from host enroll. `agent.env.example` sets `HYPERMESH_GGUF_PATH=/var/lib/hypermesh/models/model.gguf`. Replace that line only for a different file. The agent creates the directory on start.
 
 ```bash
@@ -156,4 +158,4 @@ sudo install -m 0755 hypermesh-agent /usr/local/bin/hypermesh-agent
 sudo systemctl restart hypermesh-agent
 ```
 
-Factory first-boot that preinstalls this agent is later.
+A factory image that already includes this agent still ships with the Terms unaccepted. Set `HYPERMESH_LICENSE_ACCEPT=yes`, or run `hypermesh-agent enroll --license accept`, before the agent can enroll.

@@ -18,6 +18,7 @@ import (
 
 	"github.com/FyberLabs/hypermesh-host/internal/agent"
 	"github.com/FyberLabs/hypermesh-host/internal/api"
+	"github.com/FyberLabs/hypermesh-host/terms"
 )
 
 func TestOutsideRestartsRuntimeAndDoesNotEnroll(t *testing.T) {
@@ -230,6 +231,8 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 			HeartbeatEvery:  20 * time.Millisecond,
 			JobEvery:        20 * time.Millisecond,
 			ImageHash:       "sha256:fixture",
+			LicenseAccept:   true,
+			LicenseEnvFile:  filepath.Join(dir, "missing.env"),
 		},
 		Runtime: func(ctx context.Context) error {
 			<-ctx.Done()
@@ -277,6 +280,16 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 	if enrollBody.HostType != agent.HostTypeSupervisor {
 		t.Fatalf("enroll host_type %q", enrollBody.HostType)
 	}
+	if enrollBody.TermsVersion != terms.Version || enrollBody.TermsSHA256 != terms.SHA256() || enrollBody.AcceptedAt == "" {
+		t.Fatalf("enroll terms %+v", enrollBody)
+	}
+	deviceRaw, err := os.ReadFile(filepath.Join(dir, deviceFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deviceRaw), `"terms_version"`) || !strings.Contains(string(deviceRaw), enrollBody.TermsSHA256) || !strings.Contains(string(deviceRaw), enrollBody.AcceptedAt) {
+		t.Fatalf("device.json missing terms\n%s", deviceRaw)
+	}
 	if beatBody.Health == nil || beatBody.Health.HostType != agent.HostTypeSupervisor {
 		t.Fatalf("heartbeat health %+v", beatBody.Health)
 	}
@@ -286,6 +299,59 @@ func TestHostPlacementEnrollsHeartbeatsAndRefusesLease(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "one-time") || strings.Contains(string(raw), "enroll_token") {
 		t.Fatalf("enroll token remained in supervisor.json\n%s", raw)
+	}
+}
+
+func TestHostPlacementRefusesEnrollWithoutTerms(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	no := false
+	started := 0
+	s := &Supervisor{
+		Placement: PlacementHost,
+		StateDir:  dir,
+		Creds: Credentials{
+			TenantID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			EnrollToken: "one-time",
+		},
+		Agent: agent.Config{
+			ControlPlaneURL: srv.URL,
+			TenantID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			EnrollToken:     "one-time",
+			StateDir:        dir,
+			HeartbeatEvery:  time.Second,
+			JobEvery:        time.Second,
+			LicenseEnvFile:  filepath.Join(dir, "missing.env"),
+			TermsTTY:        &no,
+		},
+		Runtime: func(context.Context) error {
+			started++
+			return nil
+		},
+	}
+	err := s.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--license accept") || !strings.Contains(err.Error(), "HYPERMESH_LICENSE_ACCEPT") {
+		t.Fatalf("got %v", err)
+	}
+	if hits != 0 || started != 0 {
+		t.Fatalf("hits %d runtime starts %d", hits, started)
+	}
+}
+
+func TestWatchEnrollRefusesWithoutTerms(t *testing.T) {
+	dir := t.TempDir()
+	s := &Supervisor{
+		StateDir: dir,
+		Agent:    agent.Config{LicenseEnvFile: filepath.Join(dir, "missing.env")},
+	}
+	err := s.watchEnroll(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--license accept") || !strings.Contains(err.Error(), "HYPERMESH_LICENSE_ACCEPT=yes") {
+		t.Fatalf("got %v", err)
 	}
 }
 

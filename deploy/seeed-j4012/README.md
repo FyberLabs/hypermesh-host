@@ -41,6 +41,8 @@ Classic (non-Super) J4012 cooling is a different design.
 
 Install the host from [first-boot.md](first-boot.md): Docker, NVIDIA runtime, WireGuard, [hypermesh-agent.service](hypermesh-agent.service), [agent.env.example](agent.env.example). `HYPERMESH_GGUF_PATH` defaults to `/var/lib/hypermesh/models/model.gguf`; an explicit path is kept. Tenant id and enroll token come from host enroll.
 
+The Terms start out unaccepted, including on an image that already has the agent installed. Set `HYPERMESH_LICENSE_ACCEPT=yes` in `agent.env`, or run `hypermesh-agent enroll --license accept`. Install `--yes` does not accept the Terms.
+
 On-box workload: [workload/README.md](workload/README.md). Build it on this J4012.
 
-Factory massflash that preinstalls the agent is later.
+A factory image that already includes the agent still ships with the Terms unaccepted. Set `HYPERMESH_LICENSE_ACCEPT=yes`, or run `hypermesh-agent enroll --license accept`, before the agent can enroll.
