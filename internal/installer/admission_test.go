@@ -62,3 +62,34 @@ func TestInstallationMinimumIsNotAWorkloadBudget(t *testing.T) {
   if CheckResources(r).Eligible {t.Fatal("invalid minimum accepted",kind)}
  }
 }
+
+
+func TestMinimumUMAOSVisibleMemory(t *testing.T) {
+	base := Resources{UMA: true, SystemBytes: 16356589568, AvailableSystemBytes: 14108901376,
+		UMARuntime: &UMARuntime{Backend: "cuda", TotalBytes: 16356589568, FreeBytes: 13 * GiB}, DiskFreeBytes: 27 * GiB}
+	for _, tc := range []struct {
+		name   string
+		change func(*Resources)
+		pass   bool
+	}{
+		{"measured NX usable RAM", func(r *Resources) {}, true},
+		{"supported NX lower bound", func(r *Resources) { r.SystemBytes = 14 * GiB }, true},
+		{"below supported NX lower bound", func(r *Resources) { r.SystemBytes = 14*GiB - 1 }, false},
+		{"exactly twelve free OS", func(r *Resources) { r.AvailableSystemBytes = 12 * GiB }, false},
+		{"exactly twelve free CUDA", func(r *Resources) { r.UMARuntime.FreeBytes = 12 * GiB }, false},
+		{"invalid available exceeds total", func(r *Resources) { r.AvailableSystemBytes = r.SystemBytes + 1 }, false},
+		{"unknown runtime", func(r *Resources) { r.UMARuntime = nil }, false},
+		{"insufficient model disk", func(r *Resources) { r.DiskFreeBytes = 26 * GiB }, false},
+		{"explicit UMA allocation keeps sixteen GiB", func(r *Resources) { r.UMAAllocationBytes = 12 * GiB }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := base
+			runtime := *base.UMARuntime
+			r.UMARuntime = &runtime
+			tc.change(&r)
+			if a := CheckResources(r); a.Eligible != tc.pass {
+				t.Fatalf("admission %+v", a)
+			}
+		})
+	}
+}

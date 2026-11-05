@@ -89,7 +89,9 @@ func CheckResources(r Resources) Admission {
 // This is a momentary minimum gate; model fit is evaluated at execution time.
 func checkMinimumInstallationResources(r Resources) Admission {
  a:=Admission{Reasons:[]string{}}
- if r.SystemBytes<16*GiB {a.Reasons=append(a.Reasons,"at least 16 GiB system memory is required")}
+ // The supported NX class accepts 14-17 GiB of measured OS-visible RAM.
+ // Do not round firmware-reserved memory up to an invented 16 GiB reading.
+ if r.SystemBytes<14*GiB {a.Reasons=append(a.Reasons,"at least 14 GiB OS-visible system memory is required for minimum UMA installation")}
  if r.AvailableSystemBytes<=12*GiB || r.AvailableSystemBytes>r.SystemBytes {
   a.Reasons=append(a.Reasons,"more than 12 GiB of system memory must currently be free for installation")
  }
