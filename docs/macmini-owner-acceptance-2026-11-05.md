@@ -51,8 +51,7 @@ These checks do not establish live owner acceptance.
 
 Live Auth was independently observed using the narrow host-membership session
 path. App Service readback has the expected test API/chat/realm URLs and client
-`controlplane-frontend`. Actual rollout and public download checks must be
-recorded before registration starts.
+`controlplane-frontend`. Live rollout and public download results are recorded below.
 
 ## Fresh observation and remaining acceptance
 
@@ -90,7 +89,7 @@ completed human sign-in or approval.
 The [scoped test-plane apply](https://github.com/FyberLabs/infra/actions/runs/41943437950)
 succeeded with convergence disabled. The redundant queued full apply from #377
 was replaced with this scoped apply; no running deployment was interrupted.
-Test-host-only convergence and public download verification remain pending.
+The test-host-only converge and public download checks subsequently succeeded, as recorded below.
 
 The saved registration is bound to signed agent build 113. Its agent checksum
 and signature were freshly reverified using the same reviewed trust anchor.
@@ -98,3 +97,39 @@ Resume that exact installation with installer 115, preserving the private journa
 and owner binding. Agent 115 remains staged separately; substituting it before
 recovery would change the installation digest and correctly fail the CLI guard.
 No journal owner, request, key or digest is to be rewritten to bypass that guard.
+
+
+## Public downloads and resumed owner flow
+
+The [test-host-only converge](https://github.com/FyberLabs/infra/actions/runs/41945414748)
+succeeded. Live edge readback selects
+`acrfybercg47.azurecr.io/controlplane-edge@sha256:96995817437162a9bcb0c3db27da0b657d9a13021b45b6d054c616174201cc8d`
+and the expected owner revision `6453e465827c791290dcef94b59768409754ee80`.
+The running browse module SHA-256 is
+`5ed417e3abd51d7d042713147c90cbaea8358c752f608a329f6943c266aaa3bc`.
+
+At **2026-11-05T01:15:06.290975+00:00**, anonymous requests downloaded all 12 release
+artifacts, including agent/installer binaries for Linux amd64, Linux arm64 and
+Darwin arm64. Binary hashes matched the signed release. The actual public
+checksum signature and signing key were also verified against the reviewed
+anchor. Private-key filename requests remained protected. No bundle was added.
+
+At **2026-11-05T01:16:07.774037Z**, explicitly READ ONLY, tenant-scoped owner
+queries confirmed production runtime mode, test deployment tier, experimental
+admission and the private zero-rate Darwin class. The exact old device was still
+enrolled and unarchived, with no leases and suspended qualification. Its earlier
+native registration request had not been created on the server.
+
+The approved local cutover preserved the exact old identity privately and
+unloaded agent then WireGuard, requiring utun8 to disappear. Backup integrity,
+no local lease/checkpoint, signed build 113 agent bytes and reviewed LaunchDaemons
+were checked before changes. At **2026-11-05T01:17:51.955031Z**, one installer 115
+process resumed the existing journal/request
+`f9fbdc96-2530-464b-9117-5fa906cfc93c`, with its original owner binding. The real
+setup URL and fresh device user code were handed to the human owner; no
+credentials were exported and no authentication dialog was automated. Private
+process/log recovery records remain on the Mac. Do not start a duplicate grant.
+
+Owner sign-in, portal approval, new identity publication, heartbeat, complete old
+credential retirement and final startup checks remain pending. The code is not
+retained in this document. Do not close #161 from the deployment evidence alone.
