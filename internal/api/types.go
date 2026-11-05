@@ -190,6 +190,7 @@ type ModelConfiguration struct {
 }
 
 type Job struct {
+	CertificationContextTokens int `json:"certification_context_tokens,omitempty"`
 	EnvironmentHash          string              `json:"environment_hash,omitempty"`
 	ModelConfiguration       *ModelConfiguration `json:"model_configuration,omitempty"`
 	ModelConfigurationSHA256 string              `json:"model_configuration_sha256,omitempty"`

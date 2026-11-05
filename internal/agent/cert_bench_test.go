@@ -80,7 +80,11 @@ func TestCertRunsOnlyRequestedPinsAndCleansBeforeReturning(t *testing.T) {
 
 func TestCertRejectsUnpinnedOrBusyWorkBeforeDocker(t *testing.T) {
 	cases:=[]struct{name string; change func(*Agent,*api.Job)}{
-		{"missing image",func(a *Agent,j *api.Job){j.ImageDigest=""}},
+		{"private context override",func(a *Agent,j *api.Job){j.SourceRef=privateModelPrefix+"revision";j.CertificationContextTokens=512}},
+        {"invalid context",func(a *Agent,j *api.Job){j.CertificationContextTokens=511}},
+        {"oversized context",func(a *Agent,j *api.Job){j.CertificationContextTokens=131073}},
+        {"conflicting context",func(a *Agent,j *api.Job){j.CertificationContextTokens=512;a.certContextTokens=1024}},
+        {"missing image",func(a *Agent,j *api.Job){j.ImageDigest=""}},
 		{"tag",func(a *Agent,j *api.Job){j.ImageDigest="example.invalid/model:latest"}},
 		{"truncated digest",func(a *Agent,j *api.Job){j.ImageDigest="example.invalid/model@sha256:a"}},
 		{"missing model pin",func(a *Agent,j *api.Job){j.FileHash=""}},

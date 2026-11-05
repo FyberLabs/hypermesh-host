@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,16 @@ var certImagePin = regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{6
 // model download, lease creation or sell-state change happens here.
 func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(context.Context)) (result pathb.Result) {
 	job.SuiteID = certSuite(job.SuiteID)
+	contextWindow := a.certContextTokens
+	if job.CertificationContextTokens != 0 {
+		if strings.HasPrefix(job.SourceRef, privateModelPrefix) {
+			return pathb.Result{Reason: "private certification context belongs to its bound model configuration"}
+		}
+		if job.CertificationContextTokens < 512 || job.CertificationContextTokens > 131072 || (contextWindow != 0 && contextWindow != job.CertificationContextTokens) {
+			return pathb.Result{Reason: "invalid or conflicting certification context window"}
+		}
+		contextWindow = job.CertificationContextTokens
+	}
 	fail := func(reason string) pathb.Result { return pathb.Result{Reason: reason} }
 	if strings.TrimSpace(job.JobID) == "" || (job.SuiteID != pathb.SuitePackV1 && job.SuiteID != pathb.SuiteThinV1) {
 		return fail("certification requires job identity and a supported suite")
@@ -38,9 +49,9 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	}
 	backend, _ := runtime.ResolveBackend(job.Backend)
 	// Container backends all bind the verified GGUF and catalog alias.
- // Native Metal still needs its own pinned service lifecycle.
- if (backend!=runtime.NVIDIAContainer && backend!=runtime.HIPROCm && backend!=runtime.CPUContainer) || (backend==runtime.NVIDIAContainer && job.Runtime!="nvidia") {
-        return fail("pinned certification requires a supported container runtime")
+	// Native Metal still needs its own pinned service lifecycle.
+	if (backend != runtime.NVIDIAContainer && backend != runtime.HIPROCm && backend != runtime.CPUContainer) || (backend == runtime.NVIDIAContainer && job.Runtime != "nvidia") {
+		return fail("pinned certification requires a supported container runtime")
 	}
 	if a.localLease() != nil {
 		return fail("certification refused while a lease is recorded")
@@ -85,6 +96,9 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 	if err != nil {
 		return fail("private model configuration binding invalid")
 	}
+	if contextWindow > 0 {
+		contextTokens = strconv.Itoa(contextWindow)
+	}
 	starter := a.starterFor(backend)
 	handle, err := starter.Start(ctx, runtime.Spec{
 		LeaseID: certLeaseID + "-" + job.JobID, CatalogID: job.CatalogID,
@@ -94,7 +108,7 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		BindAddress: "127.0.0.1",
 		LlamaJinja:  jinja, LlamaCtxSize: contextTokens,
 		LlamaTimeout: timeout,
-		SingleSlot:   a.certContextTokens > 0 || strings.HasPrefix(job.SourceRef, privateModelPrefix),
+		SingleSlot:   contextWindow > 0 || strings.HasPrefix(job.SourceRef, privateModelPrefix),
 	})
 	if err != nil {
 		return fail("certification runtime start failed")
@@ -149,9 +163,9 @@ func (a *Agent) runCertWorkload(ctx context.Context, job api.Job, observe func(c
 		}
 	}
 	var fit *pathb.ContextFit
-	if a.certContextTokens > 0 {
+	if contextWindow > 0 {
 		var err error
-		fit, err = runner.CheckContextFit(ctx, a.certContextTokens)
+		fit, err = runner.CheckContextFit(ctx, contextWindow)
 		if err != nil {
 			return fail("full-context check failed: " + err.Error())
 		}
