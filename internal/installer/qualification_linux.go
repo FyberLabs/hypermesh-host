@@ -60,12 +60,14 @@ func performQualification(ctx context.Context, j *qualificationJournal, d qualif
 		fail := func(code string) { j.Report.FailureCode = code }
 		if err := d.Check(ctx); err != nil {
 			fail("preflight")
+			j.FailureDetail = err.Error()
 		} else if err = d.Acquire(ctx); err != nil {
 			fail("acquisition")
 		} else {
 			for i := 0; i < 3; i++ {
 				if err = d.Check(ctx); err != nil {
 					fail("preflight")
+					j.FailureDetail = err.Error()
 					break
 				}
 				if err = d.Tunnel(ctx); err != nil {

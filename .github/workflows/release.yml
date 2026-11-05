@@ -7,6 +7,15 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
+    inputs:
+      test_only:
+        description: Publish only the signed test channel from main; skip production promotion
+        type: boolean
+        default: false
+      expected_source_sha:
+        description: Exact main commit required for a test-only dispatch
+        type: string
+        default: ""
 
 # one sequence across channels; a host switching channel only moves to
 # a strictly newer build. Every test and prod publish uses this group.
@@ -67,11 +76,15 @@ jobs:
       # commit is an ancestor of origin/main. workflow_dispatch from
       # any other ref fails here, before login.
       - name: Require a publishable ref
+        env:
+          HYPERMESH_TEST_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_only }}
+          EXPECTED_TEST_SOURCE_SHA: ${{ inputs.expected_source_sha }}
         run: |
           set -euo pipefail
           # shellcheck source=packaging/release/layout.sh
           source packaging/release/layout.sh
           channel=$(channel_for_ref "$GITHUB_REF") || exit 1
+          require_test_only_source "$HYPERMESH_TEST_ONLY" "$GITHUB_REF" "$GITHUB_SHA" "$EXPECTED_TEST_SOURCE_SHA" || exit 1
           if [ "$channel" = prod ]; then
             git fetch origin main
             if ! git merge-base --is-ancestor HEAD origin/main; then
@@ -166,4 +179,5 @@ jobs:
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
+          HYPERMESH_TEST_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_only }}
         run: python3 packaging/release/promote-main.py

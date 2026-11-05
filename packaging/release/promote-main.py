@@ -45,6 +45,11 @@ def wait_for_ci(revision):
     raise TimeoutError('main CI did not succeed before the promotion deadline')
 
 def promote(env):
+    if env.get('HYPERMESH_TEST_ONLY') == 'true':
+        if env.get('GITHUB_EVENT_NAME') != 'workflow_dispatch' or env.get('GITHUB_REF') != 'refs/heads/main':
+            raise ValueError('test-only publication requires an explicit main dispatch')
+        print('Signed test-only dispatch complete; no production tag or promotion requested.')
+        return
     revision = env.get('GITHUB_SHA','')
     if env.get('GITHUB_REPOSITORY') != REPO or env.get('GITHUB_REF') != 'refs/heads/main' or not re.fullmatch('[0-9a-f]{40}',revision):
         raise ValueError('automatic release requires this repository main commit')

@@ -1,10 +1,34 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import subprocess
 from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('promote',Path(__file__).with_name('promote-main.py'))
 p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 class PromotionTests(unittest.TestCase):
+    def test_test_only_publication_binds_the_approved_main_source(self):
+        revision='a'*40
+        for flag,ref,expected,ok in [
+            ('true','refs/heads/main',revision,True),
+            ('true','refs/heads/main','b'*40,False),
+            ('true','refs/heads/main','',False),
+            ('true','refs/tags/v0.1.0',revision,False),
+            ('true','refs/heads/feature',revision,False),
+            ('false','refs/tags/v0.1.0','',True),
+        ]:
+            with self.subTest(flag=flag,ref=ref,expected=expected):
+                result=subprocess.run(['bash','-c','source "$1"; shift; require_test_only_source "$@"','test',str(Path(__file__).with_name('layout.sh')),flag,ref,revision,expected],capture_output=True)
+                self.assertEqual(result.returncode==0,ok)
+    def test_manual_test_only_never_queries_tags_or_dispatches_production(self):
+        env=dict(GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_REF='refs/heads/main',HYPERMESH_TEST_ONLY='true')
+        with patch.object(p,'api') as api,patch.object(p,'run') as run,patch.object(p,'wait_for_ci') as wait:
+            p.promote(env)
+        api.assert_not_called();run.assert_not_called();wait.assert_not_called()
+    def test_test_only_cannot_select_a_tag_or_push(self):
+        for event,ref in [('push','refs/heads/main'),('workflow_dispatch','refs/tags/v0.1.0')]:
+            with patch.object(p,'api') as api,self.assertRaises(ValueError):
+                p.promote(dict(GITHUB_EVENT_NAME=event,GITHUB_REF=ref,HYPERMESH_TEST_ONLY='true'))
+            api.assert_not_called()
     def test_main_retry_allocates_fresh_patch_after_new_test_build(self):
         self.assertEqual(p.choose_tag({}),('v0.1.0',True))
         self.assertEqual(p.choose_tag({'v1.2.9':'a','v1.2.10':'b','v9.0.0-rc.1':'c'}),('v1.2.11',True))
