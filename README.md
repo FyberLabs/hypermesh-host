@@ -261,3 +261,5 @@ Report vulnerabilities to **security@hyperme.sh**. Please do not open a public i
 Released under the MIT License. See [LICENSE](LICENSE). Copyright (c) 2026 Fyber Labs TN LLC.
 
 The model files and container images that hosts run (for example llama.cpp and the models you download) have their own licenses, which are not covered by this one.
+
+Authenticated public certification jobs may provide `certification_context_tokens` (512–131072). The host runs that window in one slot, checks the full context, then records the same timed probe used by native qualification. Invalid windows and private-model configuration overrides fail closed. The assignment does not change host defaults, lease execution or the private-model configuration contract.
