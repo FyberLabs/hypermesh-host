@@ -5,7 +5,9 @@ package installer
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/FyberLabs/hypermesh-host/internal/agent"
 	"github.com/FyberLabs/hypermesh-host/internal/hostregistration"
 	"io"
@@ -167,5 +169,59 @@ func TestReportedQualificationFailureOffersHostRetryWithoutRepeatingWork(t *test
 	}
 	if j.State != "reported" || j.Report.FailureCode != "workload" {
 		t.Fatal("changed retained evidence")
+	}
+}
+
+func TestQualificationPreservesPreflightReasonWithoutPromotingPartialSamples(t *testing.T) {
+	for _, failedCheck := range []int{1, 4} {
+		t.Run(fmt.Sprint(failedCheck), func(t *testing.T) {
+			j := qualificationJournal{State: "approved"}
+			j.Run.Manifest.MeasurementIDs = []string{"a", "b", "c"}
+			checks, samples, reports := 0, 0, 0
+			reason := "fresh preflight failed: readiness service unavailable"
+			d := qualificationDeps{
+				Check: func(context.Context) error {
+					checks++
+					if checks == failedCheck {
+						return errors.New(reason)
+					}
+					return nil
+				},
+				Acquire: func(context.Context) error { return nil }, Tunnel: func(context.Context) error { return nil },
+				Sample: func(_ context.Context, id string) (hostregistration.QualificationSample, error) {
+					samples++
+					return hostregistration.QualificationSample{MeasurementID: id}, nil
+				},
+				Save: func(v qualificationJournal) error {
+					if v.Report.FailureCode == "preflight" && v.FailureDetail != reason {
+						t.Fatal("failure reason not durable")
+					}
+					return nil
+				},
+				Report: func(_ context.Context, r hostregistration.QualificationReport) error {
+					reports++
+					if r.FailureCode != "preflight" || len(r.Samples) != samples {
+						t.Fatal("partial evidence promoted or lost")
+					}
+					b, e := json.Marshal(r)
+					if e != nil || strings.Contains(string(b), reason) {
+						t.Fatal("local diagnostic leaked into measurement report")
+					}
+					return nil
+				},
+			}
+			for range 2 {
+				if err := performQualification(context.Background(), &j, d); err == nil || !strings.Contains(err.Error(), reason) {
+					t.Fatal("preflight reason missing", err)
+				}
+			}
+			expected := 0
+			if failedCheck == 4 {
+				expected = 2
+			}
+			if j.State != "reported" || samples != expected || reports != 1 || checks != failedCheck {
+				t.Fatal("failure retried or partial samples changed", j.State, samples, reports, checks)
+			}
+		})
 	}
 }
