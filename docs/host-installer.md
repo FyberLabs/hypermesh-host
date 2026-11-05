@@ -9,8 +9,11 @@ Physical acceptance on the AGX and additional hardware remains pending.
 
 Approved and implemented: guided UMA installation requires **more than 12 GiB**
 currently available in both system RAM and the CUDA/HIP runtime. It no longer
-asks for or configures a model-memory allocation. The 16 GiB installed-system
-minimum and minimum model-filesystem space (2.2 × 12 GiB) remain prerequisites.
+asks for or configures a model-memory allocation. Minimum-only UMA setup requires at least 14 GiB of measured OS-visible system
+RAM, matching the existing supported NX class lower bound; firmware-reserved RAM
+is not rounded up. CPU, discrete and explicitly allocated UMA installation keep
+their 16 GiB system minimum. Minimum model-filesystem space (2.2 × 12 GiB) remains
+a prerequisite.
 Hardware identity, drivers and network checks remain in place.
 
 Free-memory observations in reviewed evidence describe the time of the check;
