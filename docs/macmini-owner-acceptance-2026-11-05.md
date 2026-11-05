@@ -75,3 +75,26 @@ the real reinstall contract. Record ordered LaunchDaemon startup and WireGuard
 readiness separately from peer/handshake evidence. Never restore a retired
 credential. Enrollment proves neither sustained performance nor hardware/memory
 protection. AGX and its separate expiry acceptance are outside this operation.
+
+## Live deployment observations
+
+The [portal deployment](https://github.com/FyberLabs/infra/actions/runs/41941593997)
+succeeded. Azure readback selects
+`acrfybercg47.azurecr.io/controlplane-portal@sha256:70d35de5ac638e10d9373e2ea6a5da5656cba140157fc983df8e72e3a8ecb207`.
+At **2026-11-05T00:59:30.982654Z**, the actual public portal returned healthy and
+served its host-connect page chunk with SHA-256
+`99bc50fe3674d075f442a1cd4a06469c14452c0f990ed90341201eeb602b9c31`, matching the
+qualified archive byte-for-byte. This verifies deployed handoff assets, not a
+completed human sign-in or approval.
+
+The [scoped test-plane apply](https://github.com/FyberLabs/infra/actions/runs/41943437950)
+succeeded with convergence disabled. The redundant queued full apply from #377
+was replaced with this scoped apply; no running deployment was interrupted.
+Test-host-only convergence and public download verification remain pending.
+
+The saved registration is bound to signed agent build 113. Its agent checksum
+and signature were freshly reverified using the same reviewed trust anchor.
+Resume that exact installation with installer 115, preserving the private journal
+and owner binding. Agent 115 remains staged separately; substituting it before
+recovery would change the installation digest and correctly fail the CLI guard.
+No journal owner, request, key or digest is to be rewritten to bypass that guard.
