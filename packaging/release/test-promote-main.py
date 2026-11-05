@@ -1,10 +1,24 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import subprocess
 from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('promote',Path(__file__).with_name('promote-main.py'))
 p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 class PromotionTests(unittest.TestCase):
+    def test_test_only_publication_binds_the_approved_main_source(self):
+        revision='a'*40
+        for flag,ref,expected,ok in [
+            ('true','refs/heads/main',revision,True),
+            ('true','refs/heads/main','b'*40,False),
+            ('true','refs/heads/main','',False),
+            ('true','refs/tags/v0.1.0',revision,False),
+            ('true','refs/heads/feature',revision,False),
+            ('false','refs/tags/v0.1.0','',True),
+        ]:
+            with self.subTest(flag=flag,ref=ref,expected=expected):
+                result=subprocess.run(['bash','-c','source "$1"; shift; require_test_only_source "$@"','test',str(Path(__file__).with_name('layout.sh')),flag,ref,revision,expected],capture_output=True)
+                self.assertEqual(result.returncode==0,ok)
     def test_manual_test_only_never_queries_tags_or_dispatches_production(self):
         env=dict(GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_REF='refs/heads/main',HYPERMESH_TEST_ONLY='true')
         with patch.object(p,'api') as api,patch.object(p,'run') as run,patch.object(p,'wait_for_ci') as wait:

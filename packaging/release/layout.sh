@@ -1157,3 +1157,20 @@ reuse_test_signatures() {
     fi
   done
 }
+
+
+# Test-only dispatch must bind the current main ref to the approved source.
+# Defaults preserve the existing automatic publisher behavior.
+require_test_only_source() {
+  local test_only=$1 ref=$2 revision=$3 expected=$4
+  case "$test_only" in
+    false|"") return 0 ;;
+    true)
+      if [[ "$ref" == refs/heads/main && "$expected" =~ ^[0-9a-f]{40}$ && "$revision" == "$expected" ]]; then
+        return 0
+      fi
+      ;;
+  esac
+  echo "hypermesh release: test-only dispatch requires main at the exact expected_source_sha" >&2
+  return 1
+}
