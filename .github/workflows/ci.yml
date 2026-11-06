@@ -97,7 +97,7 @@ jobs:
           install -m 0755 "$tmp/shellcheck-v0.10.0/shellcheck" "$tmp/shellcheck"
           export PATH="$tmp:$PATH"
           "$tmp/actionlint" -shellcheck="$(command -v shellcheck)" -color
-          shellcheck -x packaging/release/publish-agent.sh packaging/release/layout.sh
+          shellcheck -x packaging/release/publish-agent.sh packaging/release/layout.sh packaging/release/cleanup.sh
           # azure-cli 2.90.0 is the CLI that rejects --auth-mode on
           # keyvault secret show. The stubbed tests cannot see that.
           # pip --target avoids python3-venv. A PATH wrapper is what
