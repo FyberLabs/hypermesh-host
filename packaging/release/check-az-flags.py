@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FILES = [
     ROOT / "packaging/release/publish-agent.sh",
     ROOT / "packaging/release/layout.sh",
+    ROOT / "packaging/release/cleanup.sh",
     ROOT / ".github/workflows/release.yml",
     ROOT / ".github/workflows/ci.yml",
 ]

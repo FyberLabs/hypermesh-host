@@ -854,10 +854,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"group: release-publish",
 		"AZURE_CONFIG_DIR=$RUNNER_TEMP/az",
 		"GITHUB_ENV",
-		"az logout",
+		"bash packaging/release/cleanup.sh",
 		"if: always()",
-		"gpgconf --kill all",
-		"shred",
 		"git fetch origin main",
 		"git merge-base --is-ancestor HEAD origin/main",
 		"one sequence across channels",
@@ -880,6 +878,18 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("release.yml missing %s", want)
 		}
+	}
+	cleanup, err := os.ReadFile(filepath.Join(root, "packaging", "release", "cleanup.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"az logout", "gpgconf --kill all", "shred", "set +x"} {
+		if !strings.Contains(string(cleanup), want) {
+			t.Fatalf("cleanup.sh missing %s", want)
+		}
+	}
+	if strings.Contains(string(cleanup), "set -x") {
+		t.Fatal("cleanup.sh enables xtrace")
 	}
 	if strings.Contains(text, "${{ runner.temp }}") || strings.Contains(text, "runner.temp") {
 		t.Fatal("release.yml uses runner.temp in an expression")
