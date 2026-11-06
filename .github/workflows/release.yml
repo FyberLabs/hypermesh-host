@@ -42,8 +42,9 @@ jobs:
     # Default main/tag runner routing stays unchanged; no public PR signing job.
     runs-on: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.test_only && '["self-hosted","linux","x64","debrunner"]' || '["ubuntu-24.04"]') }}
     timeout-minutes: 60
-    # This job uses repository variables. It does not use a GitHub
-    # Environment. Federated credentials are ref-based:
+    # Cloud login uses repository variables and ref-based OIDC, not a GitHub
+    # Environment. The dedicated App key is only for test-only GitHub releases.
+    # Federated credentials are ref-based:
     #   test: repo:hyperme-sh/hypermesh-host:ref:refs/heads/main
     #   prod: repo:hyperme-sh/hypermesh-host:ref:refs/tags/v*
     permissions:
