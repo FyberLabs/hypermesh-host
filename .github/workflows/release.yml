@@ -38,8 +38,9 @@ permissions:
 jobs:
   release:
     name: release
-    # Trusted main/tag publication only; no public PR code receives signing access.
-    runs-on: [self-hosted, linux, x64, debrunner]
+    # Explicit test-only builds use the trusted main-only debrunner group.
+    # Default main/tag runner routing stays unchanged; no public PR signing job.
+    runs-on: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.test_only && '["self-hosted","linux","x64","debrunner"]' || '["ubuntu-24.04"]') }}
     timeout-minutes: 60
     # This job uses repository variables. It does not use a GitHub
     # Environment. Federated credentials are ref-based:
@@ -79,6 +80,7 @@ jobs:
           printf 'RELEASE_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Install isolated Azure CLI
+        if: github.event_name == 'workflow_dispatch' && inputs.test_only
         run: |
           set -euo pipefail
           lib="$RUNNER_TEMP/azure-cli-2.90.0"
