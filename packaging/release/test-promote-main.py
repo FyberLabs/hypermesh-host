@@ -60,4 +60,34 @@ class PromotionTests(unittest.TestCase):
         run=dict(id=1,head_sha='a'*40,head_branch='main',event='push',status='completed',conclusion='success')
         with patch.object(p,'api',return_value=dict(workflow_runs=[run])):
             p.wait_for_ci('a'*40)
+    def test_repository_pin_is_this_github_repository(self):
+        self.assertEqual(p.REPO,'hyperme-sh/hypermesh-host')
+        root=Path(__file__).resolve().parents[2]
+        old='FyberLabs/hypermesh-host'
+        module='github.com/'+old
+        pinned=[]
+        release=root/'packaging'/'release'
+        paths=[path for path in list(release.glob('*.py'))+list(release.glob('*.sh')) if not path.name.startswith('test-')]
+        paths.append(root/'.github'/'workflows'/'release.yml')
+        for path in paths:
+            text=path.read_text().replace(module,'')
+            if old in text:
+                pinned.append(str(path.relative_to(root)))
+        self.assertEqual(pinned,[])
+        for rel in ('README.md','deploy/agx/update.md','.github/workflows/release.yml'):
+            text=(root/rel).read_text()
+            self.assertNotIn('repo:'+old+':',text,rel)
+            self.assertIn('repo:hyperme-sh/hypermesh-host:ref:refs/heads/main',text,rel)
+            self.assertIn('repo:hyperme-sh/hypermesh-host:ref:refs/tags/v*',text,rel)
+    def test_previous_org_cannot_promote(self):
+        with patch.object(p,'api') as api,self.assertRaises(ValueError) as raised:
+            p.promote(dict(GITHUB_REPOSITORY='FyberLabs/hypermesh-host',GITHUB_REF='refs/heads/main',GITHUB_SHA='a'*40))
+        api.assert_not_called()
+        self.assertEqual(str(raised.exception),'automatic release requires this repository main commit')
+    def test_this_repository_main_commit_passes_the_org_gate(self):
+        env=dict(GITHUB_REPOSITORY='hyperme-sh/hypermesh-host',GITHUB_REF='refs/heads/main',GITHUB_SHA='a'*40)
+        with patch.object(p,'api',return_value={'sha':'b'*40}) as api,patch.object(p,'run') as run:
+            p.promote(env)
+        api.assert_called_once_with('commits/main')
+        run.assert_not_called()
 if __name__=='__main__' :unittest.main()

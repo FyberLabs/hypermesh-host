@@ -859,8 +859,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"git fetch origin main",
 		"git merge-base --is-ancestor HEAD origin/main",
 		"one sequence across channels",
-		"repo:FyberLabs/hypermesh-host:ref:refs/heads/main",
-		"repo:FyberLabs/hypermesh-host:ref:refs/tags/v*",
+		"repo:hyperme-sh/hypermesh-host:ref:refs/heads/main",
+		"repo:hyperme-sh/hypermesh-host:ref:refs/tags/v*",
 		"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
 		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
 		"azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906",
@@ -1086,8 +1086,8 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"repo:FyberLabs/hypermesh-host:ref:refs/heads/main",
-		"repo:FyberLabs/hypermesh-host:ref:refs/tags/v*",
+		"repo:hyperme-sh/hypermesh-host:ref:refs/heads/main",
+		"repo:hyperme-sh/hypermesh-host:ref:refs/tags/v*",
 		"HYPERMESH_RELEASE_KV_NAME",
 		"HYPERMESH_RELEASE_GPG_KEY_SECRET",
 		"HYPERMESH_RELEASE_GPG_PASSPHRASE_SECRET",

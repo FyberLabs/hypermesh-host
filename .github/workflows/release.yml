@@ -45,8 +45,8 @@ jobs:
     timeout-minutes: 60
     # This job uses repository variables. It does not use a GitHub
     # Environment. Federated credentials are ref-based:
-    #   test: repo:FyberLabs/hypermesh-host:ref:refs/heads/main
-    #   prod: repo:FyberLabs/hypermesh-host:ref:refs/tags/v*
+    #   test: repo:hyperme-sh/hypermesh-host:ref:refs/heads/main
+    #   prod: repo:hyperme-sh/hypermesh-host:ref:refs/tags/v*
     permissions:
       contents: write
       actions: write
