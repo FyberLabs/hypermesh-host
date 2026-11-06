@@ -29,7 +29,12 @@ On Darwin, `certify-agent` accepts these same native measurement arguments;
 `plan-certification` explains them. No Linux, CUDA, Docker or enrollment plan is
 required. The executable runs natively with Metal GPU offload, never a CUDA
 container. The parser verifies the requested model, context depth, decode count,
-GPU layer count, backend and measured timing. Upstream `MTL` and `Metal` backend
+GPU layer count, selected device and measured timing. Native accelerator runs
+explicitly select backend device 0 by default (`MTL0`, `CUDA0`, `ROCm0` or
+`Vulkan0`); `--device` can select another device of that backend. The same device
+must appear in the result. A list of registered backends is insufficient proof
+of which accelerator ran. CPU requests select `none`, disable GPU/KV offload and
+use observed system RAM rather than a detected GPU's memory budget. Upstream `MTL` and `Metal` backend
 names are accepted. CPU-only output cannot pass a Metal request.
 
 Each sample starts a fresh process and loads the model independently. The test
@@ -61,7 +66,10 @@ explicit executable form with the matching `--backend`.
 ## Reports and workload preservation
 
 Each invocation creates a private directory with a random run ID, `report.json`
-and raw successful-subprocess sample output. A failed measurement retains its
+and raw successful-subprocess sample output. Reports include the collector source
+commit (or `unknown` for an unannotated build). Relative model/runtime paths are
+resolved before both pinning and execution; a bare executable name never triggers
+a different PATH lookup. A failed measurement retains its
 failure code and prior completed samples. Missing input/model/runtime pins,
 unsupported backends, insufficient observed memory and active leases are recorded
 as failures, rather than disappearing behind program-readiness errors. Invalid

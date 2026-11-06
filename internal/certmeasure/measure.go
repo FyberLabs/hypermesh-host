@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FyberLabs/hypermesh-host/internal/buildinfo"
 	"github.com/FyberLabs/hypermesh-host/internal/hardware"
 	"github.com/FyberLabs/hypermesh-host/internal/telem"
 )
@@ -31,6 +32,8 @@ type Sample struct {
 	Raw             json.RawMessage `json:"raw"`
 }
 type Report struct {
+	CollectorCommit    string    `json:"collector_commit"`
+	Device             string    `json:"device,omitempty"`
 	RuntimeImage       string    `json:"runtime_image,omitempty"`
 	EnvironmentHash    string    `json:"environment_hash"`
 	Schema             string    `json:"schema"`
@@ -52,9 +55,9 @@ type Report struct {
 	PhysicalAcceptance bool      `json:"physical_acceptance"`
 }
 type options struct {
-	model, binary, modelPin, runtimePin, backend, dir, state, image string
-	samples, context, generated                                     int
-	timeout                                                         time.Duration
+	model, binary, modelPin, runtimePin, backend, dir, state, image, device string
+	samples, context, generated                                             int
+	timeout                                                                 time.Duration
 }
 type dependencies struct {
 	inventory func(context.Context) string
@@ -82,6 +85,7 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer, d depend
 	f.StringVar(&o.binary, "runtime-file", "", "local llama-bench executable")
 	f.StringVar(&o.modelPin, "model-sha256", "", "expected model SHA256 (hex)")
 	f.StringVar(&o.runtimePin, "runtime-sha256", "", "expected executable SHA256 (hex)")
+	f.StringVar(&o.device, "device", "", "native accelerator device (defaults to backend device 0; CPU uses none)")
 	f.StringVar(&o.backend, "backend", "auto", "auto, cpu, metal, cuda, hip or vulkan")
 	f.StringVar(&o.dir, "artifact-dir", "", "private output directory; each invocation creates a fresh run")
 	f.StringVar(&o.state, "state-dir", "/var/lib/hypermesh", "host state directory; an active lease prevents interference")
@@ -98,6 +102,21 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer, d depend
 	if f.NArg() != 0 || o.dir == "" || o.samples < 1 || o.samples > 30 || o.generated < 1 || o.context < o.generated || o.context > 131072 || o.timeout <= 0 || o.timeout > time.Hour {
 		fmt.Fprintln(diagnostic, "require artifact directory, 1–30 samples, valid context and timeout")
 		return 2
+	}
+	var pathErr error
+	if o.model != "" {
+		o.model, pathErr = filepath.Abs(o.model)
+		if pathErr != nil {
+			fmt.Fprintln(diagnostic, pathErr)
+			return 2
+		}
+	}
+	if o.binary != "" {
+		o.binary, pathErr = filepath.Abs(o.binary)
+		if pathErr != nil {
+			fmt.Fprintln(diagnostic, pathErr)
+			return 2
+		}
 	}
 	if err := os.MkdirAll(o.dir, 0700); err != nil {
 		fmt.Fprintln(diagnostic, err)
@@ -119,7 +138,10 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer, d depend
 	if o.backend == "auto" {
 		o.backend = profile.Backend
 	}
-	report := Report{RuntimeImage: o.image, EnvironmentHash: environment, Schema: "hypermesh-certification-measurements-v1", RunID: id, StartedAt: time.Now().UTC(), OS: runtime.GOOS, Arch: runtime.GOARCH, Hardware: profile.Fingerprint, Backend: o.backend, ModelSHA256: o.modelPin, RuntimeSHA256: o.runtimePin, ContextTokens: o.context, GeneratedTokens: o.generated, Samples: []Sample{}, MeasurementState: "running", CertificationState: "not_evaluated"}
+	if o.image == "" && o.device == "" {
+		o.device = defaultDevice(o.backend)
+	}
+	report := Report{CollectorCommit: buildinfo.Current(), Device: o.device, RuntimeImage: o.image, EnvironmentHash: environment, Schema: "hypermesh-certification-measurements-v1", RunID: id, StartedAt: time.Now().UTC(), OS: runtime.GOOS, Arch: runtime.GOARCH, Hardware: profile.Fingerprint, Backend: o.backend, ModelSHA256: o.modelPin, RuntimeSHA256: o.runtimePin, ContextTokens: o.context, GeneratedTokens: o.generated, Samples: []Sample{}, MeasurementState: "running", CertificationState: "not_evaluated"}
 	save := func() error {
 		b, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
@@ -172,8 +194,12 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer, d depend
 	} else if err = validateContainer(o); err != nil {
 		return finish("unsupported_container_request")
 	}
-	modelInfo, _ := model.Stat()
-	if profile.ModelBudgetBytes <= 0 || modelInfo.Size() > profile.ModelBudgetBytes {
+	if o.image == "" && !validDevice(o.backend, o.device) {
+		return finish("device_backend_mismatch")
+	}
+	modelInfo, statErr := model.Stat()
+	budget := memoryBudget(profile, o.backend)
+	if statErr != nil || budget <= 0 || modelInfo.Size() > budget {
 		return finish("insufficient_observed_memory")
 	}
 	for i := 0; i < o.samples; i++ {
@@ -234,7 +260,7 @@ func arguments(o options) []string {
 	if o.backend == "cpu" {
 		layers = "0"
 	}
-	args := []string{"-m", o.model, "-p", "0", "-n", strconv.Itoa(o.generated), "-d", strconv.Itoa(o.context - o.generated), "-ngl", layers, "-r", "1", "-o", "json"}
+	args := []string{"-m", o.model, "-p", "0", "-n", strconv.Itoa(o.generated), "-d", strconv.Itoa(o.context - o.generated), "-ngl", layers, "-dev", selectedDevice(o), "-r", "1", "-o", "json"}
 	if o.backend == "cpu" {
 		args = append(args, "-nkvo", "1", "-nopo", "1")
 	}
@@ -288,6 +314,7 @@ func parse(raw []byte, o options, elapsed time.Duration) (float64, error) {
 		Depth     *int      `json:"n_depth"`
 		Layers    *int      `json:"n_gpu_layers"`
 		Backends  string    `json:"backends"`
+		Devices   string    `json:"devices"`
 		Average   float64   `json:"avg_ns"`
 		Samples   []float64 `json:"samples_ns"`
 	}
@@ -299,7 +326,7 @@ func parse(raw []byte, o options, elapsed time.Duration) (float64, error) {
 	if o.backend == "cpu" {
 		layers = 0
 	}
-	if r.Model != o.model || r.Prompt == nil || *r.Prompt != 0 || r.Generated == nil || *r.Generated != o.generated || r.Depth == nil || *r.Depth != o.context-o.generated || r.Layers == nil || *r.Layers != layers || r.Average <= 0 || math.IsNaN(r.Average) || math.IsInf(r.Average, 0) || len(r.Samples) != 1 || r.Samples[0] != r.Average || r.Average > float64(elapsed.Nanoseconds()) {
+	if r.Devices != selectedDevice(o) || r.Model != o.model || r.Prompt == nil || *r.Prompt != 0 || r.Generated == nil || *r.Generated != o.generated || r.Depth == nil || *r.Depth != o.context-o.generated || r.Layers == nil || *r.Layers != layers || r.Average <= 0 || math.IsNaN(r.Average) || math.IsInf(r.Average, 0) || len(r.Samples) != 1 || r.Samples[0] != r.Average || r.Average > float64(elapsed.Nanoseconds()) {
 		return 0, errors.New("benchmark differs from requested load")
 	}
 	backend := o.backend
@@ -313,4 +340,65 @@ func parse(raw []byte, o options, elapsed time.Duration) (float64, error) {
 		return 0, errors.New("accelerator backend not reported")
 	}
 	return float64(o.generated) * 1e9 / r.Average, nil
+}
+
+// A registered backend is not proof it executed the workload. Bind execution
+// to one named device and require that same selection in the benchmark result.
+func defaultDevice(backend string) string {
+	switch backend {
+	case "metal":
+		return "MTL0"
+	case "cuda":
+		return "CUDA0"
+	case "hip":
+		return "ROCm0"
+	case "vulkan":
+		return "Vulkan0"
+	case "cpu":
+		return "none"
+	}
+	return ""
+}
+func selectedDevice(o options) string {
+	if o.device != "" {
+		return o.device
+	}
+	return defaultDevice(o.backend)
+}
+func validDevice(backend, device string) bool {
+	if backend == "cpu" {
+		return device == "none"
+	}
+	prefix := strings.TrimSuffix(defaultDevice(backend), "0")
+	if prefix == "" || !strings.HasPrefix(device, prefix) {
+		return false
+	}
+	index := strings.TrimPrefix(device, prefix)
+	if index == "" {
+		return false
+	}
+	for _, r := range index {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+func memoryBudget(profile hardware.Profile, backend string) int64 {
+	if backend != "cpu" {
+		if backend != profile.Backend {
+			return 0
+		}
+		return profile.ModelBudgetBytes
+	}
+	// Explicit CPU runs consume system RAM even when an accelerator is present.
+	memory := profile.Facts.AvailableBytes
+	reserve := memory / 4
+	if reserve < 2<<30 {
+		reserve = 2 << 30
+	}
+	if memory <= reserve {
+		return 0
+	}
+	return memory - reserve
 }
