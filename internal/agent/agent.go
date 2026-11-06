@@ -384,7 +384,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if err := missingEnrollmentConfig(a.cfg, st); err != nil {
 		return err
 	}
-	accepted, err := (&a.cfg).AcceptedTerms()
+	accepted, err := (&a.cfg).AcceptedTerms(ctx)
 	if err != nil {
 		return err
 	}

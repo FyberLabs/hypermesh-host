@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,7 +57,7 @@ func TestInstallYesDoesNotAcceptTerms(t *testing.T) {
 	cfg.LicenseAcceptEnv = ""
 	no := false
 	cfg.TermsTTY = &no
-	if err := cfg.AcceptTerms(); err == nil || !strings.Contains(err.Error(), "--license accept") || !strings.Contains(err.Error(), "HYPERMESH_LICENSE_ACCEPT") {
+	if err := cfg.AcceptTerms(context.Background()); err == nil || !strings.Contains(err.Error(), "--license accept") || !strings.Contains(err.Error(), "HYPERMESH_LICENSE_ACCEPT") {
 		t.Fatalf("closed failure: %v", err)
 	}
 }
@@ -223,5 +226,238 @@ func TestEnrollCLIAcceptSendsTerms(t *testing.T) {
 	}
 	if body.TermsVersion != terms.Version || body.TermsSHA256 != terms.SHA256() || body.HostName != "cli-box" {
 		t.Fatalf("body %+v", body)
+	}
+}
+
+func TestEnrollmentTermsCurrent(t *testing.T) {
+	if terms.SHA256() != "46620be8f650c44e8188b0e6143be0193f70f6bd901a47d3d5169785e66c7045" {
+		t.Fatalf("sha256 %s", terms.SHA256())
+	}
+	current := State{
+		DeviceID:     "dev-1",
+		DeviceSecret: "sec-1",
+		TermsVersion: terms.Version,
+		TermsSHA256:  terms.SHA256(),
+		AcceptedAt:   "2026-11-05T00:00:00Z",
+	}
+	dir := t.TempDir()
+	writeTermsState(t, dir, current)
+	if !EnrollmentTermsCurrent(dir) {
+		t.Fatal("current enrollment acceptance was ignored")
+	}
+	stale := []State{
+		{DeviceID: "dev-1", DeviceSecret: "sec-1", TermsVersion: terms.Version, TermsSHA256: "0000000000000000000000000000000000000000000000000000000000000000", AcceptedAt: current.AcceptedAt},
+		{DeviceID: "dev-1", DeviceSecret: "sec-1", TermsVersion: "other-terms", TermsSHA256: terms.SHA256(), AcceptedAt: current.AcceptedAt},
+		{DeviceID: "dev-1", DeviceSecret: "sec-1", TermsVersion: terms.Version, TermsSHA256: terms.SHA256()},
+		{DeviceID: "dev-1", TermsVersion: terms.Version, TermsSHA256: terms.SHA256(), AcceptedAt: current.AcceptedAt},
+		{DeviceSecret: "sec-1", TermsVersion: terms.Version, TermsSHA256: terms.SHA256(), AcceptedAt: current.AcceptedAt},
+		{DeviceID: "dev-1", DeviceSecret: "sec-1"},
+	}
+	for i, st := range stale {
+		d := t.TempDir()
+		writeTermsState(t, d, st)
+		if EnrollmentTermsCurrent(d) {
+			t.Fatalf("case %d counted as current: %+v", i, st)
+		}
+	}
+	if EnrollmentTermsCurrent(t.TempDir()) || EnrollmentTermsCurrent("") || EnrollmentTermsCurrent(filepath.Join(dir, "missing")) {
+		t.Fatal("missing device.json counted as accepted")
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if EnrollmentTermsCurrent(dir) {
+		t.Fatal("corrupt device.json counted as accepted")
+	}
+}
+
+func TestAcceptHostTermsKeepsStoredAcceptance(t *testing.T) {
+	dir := t.TempDir()
+	writeTermsState(t, dir, State{
+		DeviceID:     "dev-1",
+		DeviceSecret: "sec-1",
+		TermsVersion: terms.Version,
+		TermsSHA256:  terms.SHA256(),
+		AcceptedAt:   "2026-11-05T00:00:00Z",
+	})
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, "", "", "")
+	a.cfg.LicenseAccept = false
+	a.cfg.LicenseAcceptEnv = ""
+	a.cfg.LicenseEnvFile = filepath.Join(dir, "missing.env")
+	no := false
+	a.cfg.TermsTTY = &no
+	cfg, err := a.AcceptHostTerms(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LicenseAccept {
+		t.Fatal("stored acceptance was recorded as a new flag")
+	}
+}
+
+func TestAcceptHostTermsRefusesStaleStoredTerms(t *testing.T) {
+	dir := t.TempDir()
+	writeTermsState(t, dir, State{
+		DeviceID:     "dev-1",
+		DeviceSecret: "sec-1",
+		TermsVersion: terms.Version,
+		TermsSHA256:  "0000000000000000000000000000000000000000000000000000000000000000",
+		AcceptedAt:   "2026-11-05T00:00:00Z",
+	})
+	a := newTestAgent(t, "http://127.0.0.1:9", dir, "", "one-time", "")
+	a.cfg.LicenseAccept = false
+	a.cfg.LicenseEnvFile = filepath.Join(dir, "missing.env")
+	no := false
+	a.cfg.TermsTTY = &no
+	_, err := a.AcceptHostTerms(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--license accept") || !strings.Contains(err.Error(), "HYPERMESH_LICENSE_ACCEPT") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEnrollPromptCancelled(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	a := newTestAgent(t, srv.URL, dir, "", "one-time", "")
+	a.cfg.LicenseAccept = false
+	a.cfg.LicenseEnvFile = filepath.Join(dir, "missing.env")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	in := &blockingReader{started: make(chan struct{}), release: release}
+	yes := true
+	a.cfg.TermsTTY = &yes
+	a.cfg.TermsStdin = in
+	a.cfg.TermsStdout = &bytes.Buffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.ensureEnrolled(ctx) }()
+	select {
+	case <-in.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("prompt did not wait for accept")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled enrollment context did not interrupt the prompt")
+	}
+	if hits != 0 {
+		t.Fatalf("enroll request %d", hits)
+	}
+}
+
+func TestAcceptTermsFileReadAcceptsLine(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = r.Close()
+		_ = w.Close()
+	})
+	yes := true
+	cfg := Config{
+		LicenseEnvFile: filepath.Join(t.TempDir(), "missing.env"),
+		TermsTTY:       &yes,
+		TermsStdin:     r,
+		TermsStdout:    &bytes.Buffer{},
+	}
+	go func() {
+		_, _ = w.Write([]byte("accept\n"))
+	}()
+	if err := cfg.AcceptTerms(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.LicenseAccept {
+		t.Fatal("typing accept on a terminal did not stick")
+	}
+}
+
+func TestAcceptTermsFileReadCancelled(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = r.Close()
+		_ = w.Close()
+	})
+	yes := true
+	out := &promptBuf{ready: make(chan struct{})}
+	cfg := Config{
+		LicenseEnvFile: filepath.Join(t.TempDir(), "missing.env"),
+		TermsTTY:       &yes,
+		TermsStdin:     r,
+		TermsStdout:    out,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- cfg.AcceptTerms(ctx) }()
+	select {
+	case <-out.ready:
+	case err := <-errCh:
+		t.Fatalf("prompt returned before the read: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("prompt did not start")
+	}
+	// The prompt is written before the read. Wait until that read is blocked
+	// so cancellation has to interrupt the file, not the check before it.
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled context did not interrupt the terminal read")
+	}
+}
+
+// promptBuf does not embed bytes.Buffer. io.WriteString would otherwise
+// call the promoted WriteString and skip the prompt signal.
+type promptBuf struct {
+	buf   bytes.Buffer
+	ready chan struct{}
+	once  sync.Once
+}
+
+func (b *promptBuf) Write(p []byte) (int, error) {
+	n, err := b.buf.Write(p)
+	if bytes.Contains(b.buf.Bytes(), []byte("Type accept to accept these Terms.")) {
+		b.once.Do(func() { close(b.ready) })
+	}
+	return n, err
+}
+
+type blockingReader struct {
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingReader) Read(p []byte) (int, error) {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+	return 0, io.EOF
+}
+
+func writeTermsState(t *testing.T, dir string, st State) {
+	t.Helper()
+	b, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stateFile), append(b, '\n'), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

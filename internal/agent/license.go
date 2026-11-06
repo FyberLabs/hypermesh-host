@@ -2,10 +2,13 @@ package agent
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -54,11 +57,50 @@ func (c Config) TermsPreaccepted() bool {
 	}
 }
 
+// EnrollmentTermsCurrent reports whether device.json already records an
+// enrolled host that accepted the current Terms. The version and SHA-256
+// must both match, and the acceptance time must be present. A missing file,
+// a host that is not enrolled, and a different Terms text do not match.
+// Install --yes does not write this record. A preinstalled image has none.
+func EnrollmentTermsCurrent(stateDir string) bool {
+	st, ok := readDeviceState(stateDir)
+	if !ok {
+		return false
+	}
+	if strings.TrimSpace(st.DeviceID) == "" || strings.TrimSpace(st.DeviceSecret) == "" {
+		return false
+	}
+	if strings.TrimSpace(st.AcceptedAt) == "" {
+		return false
+	}
+	return st.TermsVersion == terms.Version && st.TermsSHA256 == terms.SHA256()
+}
+
+func readDeviceState(stateDir string) (State, bool) {
+	if strings.TrimSpace(stateDir) == "" {
+		return State{}, false
+	}
+	b, err := os.ReadFile(filepath.Join(stateDir, stateFile))
+	if err != nil {
+		return State{}, false
+	}
+	var st State
+	if json.Unmarshal(b, &st) != nil {
+		return State{}, false
+	}
+	return st, true
+}
+
 // AcceptTerms returns nil when the Terms are already accepted or the
-// operator types accept at a terminal. It does not enroll.
-func (c *Config) AcceptTerms() error {
+// operator types accept at a terminal. It does not enroll. A cancelled
+// ctx interrupts the prompt; that is how Ctrl-C and SIGTERM stop the wait.
+func (c *Config) AcceptTerms(ctx context.Context) error {
 	if c.TermsPreaccepted() {
 		return nil
+	}
+	ctx = contextOrBackground(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	in, out, tty := c.termsIO()
 	if !tty {
@@ -67,7 +109,7 @@ func (c *Config) AcceptTerms() error {
 	if err := writeTermsPrompt(out); err != nil {
 		return err
 	}
-	line, err := readAcceptLine(in)
+	line, err := readAcceptLine(ctx, in)
 	if err != nil {
 		return err
 	}
@@ -79,17 +121,22 @@ func (c *Config) AcceptTerms() error {
 }
 
 // AcceptHostTerms records Terms acceptance for this process.
-// The returned config includes acceptance typed at the prompt.
-func (a *Agent) AcceptHostTerms() (Config, error) {
-	if err := (&a.cfg).AcceptTerms(); err != nil {
+// Acceptance already stored for the current Terms is kept, so a supervisor
+// restart does not ask again. The returned config includes acceptance typed
+// at the prompt.
+func (a *Agent) AcceptHostTerms(ctx context.Context) (Config, error) {
+	if EnrollmentTermsCurrent(a.cfg.StateDir) {
+		return a.cfg, nil
+	}
+	if err := (&a.cfg).AcceptTerms(ctx); err != nil {
 		return Config{}, err
 	}
 	return a.cfg, nil
 }
 
 // AcceptedTerms is the stamp to store and send for this enrollment.
-func (c *Config) AcceptedTerms() (TermsAcceptance, error) {
-	if err := c.AcceptTerms(); err != nil {
+func (c *Config) AcceptedTerms(ctx context.Context) (TermsAcceptance, error) {
+	if err := c.AcceptTerms(ctx); err != nil {
 		return TermsAcceptance{}, err
 	}
 	return TermsAcceptance{
@@ -97,6 +144,13 @@ func (c *Config) AcceptedTerms() (TermsAcceptance, error) {
 		SHA256:     terms.SHA256(),
 		AcceptedAt: time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func contextOrBackground(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func (c Config) licenseEnvFile() string {
@@ -150,10 +204,55 @@ func writeTermsPrompt(out io.Writer) error {
 	return err
 }
 
-func readAcceptLine(in io.Reader) (string, error) {
-	line, err := bufio.NewReader(in).ReadString('\n')
+// readAcceptLine waits for one line. A cancelled ctx interrupts the wait.
+// signal.NotifyContext cancels on SIGINT and SIGTERM, which is how Ctrl-C
+// leaves the prompt. A terminal or pipe is an *os.File; its read deadline
+// unblocks the syscall. Any other reader is abandoned when ctx ends.
+func readAcceptLine(ctx context.Context, in io.Reader) (string, error) {
+	ctx = contextOrBackground(ctx)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if f, ok := in.(*os.File); ok {
+		return readAcceptFile(ctx, f)
+	}
+	return readAcceptReader(ctx, in)
+}
+
+func readAcceptFile(ctx context.Context, f *os.File) (string, error) {
+	stop := context.AfterFunc(ctx, func() {
+		_ = f.SetReadDeadline(time.Now())
+	})
+	line, err := bufio.NewReader(f).ReadString('\n')
+	stop()
+	_ = f.SetReadDeadline(time.Time{})
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	return line, nil
+}
+
+func readAcceptReader(ctx context.Context, in io.Reader) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			ch <- result{"", err}
+			return
+		}
+		ch <- result{line, nil}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-ch:
+		return r.line, r.err
+	}
 }

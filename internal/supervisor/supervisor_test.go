@@ -355,6 +355,258 @@ func TestWatchEnrollRefusesWithoutTerms(t *testing.T) {
 	}
 }
 
+func TestWatchEnrollHonorsStoredTerms(t *testing.T) {
+	dir := t.TempDir()
+	writeStoredTerms(t, dir, terms.Version, terms.SHA256())
+	s := &Supervisor{
+		StateDir: dir,
+		Agent:    agent.Config{LicenseEnvFile: filepath.Join(dir, "missing.env")},
+	}
+	if err := s.watchEnroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWatchEnrollRefusesStaleOrUnenrolledTerms(t *testing.T) {
+	cases := []agent.State{
+		{DeviceID: "dev-1", DeviceSecret: "sec-1", TermsVersion: terms.Version, TermsSHA256: "0000000000000000000000000000000000000000000000000000000000000000", AcceptedAt: "2026-11-05T00:00:00Z"},
+		{DeviceID: "dev-1", DeviceSecret: "sec-1", TermsVersion: "other-terms", TermsSHA256: terms.SHA256(), AcceptedAt: "2026-11-05T00:00:00Z"},
+		{DeviceID: "dev-1", DeviceSecret: "sec-1"},
+		{TermsVersion: terms.Version, TermsSHA256: terms.SHA256(), AcceptedAt: "2026-11-05T00:00:00Z"},
+	}
+	for i, st := range cases {
+		dir := t.TempDir()
+		b, err := json.Marshal(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, deviceFile), append(b, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s := &Supervisor{
+			StateDir: dir,
+			Agent:    agent.Config{LicenseEnvFile: filepath.Join(dir, "missing.env"), StateDir: dir},
+		}
+		err = s.watchEnroll(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "--license accept") || !strings.Contains(err.Error(), "HYPERMESH_LICENSE_ACCEPT=yes") {
+			t.Fatalf("case %d got %v", i, err)
+		}
+	}
+}
+
+func TestHostRestartHonorsStoredTerms(t *testing.T) {
+	var mu sync.Mutex
+	var enrolls, heartbeats int
+	mux := http.NewServeMux()
+	mux.HandleFunc(api.PathEnroll, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		enrolls++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc(api.PathHeartbeat, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		heartbeats++
+		mu.Unlock()
+		writeJSON(w, api.HeartbeatResponse{DeviceID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", PathBState: api.PathBNeverRun})
+	})
+	mux.HandleFunc(api.PathJobs, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(api.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(api.PathTunnelPeer, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	writeStoredTerms(t, dir, terms.Version, terms.SHA256())
+	no := false
+	started := make(chan struct{})
+	var startOnce sync.Once
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &Supervisor{
+		Placement: PlacementHost,
+		StateDir:  dir,
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Creds: Credentials{
+			TenantID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		},
+		Agent: agent.Config{
+			ControlPlaneURL: srv.URL,
+			TenantID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			StateDir:        dir,
+			HeartbeatEvery:  20 * time.Millisecond,
+			JobEvery:        time.Hour,
+			LicenseEnvFile:  filepath.Join(dir, "missing.env"),
+			TermsTTY:        &no,
+		},
+		Runtime: func(ctx context.Context) error {
+			startOnce.Do(func() { close(started) })
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx) }()
+	select {
+	case <-started:
+	case err := <-errCh:
+		t.Fatalf("stopped before runtime: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("runtime did not start from stored Terms acceptance")
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		mu.Lock()
+		n := heartbeats
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("heartbeat did not start from stored Terms acceptance")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervisor did not stop")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if enrolls != 0 {
+		t.Fatalf("restart enrolled again: %d", enrolls)
+	}
+}
+
+func TestHostRestartRefusesStaleTerms(t *testing.T) {
+	dir := t.TempDir()
+	writeStoredTerms(t, dir, terms.Version, "0000000000000000000000000000000000000000000000000000000000000000")
+	no := false
+	started := 0
+	s := &Supervisor{
+		Placement: PlacementHost,
+		StateDir:  dir,
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Creds: Credentials{
+			TenantID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		},
+		Agent: agent.Config{
+			ControlPlaneURL: "http://127.0.0.1:9",
+			TenantID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			StateDir:        dir,
+			HeartbeatEvery:  time.Second,
+			JobEvery:        time.Second,
+			LicenseEnvFile:  filepath.Join(dir, "missing.env"),
+			TermsTTY:        &no,
+		},
+		Runtime: func(context.Context) error {
+			started++
+			return nil
+		},
+	}
+	err := s.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--license accept") || !strings.Contains(err.Error(), "HYPERMESH_LICENSE_ACCEPT") {
+		t.Fatalf("got %v", err)
+	}
+	if started != 0 {
+		t.Fatalf("runtime starts %d", started)
+	}
+}
+
+func TestHostTermsPromptCancelled(t *testing.T) {
+	dir := t.TempDir()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	in := &termsBlockingReader{started: make(chan struct{}), release: release}
+	yes := true
+	started := 0
+	s := &Supervisor{
+		Placement: PlacementHost,
+		StateDir:  dir,
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Creds: Credentials{
+			TenantID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		},
+		Agent: agent.Config{
+			ControlPlaneURL: "http://127.0.0.1:9",
+			TenantID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			EnrollToken:     "one-time",
+			StateDir:        dir,
+			HeartbeatEvery:  time.Second,
+			JobEvery:        time.Second,
+			LicenseEnvFile:  filepath.Join(dir, "missing.env"),
+			TermsTTY:        &yes,
+			TermsStdin:      in,
+			TermsStdout:     &bytes.Buffer{},
+		},
+		Runtime: func(context.Context) error {
+			started++
+			return nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx) }()
+	select {
+	case <-in.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("prompt did not wait for accept")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled enrollment context did not interrupt the prompt")
+	}
+	if started != 0 {
+		t.Fatalf("runtime starts %d", started)
+	}
+}
+
+type termsBlockingReader struct {
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (b *termsBlockingReader) Read(p []byte) (int, error) {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+	return 0, io.EOF
+}
+
+func writeStoredTerms(t *testing.T, dir, version, sum string) {
+	t.Helper()
+	st := agent.State{
+		DeviceID:     "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+		DeviceSecret: "hm_dev_fixture_secret",
+		TermsVersion: version,
+		TermsSHA256:  sum,
+		AcceptedAt:   "2026-11-05T00:00:00Z",
+	}
+	b, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, deviceFile), append(b, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDockerfileIsOneImage(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "supervisor", "Dockerfile"))
 	if err != nil {

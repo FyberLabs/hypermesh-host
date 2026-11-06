@@ -206,10 +206,24 @@ func deviceEnrolled(stateDir string) bool {
 	return strings.TrimSpace(st.DeviceID) != "" && strings.TrimSpace(st.DeviceSecret) != ""
 }
 
+// termsAccepted is the supervisor gate. The flag and agent.env still count.
+// So does device.json when enrollment already recorded the current Terms.
+func (s *Supervisor) termsAccepted() bool {
+	cfg := s.Agent
+	if strings.TrimSpace(cfg.StateDir) == "" {
+		cfg.StateDir = s.StateDir
+	}
+	if cfg.TermsPreaccepted() {
+		return true
+	}
+	return agent.EnrollmentTermsCurrent(cfg.StateDir)
+}
+
 func (s *Supervisor) watchEnroll(ctx context.Context) error {
 	// The agent enrolls beside this watcher. Refuse here as well so a
 	// host that has not accepted the Terms never looks enrolled.
-	if !s.Agent.TermsPreaccepted() {
+	// Acceptance already stored for the current Terms is enough on restart.
+	if !s.termsAccepted() {
 		return agent.ErrTermsNotAccepted
 	}
 	tick := time.NewTicker(20 * time.Millisecond)
@@ -323,7 +337,7 @@ func (s *Supervisor) runHost(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	acceptedCfg, err := a.AcceptHostTerms()
+	acceptedCfg, err := a.AcceptHostTerms(ctx)
 	if err != nil {
 		return err
 	}
