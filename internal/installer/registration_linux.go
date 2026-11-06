@@ -63,7 +63,7 @@ func newRegistration(p agentInstallPlan,issuer,dashboard,class string,fresh Plan
  modelMemory:=fresh.Resources.Admission.AcceleratorBytes
  if fresh.Resources.Resources.UMA && fresh.Resources.Resources.UMAAllocationBytes==0 {
   resources:=fresh.Resources.Resources
-  if !CheckResources(resources).Eligible {return j,fmt.Errorf("registration requires more than 12 GiB currently free in system and UMA runtime memory")}
+  if !CheckResources(resources).Eligible {return j,fmt.Errorf("registration requires at least %d currently free bytes in both system and UMA runtime memory (12 GiB nominal, up to 15%% variation)",MinimumFreeMemoryBytes)}
   // Registration telemetry is a current observation, never a reserved budget.
   modelMemory=resources.AvailableSystemBytes
   if resources.UMARuntime.FreeBytes<modelMemory {modelMemory=resources.UMARuntime.FreeBytes}

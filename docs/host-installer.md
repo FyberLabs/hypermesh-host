@@ -7,7 +7,7 @@ Physical acceptance on the AGX and additional hardware remains pending.
 
 ## Minimum-only installation admission
 
-Approved and implemented: guided UMA installation requires **more than 12 GiB**
+Approved free-memory policy: guided minimum UMA installation uses **12 GiB nominal, with up to 15% downward variation**
 currently available in both system RAM and the CUDA/HIP runtime. It no longer
 asks for or configures a model-memory allocation. Minimum-only UMA setup requires at least 14 GiB of measured OS-visible system
 RAM, matching the existing supported NX class lower bound; firmware-reserved RAM
@@ -2101,3 +2101,17 @@ Use that new setup link rather than an older request-specific browser page.
 Public bootstrap downloads identify themselves as `hypermesh-host-bootstrap/1`.
 This is a client identifier, not a credential. HTTPS enforcement, signature and
 checksum verification, redirect checks and transfer deadlines remain required.
+
+
+### Bounded free-memory variation
+
+Minimum-only UMA and CPU admission accepts OS-available memory at or above
+10,952,166,605 bytes, the upward-rounded 85% of the nominal 12 GiB minimum.
+UMA admission independently requires runtime-free memory at or above the same
+floor. Admission reports include nominal/effective bytes and the fixed 15%
+variation allowance. Missing, negative and inconsistent probes still fail.
+Installed capacity minimums, disk space, explicit UMA allocation reserves,
+GPU capacity, and real model/context execution checks retain their own limits.
+The allowance is a startup/installation gate, not a workload memory budget or
+permission to sell. Build126 retains the older strict policy; this change needs
+a separately authorized signed release before live hosts use it.

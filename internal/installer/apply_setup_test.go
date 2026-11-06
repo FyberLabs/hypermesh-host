@@ -260,7 +260,7 @@ func TestMinimumInstallationRechecksFreeMemoryWithoutSavedBudget(t *testing.T) {
  p:=f.plan.Preflight;p.Resources.Resources.UMAAllocationBytes=0
  p.Resources.Admission=CheckResources(p.Resources.Resources)
  f.plan.Preflight=p;f.plan.PlanSHA256=setupPlanDigest(f.plan)
- for _,free:=range []int64{48*GiB,13*GiB,12*GiB} {
+ for _,free:=range []int64{48*GiB,13*GiB,12*GiB,MinimumFreeMemoryBytes,MinimumFreeMemoryBytes-1} {
   current:=p
   runtime:=*p.Resources.Resources.UMARuntime
   runtime.FreeBytes=free
@@ -269,6 +269,6 @@ func TestMinimumInstallationRechecksFreeMemoryWithoutSavedBudget(t *testing.T) {
   current.Resources.Admission=CheckResources(current.Resources.Resources)
   f.deps.Preflight=func(context.Context,SetupPlan)(Plan,error){return current,nil}
   _,_,err:=validateSetupHost(context.Background(),f.plan,f.deps)
-  if (err==nil)!=(free>12*GiB) {t.Fatalf("free %d: %v",free,err)}
+  if (err==nil)!=(free>=MinimumFreeMemoryBytes) {t.Fatalf("free %d: %v",free,err)}
  }
 }

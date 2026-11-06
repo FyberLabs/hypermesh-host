@@ -214,7 +214,7 @@ func TestRegistrationFromMinimumOnlyInstallation(t *testing.T) {
  var saved registrationJournal
  if err=decodeSetupJSON(raw,&saved);err!=nil{t.Fatal(err)}
  if err=validateRegistration(saved,p,base.Issuer,base.Dashboard,"agx-large");err!=nil{t.Fatal(err)}
- fresh.Resources.Resources.AvailableSystemBytes=12*GiB
+ fresh.Resources.Resources.AvailableSystemBytes=MinimumFreeMemoryBytes-1
  if _,err=newRegistration(p,base.Issuer,base.Dashboard,"agx-large",fresh);err==nil{t.Fatal("stale admission allowed insufficient current memory")}
 }
 

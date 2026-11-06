@@ -16,7 +16,7 @@ func TestResourceAdmission(t *testing.T) {
 		{"N5 proposed allocation", Resources{SystemBytes: 128*GiB, AvailableSystemBytes: 100*GiB, UMA: true, UMARuntime: &UMARuntime{Backend: "cuda", FreeBytes: 100*GiB, TotalBytes: 128*GiB}, UMAAllocationBytes: 80*GiB, DiskFreeBytes: 176*GiB}, true},
 		{"UMA uses available not installed", Resources{SystemBytes: 128*GiB, AvailableSystemBytes: 10*GiB, UMA: true, UMARuntime: &UMARuntime{Backend: "cuda", FreeBytes: 100*GiB, TotalBytes: 128*GiB}, UMAAllocationBytes: 12*GiB, DiskFreeBytes: 100*GiB}, false},
 		{"UMA minimum without fixed allocation", Resources{SystemBytes: 128*GiB, AvailableSystemBytes: 100*GiB, UMA: true, UMARuntime: &UMARuntime{Backend: "cuda", FreeBytes: 100*GiB, TotalBytes: 128*GiB}, DiskFreeBytes: 100*GiB}, true},
-		{"UMA cannot count discrete VRAM", Resources{SystemBytes: 128*GiB, AvailableSystemBytes: 100*GiB, DiscreteVRAMBytes: 24*GiB, UMA: true, UMARuntime: &UMARuntime{Backend: "cuda", FreeBytes: 11*GiB, TotalBytes: 128*GiB}, DiskFreeBytes: 100*GiB}, false},
+		{"UMA cannot count discrete VRAM", Resources{SystemBytes: 128*GiB, AvailableSystemBytes: 100*GiB, DiscreteVRAMBytes: 24*GiB, UMA: true, UMARuntime: &UMARuntime{Backend: "cuda", FreeBytes: 10*GiB, TotalBytes: 128*GiB}, DiskFreeBytes: 100*GiB}, false},
 		{"wrong mode", Resources{SystemBytes: 64*GiB, DiscreteVRAMBytes: 24*GiB, UMAAllocationBytes: 12*GiB, DiskFreeBytes: 100*GiB}, false},
 		{"invalid free RAM", Resources{SystemBytes: 16*GiB, AvailableSystemBytes: 17*GiB, DiscreteVRAMBytes: 12*GiB, DiskFreeBytes: 100*GiB}, false},
 		{"overflow", Resources{SystemBytes: 16*GiB, DiscreteVRAMBytes: 1<<63-1, DiskFreeBytes: 1<<63-1}, false},
@@ -48,17 +48,17 @@ func TestDiskBoundaryRoundsUp(t *testing.T) {
 }
 
 func TestInstallationMinimumIsNotAWorkloadBudget(t *testing.T) {
- for _,free:=range []int64{12*GiB-1,12*GiB,12*GiB+1,48*GiB} {
+ for _,free:=range []int64{0,MinimumFreeMemoryBytes-1,MinimumFreeMemoryBytes,MinimumFreeMemoryBytes+1,12*GiB,48*GiB} {
   r:=Resources{SystemBytes:64*GiB,AvailableSystemBytes:free,UMA:true,
    UMARuntime:&UMARuntime{Backend:"cuda",FreeBytes:free,TotalBytes:64*GiB},DiskFreeBytes:27*GiB}
   a:=CheckResources(r)
-  if a.Eligible!=(free>12*GiB) {t.Fatalf("free=%d: %+v",free,a)}
+  if a.Eligible!=(free>=MinimumFreeMemoryBytes) {t.Fatalf("free=%d: %+v",free,a)}
   if a.AcceleratorBytes!=0||a.MaximumUMABytes!=0 {t.Fatal("installation recorded a workload budget",a)}
  }
  for _,kind:=range []string{"system","runtime","missing-runtime","disk"} {
   r:=Resources{SystemBytes:64*GiB,AvailableSystemBytes:48*GiB,UMA:true,
    UMARuntime:&UMARuntime{Backend:"cuda",FreeBytes:48*GiB,TotalBytes:64*GiB},DiskFreeBytes:27*GiB}
-  switch kind {case "system":r.AvailableSystemBytes=12*GiB;case "runtime":r.UMARuntime.FreeBytes=12*GiB;case "missing-runtime":r.UMARuntime=nil;case "disk":r.DiskFreeBytes=1}
+  switch kind {case "system":r.AvailableSystemBytes=MinimumFreeMemoryBytes-1;case "runtime":r.UMARuntime.FreeBytes=MinimumFreeMemoryBytes-1;case "missing-runtime":r.UMARuntime=nil;case "disk":r.DiskFreeBytes=1}
   if CheckResources(r).Eligible {t.Fatal("invalid minimum accepted",kind)}
  }
 }
@@ -75,8 +75,8 @@ func TestMinimumUMAOSVisibleMemory(t *testing.T) {
 		{"measured NX usable RAM", func(r *Resources) {}, true},
 		{"supported NX lower bound", func(r *Resources) { r.SystemBytes = 14 * GiB }, true},
 		{"below supported NX lower bound", func(r *Resources) { r.SystemBytes = 14*GiB - 1 }, false},
-		{"exactly twelve free OS", func(r *Resources) { r.AvailableSystemBytes = 12 * GiB }, false},
-		{"exactly twelve free CUDA", func(r *Resources) { r.UMARuntime.FreeBytes = 12 * GiB }, false},
+		{"exactly twelve free OS", func(r *Resources) { r.AvailableSystemBytes = 12 * GiB }, true},
+		{"exactly twelve free CUDA", func(r *Resources) { r.UMARuntime.FreeBytes = 12 * GiB }, true},
 		{"invalid available exceeds total", func(r *Resources) { r.AvailableSystemBytes = r.SystemBytes + 1 }, false},
 		{"unknown runtime", func(r *Resources) { r.UMARuntime = nil }, false},
 		{"insufficient model disk", func(r *Resources) { r.DiskFreeBytes = 26 * GiB }, false},
@@ -92,4 +92,20 @@ func TestMinimumUMAOSVisibleMemory(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFreeMemoryVariationBoundary(t *testing.T) {
+ if MinimumFreeMemoryBytes != 10952166605 { t.Fatal("15 percent tolerance must round upward to a whole byte") }
+ for _,cpu:=range []bool{false,true} {
+  for _,osFree:=range []int64{0,-1,MinimumFreeMemoryBytes-1,MinimumFreeMemoryBytes,12*GiB} {
+   for _,runtimeFree:=range []int64{0,MinimumFreeMemoryBytes-1,MinimumFreeMemoryBytes,12*GiB} {
+    r:=Resources{CPU:cpu,UMA:!cpu,SystemBytes:16*GiB,AvailableSystemBytes:osFree,DiskFreeBytes:27*GiB}
+    if !cpu {r.UMARuntime=&UMARuntime{Backend:"cuda",TotalBytes:16*GiB,FreeBytes:runtimeFree}}
+    got:=CheckResources(r)
+    want:=osFree>=MinimumFreeMemoryBytes&&(cpu||runtimeFree>=MinimumFreeMemoryBytes)
+    if got.Eligible!=want {t.Fatalf("cpu=%v OS=%d runtime=%d: %+v",cpu,osFree,runtimeFree,got)}
+    if got.MinimumFreeMemoryBytes!=MinimumFreeMemoryBytes||got.FreeMemoryVariationPercent!=15||got.NominalFreeMemoryBytes!=12*GiB {t.Fatalf("missing policy evidence: %+v",got)}
+   }
+  }
+ }
 }
