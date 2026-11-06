@@ -9,7 +9,7 @@ import re
 import subprocess
 import time
 
-REPO = 'FyberLabs/hypermesh-host'
+REPO = 'hyperme-sh/hypermesh-host'
 STABLE = re.compile(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)')
 
 def choose_tag(tags):
