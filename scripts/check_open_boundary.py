@@ -13,7 +13,8 @@ import re
 PROVIDER = re.compile(r'stripe', re.IGNORECASE)
 EXTENSIONS = {'.py','.pyi','.go','.rs','.js','.jsx','.ts','.tsx','.proto','.sql',
               '.json','.yaml','.yml','.toml','.jinja','.j2','.h','.hpp','.c','.cpp',
-              '.kt','.kts','.java','.swift','.cs','.mod','.sum'}
+              '.kt','.kts','.java','.swift','.cs','.mod','.sum',
+              '.html','.css','.sh','.service','.plist'}
 
 
 def violations(paths):
@@ -23,8 +24,12 @@ def violations(paths):
             raise ValueError(f'missing open surface: {root}')
         files = [root] if root.is_file() else sorted(root.rglob('*'))
         for path in files:
-            if not path.is_file() or path.suffix not in EXTENSIONS:
+            if not path.is_file():
                 continue
+            if path.suffix not in EXTENSIONS:
+                # Installed executables such as deploy/lib/update-rollback have no suffix.
+                if path.suffix or not path.read_bytes().startswith(b'#!'):
+                    continue
             for line, value in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
                 if PROVIDER.search(value):
                     found.append(f'{path}:{line}: provider-specific symbol in open surface')

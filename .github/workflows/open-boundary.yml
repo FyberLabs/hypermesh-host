@@ -13,5 +13,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Check embedded-asset scanner regressions
+        run: python3 -m unittest discover -s scripts -p test_open_boundary.py
       - name: Reject provider-specific runtime symbols
         run: python3 scripts/check_open_boundary.py cmd internal deploy terms go.mod
