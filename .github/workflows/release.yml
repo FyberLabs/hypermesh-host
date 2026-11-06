@@ -60,6 +60,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Historical sources may predate the cleanup fix; retain the workflow copy.
+      - name: Preserve workflow cleanup
+        run: install -m 0700 packaging/release/cleanup.sh "$RUNNER_TEMP/release-cleanup.sh"
+
       - name: Select approved test source
         env:
           HYPERMESH_TEST_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_only }}
@@ -197,7 +201,7 @@ jobs:
 
       - name: Wipe signing material and log out
         if: always()
-        run: bash packaging/release/cleanup.sh
+        run: bash "$RUNNER_TEMP/release-cleanup.sh"
 
       - name: Automatically release successful main
         if: github.ref == 'refs/heads/main'
