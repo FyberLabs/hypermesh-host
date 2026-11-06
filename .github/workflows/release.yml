@@ -161,19 +161,7 @@ jobs:
 
       - name: Wipe signing material and log out
         if: always()
-        run: |
-          set +x
-          set -euo pipefail
-          if [ -n "${GNUPGHOME:-}" ] && [ -d "${GNUPGHOME}" ]; then
-            gpgconf --kill all || true
-            if command -v shred >/dev/null 2>&1; then
-              find "$GNUPGHOME" -type f -exec shred -u {} + || true
-            fi
-            rm -rf "$GNUPGHOME"
-          fi
-          gpgconf --kill all || true
-          az logout || true
-          rm -rf "${AZURE_CONFIG_DIR:-}"
+        run: bash packaging/release/cleanup.sh
 
       - name: Automatically release successful main
         if: github.ref == 'refs/heads/main'

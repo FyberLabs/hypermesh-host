@@ -41,6 +41,7 @@ jobs:
       - name: Test signing material loading
         run: |
           python3 packaging/release/test-signing-material.py
+          python3 packaging/release/test-cleanup.py
           python3 packaging/release/test-upload-new.py
           python3 packaging/release/test-github-releases.py
           python3 packaging/release/test-promote-main.py
