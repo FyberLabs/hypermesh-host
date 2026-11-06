@@ -13,7 +13,7 @@ on:
         type: boolean
         default: false
       expected_source_sha:
-        description: Exact main commit required for a test-only dispatch
+        description: Exact approved main-history commit to publish for a test-only dispatch
         type: string
         default: ""
 
@@ -38,10 +38,9 @@ permissions:
 jobs:
   release:
     name: release
-    # GitHub-hosted runner. The image ships azure-cli 2.90.0 and gpg.
-    # The storage account and the signing vault accept public-endpoint
-    # traffic and are gated by RBAC, so no private network is needed.
-    runs-on: ubuntu-24.04
+    # Explicit test-only builds use the trusted main-only debrunner group.
+    # Default main/tag runner routing stays unchanged; no public PR signing job.
+    runs-on: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.test_only && '["self-hosted","linux","x64","debrunner"]' || '["ubuntu-24.04"]') }}
     timeout-minutes: 60
     # This job uses repository variables. It does not use a GitHub
     # Environment. Federated credentials are ref-based:
@@ -60,6 +59,47 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+
+      # Historical sources may predate the cleanup fix; retain the workflow copy.
+      - name: Preserve workflow cleanup
+        run: install -m 0700 packaging/release/cleanup.sh "$RUNNER_TEMP/release-cleanup.sh"
+
+      - name: Select approved test source
+        env:
+          HYPERMESH_TEST_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_only }}
+          EXPECTED_TEST_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$HYPERMESH_TEST_ONLY" = true ]; then
+            if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/main || ! "$EXPECTED_TEST_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo 'Test-only publication requires main and an exact approved source SHA' >&2
+              exit 1
+            fi
+            git merge-base --is-ancestor "$EXPECTED_TEST_SOURCE_SHA" "$GITHUB_SHA" || {
+              echo 'Approved test source is not in this main history' >&2
+              exit 1
+            }
+            git checkout --detach "$EXPECTED_TEST_SOURCE_SHA"
+          fi
+          printf 'RELEASE_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install isolated Azure CLI
+        if: github.event_name == 'workflow_dispatch' && inputs.test_only
+        run: |
+          set -euo pipefail
+          lib="$RUNNER_TEMP/azure-cli-2.90.0"
+          python3 -m pip install --target "$lib" 'azure-cli==2.90.0'
+          bindir="$RUNNER_TEMP/az-bin"
+          mkdir -p "$bindir"
+          # shellcheck disable=SC2016
+          {
+            printf '%s\n' '#!/bin/sh'
+            printf '%s\n' 'export PYTHONPATH="${AZ_CLI_LIB}${PYTHONPATH:+:$PYTHONPATH}"'
+            printf '%s\n' 'exec python3 -m azure.cli "$@"'
+          } > "$bindir/az"
+          chmod 0755 "$bindir/az"
+          printf 'AZ_CLI_LIB=%s\n' "$lib" >> "$GITHUB_ENV"
+          printf '%s\n' "$bindir" >> "$GITHUB_PATH"
 
       # The flag checker validates commands against azure-cli 2.90.0.
       # An older CLI is a different flag set.
@@ -84,7 +124,7 @@ jobs:
           # shellcheck source=packaging/release/layout.sh
           source packaging/release/layout.sh
           channel=$(channel_for_ref "$GITHUB_REF") || exit 1
-          require_test_only_source "$HYPERMESH_TEST_ONLY" "$GITHUB_REF" "$GITHUB_SHA" "$EXPECTED_TEST_SOURCE_SHA" || exit 1
+          require_test_only_source "$HYPERMESH_TEST_ONLY" "$GITHUB_REF" "$RELEASE_SOURCE_SHA" "$EXPECTED_TEST_SOURCE_SHA" || exit 1
           if [ "$channel" = prod ]; then
             git fetch origin main
             if ! git merge-base --is-ancestor HEAD origin/main; then
@@ -157,11 +197,11 @@ jobs:
               exit 1
               ;;
           esac
-          packaging/release/publish-agent.sh "$channel"
+          GITHUB_SHA="$RELEASE_SOURCE_SHA" packaging/release/publish-agent.sh "$channel"
 
       - name: Wipe signing material and log out
         if: always()
-        run: bash packaging/release/cleanup.sh
+        run: bash "$RUNNER_TEMP/release-cleanup.sh"
 
       - name: Automatically release successful main
         if: github.ref == 'refs/heads/main'
