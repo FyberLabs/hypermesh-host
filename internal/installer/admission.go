@@ -6,6 +6,12 @@ import "fmt"
 
 const GiB int64 = 1 << 30
 
+// A bounded fluctuation allowance for momentary free-memory admission only.
+// This does not reduce installed capacity, reserved budgets or model-fit checks.
+const NominalFreeMemoryBytes int64 = 12 * GiB
+const FreeMemoryVariationPercent = 15
+const MinimumFreeMemoryBytes int64 = (NominalFreeMemoryBytes * (100-FreeMemoryVariationPercent) + 99) / 100
+
 // Resources must come from local probes. Zero means unknown and fails closed.
 // UMA allocation is a proposed workload budget, not installed physical RAM.
 // DiskFreeBytes is available space on the selected model-cache filesystem.
@@ -21,6 +27,9 @@ type Resources struct {
 }
 
 type Admission struct {
+ NominalFreeMemoryBytes int64 `json:"nominal_free_memory_bytes,omitempty"`
+ MinimumFreeMemoryBytes int64 `json:"minimum_free_memory_bytes,omitempty"`
+ FreeMemoryVariationPercent int `json:"free_memory_variation_percent,omitempty"`
 	HostReserveBytes int64 `json:"host_reserve_bytes"`
 	RuntimeReserveBytes int64 `json:"runtime_reserve_bytes"`
 	MaximumUMABytes int64 `json:"maximum_uma_bytes"`
@@ -35,10 +44,10 @@ type Admission struct {
 // must separately prove that the selected GPUs can execute the target model.
 func CheckResources(r Resources) Admission {
  if r.CPU {
-  a:=Admission{Reasons:[]string{},RequiredDiskBytes:(12*GiB*11+4)/5}
+  a:=minimumMemoryAdmission();a.RequiredDiskBytes=(12*GiB*11+4)/5
   if r.UMA||r.UMAAllocationBytes!=0||r.UMARuntime!=nil||r.DiscreteVRAMBytes!=0 {a.Reasons=append(a.Reasons,"CPU mode cannot claim accelerator allocations")}
   if r.SystemBytes<16*GiB {a.Reasons=append(a.Reasons,"at least 16 GiB system memory is required")}
-  if r.AvailableSystemBytes<=12*GiB||r.AvailableSystemBytes>r.SystemBytes {a.Reasons=append(a.Reasons,"more than 12 GiB system memory must be free for minimum CPU installation")}
+  if r.AvailableSystemBytes<MinimumFreeMemoryBytes||r.AvailableSystemBytes>r.SystemBytes {a.Reasons=append(a.Reasons,fmt.Sprintf("minimum CPU installation requires at least %d free system bytes (12 GiB nominal, up to 15%% variation)",MinimumFreeMemoryBytes))}
   if r.DiskFreeBytes<a.RequiredDiskBytes {a.Reasons=append(a.Reasons,"model-cache filesystem needs minimum installation capacity")}
   a.HostReserveBytes=2*GiB
   a.Eligible=len(a.Reasons)==0
@@ -88,15 +97,15 @@ func CheckResources(r Resources) Admission {
 // No proposed workload allocation is part of default UMA installation.
 // This is a momentary minimum gate; model fit is evaluated at execution time.
 func checkMinimumInstallationResources(r Resources) Admission {
- a:=Admission{Reasons:[]string{}}
+ a:=minimumMemoryAdmission()
  // The supported NX class accepts 14-17 GiB of measured OS-visible RAM.
  // Do not round firmware-reserved memory up to an invented 16 GiB reading.
  if r.SystemBytes<14*GiB {a.Reasons=append(a.Reasons,"at least 14 GiB OS-visible system memory is required for minimum UMA installation")}
- if r.AvailableSystemBytes<=12*GiB || r.AvailableSystemBytes>r.SystemBytes {
-  a.Reasons=append(a.Reasons,"more than 12 GiB of system memory must currently be free for installation")
+ if r.AvailableSystemBytes<MinimumFreeMemoryBytes || r.AvailableSystemBytes>r.SystemBytes {
+  a.Reasons=append(a.Reasons,fmt.Sprintf("installation requires at least %d free system bytes (12 GiB nominal, up to 15%% variation)",MinimumFreeMemoryBytes))
  }
- if !validUMARuntime(r.UMARuntime) || r.UMARuntime.FreeBytes<=12*GiB {
-  a.Reasons=append(a.Reasons,"more than 12 GiB must currently be free in the UMA runtime")
+ if !validUMARuntime(r.UMARuntime) || r.UMARuntime.FreeBytes<MinimumFreeMemoryBytes {
+  a.Reasons=append(a.Reasons,fmt.Sprintf("installation requires at least %d free UMA-runtime bytes (12 GiB nominal, up to 15%% variation)",MinimumFreeMemoryBytes))
  }
  // Preserve the minimum model-storage requirement, independently of all
  // installed or currently free RAM. Larger models get their own fit checks.
@@ -106,4 +115,9 @@ func checkMinimumInstallationResources(r Resources) Admission {
  }
  a.Eligible=len(a.Reasons)==0
  return a
+}
+
+func minimumMemoryAdmission() Admission {
+ return Admission{Reasons: []string{}, NominalFreeMemoryBytes: NominalFreeMemoryBytes,
+  MinimumFreeMemoryBytes: MinimumFreeMemoryBytes, FreeMemoryVariationPercent: FreeMemoryVariationPercent}
 }
