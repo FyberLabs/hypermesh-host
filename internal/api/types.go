@@ -52,6 +52,12 @@ type EnrollRequest struct {
 	// HostType is model or supervisor. Empty is not sent. The agent
 	// always sends one of those two.
 	HostType string `json:"host_type,omitempty"`
+	// TermsVersion, TermsSHA256, and AcceptedAt record acceptance of
+	// the bundled Hypermesh Terms. Empty values are omitted so an older
+	// enroll body keeps the same shape.
+	TermsVersion string `json:"terms_version,omitempty"`
+	TermsSHA256  string `json:"terms_sha256,omitempty"`
+	AcceptedAt   string `json:"accepted_at,omitempty"`
 }
 
 // EnrollResponse is the 200 body from enroll.

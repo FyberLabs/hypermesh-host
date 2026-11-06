@@ -22,6 +22,9 @@ type State struct {
 	DeviceID         string `json:"device_id"`
 	CredentialPrefix string `json:"credential_prefix,omitempty"`
 	DeviceSecret     string `json:"device_secret,omitempty"`
+	TermsVersion     string `json:"terms_version,omitempty"`
+	TermsSHA256      string `json:"terms_sha256,omitempty"`
+	AcceptedAt       string `json:"accepted_at,omitempty"`
 }
 
 func (a *Agent) statePath() string {

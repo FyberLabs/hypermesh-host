@@ -104,6 +104,8 @@ flags replace a model cache policy that is already saved, as `--cache-settings`
 does. A session approved by an older installer covered paused startup only;
 `--yes` gives the consent to start selling for such a session too.
 
+`--yes` does not accept the Hypermesh Terms. Enrollment still needs `HYPERMESH_LICENSE_ACCEPT=yes` in `agent.env`, or `hypermesh-agent enroll --license accept`.
+
 `--yes` still stops with a message when this host's own settings are wrong, do not
 fit, or fail a check or benchmark, for example an unsupported processor class, a
 model quota larger than the disk, or a failed model test. It does not answer

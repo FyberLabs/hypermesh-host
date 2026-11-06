@@ -28,6 +28,7 @@ func main() {
 	chat := fs.String("chat-base", envOr("HYPERMESH_CHAT_BASE", supervisor.DefaultChatBase), "chat gateway base URL")
 	lease := fs.String("lease-id", os.Getenv("HYPERMESH_LEASE_ID"), "renter lease id")
 	listen := fs.String("listen", os.Getenv("HYPERMESH_SUPERVISOR_LISTEN"), "local chat listen address (renter)")
+	license := fs.String("license", "", "accept the Hypermesh Terms; the only value is accept (or HYPERMESH_LICENSE_ACCEPT=yes)")
 	_ = fs.Parse(os.Args[1:])
 
 	var run supervisor.Runtime
@@ -58,6 +59,10 @@ func main() {
 	s.Agent.StateDir = *stateDir
 	if strings.EqualFold(strings.TrimSpace(*placement), supervisor.PlacementHost) {
 		s.Agent.HostType = agent.HostTypeSupervisor
+	}
+	if err := agent.ApplyLicenseFlag(&s.Agent, *license); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

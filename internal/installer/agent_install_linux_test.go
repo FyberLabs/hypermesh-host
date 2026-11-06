@@ -48,6 +48,7 @@ func TestAgentInstallModeAndTrustPayloads(t *testing.T) {
 				if !strings.Contains(env,"HYPERMESH_WG_USERSPACE=\""+want+"\"") {t.Fatal("wrong WireGuard mode")}
 				if !strings.Contains(env,"HYPERMESH_UPDATE_EVERY=\"1h\"") || !strings.Contains(env,"HYPERMESH_UPDATE_FINGERPRINTS=") {t.Fatal("update trust absent")}
 				if strings.Contains(env,"ENROLL_TOKEN=")||strings.Contains(env,"DEVICE_SECRET="){t.Fatal("credential in plan")}
+				if strings.Contains(env,"HYPERMESH_LICENSE_ACCEPT=\"yes\"")||strings.Contains(env,"HYPERMESH_LICENSE_ACCEPT=yes"){t.Fatal("install accepted the Terms")}
 			}
 		}
 		if foundWG!=(mode=="userspace"){t.Fatal("kernel install includes userspace unit")}

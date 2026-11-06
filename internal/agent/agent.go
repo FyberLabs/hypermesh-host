@@ -384,6 +384,10 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if err := missingEnrollmentConfig(a.cfg, st); err != nil {
 		return err
 	}
+	accepted, err := (&a.cfg).AcceptedTerms(ctx)
+	if err != nil {
+		return err
+	}
 
     if st.DeviceID != "" && a.cfg.Reenroll {
         if err := a.resetEnrollmentWork(ctx, st.DeviceID); err != nil {
@@ -417,6 +421,9 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		EnrollToken: a.cfg.EnrollToken,
 		ImageHash:   image,
 		HostType:    a.cfg.ReportedHostType(),
+		TermsVersion: accepted.Version,
+		TermsSHA256:  accepted.SHA256,
+		AcceptedAt:   accepted.AcceptedAt,
 	})
 	if err != nil {
 		return fmt.Errorf("hypermesh: could not enroll this box: %w", err)
@@ -431,6 +438,9 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		DeviceID:         resp.DeviceID,
 		CredentialPrefix: resp.CredentialPrefix,
 		DeviceSecret:     resp.DeviceSecret,
+		TermsVersion:     accepted.Version,
+		TermsSHA256:      accepted.SHA256,
+		AcceptedAt:       accepted.AcceptedAt,
 	}
 	if err := a.saveState(st); err != nil {
 		return err

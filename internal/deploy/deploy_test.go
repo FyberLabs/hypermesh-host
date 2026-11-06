@@ -184,6 +184,9 @@ func TestDeployCommandOrder(t *testing.T) {
 	if strings.Contains(text, "hm_dev_") {
 		t.Fatal("device secret was written into agent.env")
 	}
+	if strings.Contains(text, "HYPERMESH_LICENSE_ACCEPT=yes") {
+		t.Fatal("deploy accepted the Terms")
+	}
 	info, err := os.Stat(envPath)
 	if err != nil {
 		t.Fatal(err)

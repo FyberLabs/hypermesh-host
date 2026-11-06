@@ -61,6 +61,8 @@ func RenderAgentEnv(controlPlane, tenant, token, stateDir, gguf, cacheMax string
 	var b strings.Builder
 	b.WriteString("# Written by hypermesh-deploy. Mode 0600.\n")
 	b.WriteString("# The device secret stays in the state dir device.json after enroll.\n")
+	b.WriteString("# This file does not accept the Hypermesh Terms.\n")
+	b.WriteString("# To accept them, set HYPERMESH_LICENSE_ACCEPT to yes, or run: hypermesh-agent enroll --license accept\n")
 	fmt.Fprintf(&b, "HYPERMESH_CONTROL_PLANE_URL=%s\n", controlPlane)
 	fmt.Fprintf(&b, "HYPERMESH_TENANT_ID=%s\n", tenant)
 	if token != "" && !enrolled {

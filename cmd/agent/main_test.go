@@ -16,9 +16,38 @@ func TestSplitOwnerArgs(t *testing.T) {
 		{in: []string{"-state-dir", "./state", "owner", "sell-pause", "--until=2026-09-08T00:00:00Z"}, wantOK: true, wantPre: []string{"-state-dir", "./state"}, want: []string{"sell-pause", "--until=2026-09-08T00:00:00Z"}},
 		{in: []string{"-control-plane-url", "https://api.test.hyperme.sh"}, wantOK: false},
 		{in: []string{"--", "owner", "sell-pause"}, wantOK: false},
+		{in: []string{"enroll", "--license", "accept"}, wantOK: false},
 	}
 	for _, tc := range cases {
 		pre, rest, ok := splitOwnerArgs(tc.in)
+		if ok != tc.wantOK {
+			t.Fatalf("%v ok=%v want %v", tc.in, ok, tc.wantOK)
+		}
+		if !ok {
+			continue
+		}
+		if !stringSlicesEqual(pre, tc.wantPre) || !stringSlicesEqual(rest, tc.want) {
+			t.Fatalf("%v pre=%v rest=%v", tc.in, pre, rest)
+		}
+	}
+}
+
+func TestSplitEnrollArgs(t *testing.T) {
+	cases := []struct {
+		in      []string
+		wantOK  bool
+		wantPre []string
+		want    []string
+	}{
+		{in: []string{"enroll", "--license", "accept"}, wantOK: true, wantPre: []string{}, want: []string{"--license", "accept"}},
+		{in: []string{"-state-dir=./state", "enroll"}, wantOK: true, wantPre: []string{"-state-dir=./state"}, want: []string{}},
+		{in: []string{"--license", "accept", "enroll"}, wantOK: true, wantPre: []string{"--license", "accept"}, want: []string{}},
+		{in: []string{"--license=accept", "enroll", "--yes"}, wantOK: true, wantPre: []string{"--license=accept"}, want: []string{"--yes"}},
+		{in: []string{"owner", "status"}, wantOK: false},
+		{in: []string{"--", "enroll"}, wantOK: false},
+	}
+	for _, tc := range cases {
+		pre, rest, ok := splitCommand(tc.in, "enroll")
 		if ok != tc.wantOK {
 			t.Fatalf("%v ok=%v want %v", tc.in, ok, tc.wantOK)
 		}

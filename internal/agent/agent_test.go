@@ -2543,6 +2543,8 @@ func newTestAgent(t *testing.T, url, dir, uptime, enroll, image string) *Agent {
 		HeartbeatEvery:  40 * time.Millisecond,
 		JobEvery:        40 * time.Millisecond,
 		ImageHash:       image,
+		LicenseAccept:   true,
+		LicenseEnvFile:  filepath.Join(dir, "missing-agent.env"),
 	}
 	if image == "" {
 		cfg.ImageHash = "sha256:fixture"
