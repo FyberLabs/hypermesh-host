@@ -895,8 +895,14 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(text, "${{ runner.temp }}") || strings.Contains(text, "runner.temp") {
 		t.Fatal("release.yml uses runner.temp in an expression")
 	}
-	if strings.Contains(text, "environment:") || strings.Contains(text, "secrets.") {
-		t.Fatal("release.yml depends on an environment or a secret")
+	if strings.Contains(text, "environment:") {
+		t.Fatal("release.yml depends on a GitHub environment")
+	}
+	// Explicit test-only historical publication needs the dedicated App key.
+	// Cloud authentication stays OIDC; do not allow unrelated credential secrets.
+	withoutAppKey := strings.ReplaceAll(text, "secrets.HYPERMESH_TEST_RELEASE_APP_PRIVATE_KEY", "")
+	if strings.Contains(withoutAppKey, "secrets.") || strings.Contains(withoutAppKey, "secrets[") {
+		t.Fatal("release.yml uses a secret other than the dedicated test release App key")
 	}
 	if strings.Contains(text, "vars.AZURE_CLIENT_ID }}") {
 		t.Fatal("release login still uses one client id for both channels")
