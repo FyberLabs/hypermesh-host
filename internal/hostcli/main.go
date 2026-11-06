@@ -15,12 +15,19 @@ import (
 	"syscall"
 
 	"github.com/FyberLabs/hypermesh-host/internal/deploy"
+ "github.com/FyberLabs/hypermesh-host/internal/certmeasure"
 	"github.com/FyberLabs/hypermesh-host/internal/hardware"
 	"github.com/FyberLabs/hypermesh-host/internal/installer"
 	"github.com/FyberLabs/hypermesh-host/internal/protection"
 )
 
 func Main() {
+ if len(os.Args)>1 && os.Args[1]=="measure-certification" {
+  ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
+  defer stop()
+  os.Exit(certmeasure.Run(ctx,os.Args[2:],os.Stdout,os.Stderr))
+ }
+
  if len(os.Args)==2 && os.Args[1]=="platforms" {
   if err:=json.NewEncoder(os.Stdout).Encode(hardware.Systems());err!=nil {os.Exit(1)}
   return
@@ -41,7 +48,7 @@ func Main() {
   usage()
   return
  }
- if os.Args[1] == "advanced-help" { advancedUsage(); return }
+ if os.Args[1] == "advanced-help" { advancedUsage(); fmt.Println("  measure-certification --help: local measured certification evidence (Linux and native Mac)"); return }
  name := os.Args[1]
  if name == "protection" { os.Exit(protection.Run(os.Args[2:],os.Stdout,os.Stderr)) }
  if name=="plan-installer-update"||name=="update-installer"||name=="rollback-installer"{ctx,stop:=signal.NotifyContext(context.Background(),syscall.SIGINT,syscall.SIGTERM);run:=installer.RunPlanInstallerUpdate;if name=="update-installer"{run=installer.RunUpdateInstaller};if name=="rollback-installer"{run=installer.RunRollbackInstaller};code:=run(ctx,os.Args[2:],os.Stdout,os.Stderr);stop();os.Exit(code)}
