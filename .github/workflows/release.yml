@@ -83,6 +83,40 @@ jobs:
           fi
           printf 'RELEASE_SOURCE_SHA=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
+      # GITHUB_TOKEN cannot create historical tags whose workflows differ
+      # from main. Only explicit test-only dispatches use this scoped App.
+      - name: Require test release App configuration
+        env:
+          TEST_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_only }}
+          TEST_RELEASE_APP_ID: ${{ vars.HYPERMESH_TEST_RELEASE_APP_ID }}
+          TEST_RELEASE_APP_KEY_CONFIGURED: ${{ secrets.HYPERMESH_TEST_RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$TEST_ONLY" = true ]; then
+            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo 'Test release App is restricted to explicit main test-only dispatches' >&2
+              exit 1
+            fi
+            if [ -z "$TEST_RELEASE_APP_ID" ] || [ "$TEST_RELEASE_APP_KEY_CONFIGURED" != true ]; then
+              echo 'Configure HYPERMESH_TEST_RELEASE_APP_ID and HYPERMESH_TEST_RELEASE_APP_PRIVATE_KEY before test-only publication' >&2
+              exit 1
+            fi
+          fi
+
+      - name: Create scoped test release token
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.test_only
+        id: test-release-token
+        # actions/create-github-app-token v3, automatically revoked in post.
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.HYPERMESH_TEST_RELEASE_APP_ID }}
+          private-key: ${{ secrets.HYPERMESH_TEST_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+          skip-token-revoke: false
+
       - name: Install isolated Azure CLI
         if: github.event_name == 'workflow_dispatch' && inputs.test_only
         run: |
@@ -182,7 +216,10 @@ jobs:
       - name: Publish signed agent
         env:
           channel: ${{ env.channel }}
+          # Do not fall back to GITHUB_TOKEN if App token creation failed.
           GH_TOKEN: ${{ github.token }}
+          TEST_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_only }}
+          TEST_RELEASE_TOKEN: ${{ steps.test-release-token.outputs.token }}
           AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_STORAGE_ACCOUNT }}
           AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_STORAGE_CONTAINER }}
           HYPERMESH_RELEASE_KV_NAME: ${{ vars.HYPERMESH_RELEASE_KV_NAME || 'kv-fyber-hmhost' }}
@@ -197,6 +234,17 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "$TEST_ONLY" = true ]; then
+            if [ "$channel" != test ]; then
+              echo 'Test release App cannot publish a production channel' >&2
+              exit 1
+            fi
+            if [ -z "$TEST_RELEASE_TOKEN" ]; then
+              echo 'Missing scoped test release token; refusing publication' >&2
+              exit 1
+            fi
+            export GH_TOKEN="$TEST_RELEASE_TOKEN"
+          fi
           GITHUB_SHA="$RELEASE_SOURCE_SHA" packaging/release/publish-agent.sh "$channel"
 
       - name: Wipe signing material and log out

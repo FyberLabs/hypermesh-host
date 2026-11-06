@@ -43,6 +43,7 @@ jobs:
           python3 packaging/release/test-signing-material.py
           python3 packaging/release/test-cleanup.py
           python3 packaging/release/test-source-selection.py
+          python3 packaging/release/test-release-auth.py
           python3 packaging/release/test-upload-new.py
           python3 packaging/release/test-github-releases.py
           python3 packaging/release/test-promote-main.py
