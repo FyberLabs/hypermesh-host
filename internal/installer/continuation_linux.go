@@ -49,10 +49,9 @@ func continuationPrompt(label string) bool {
 	return false
 }
 
-func earlyEnrollment(ctx context.Context, dir string, s *guidedState, p SetupPlan, out io.Writer) error {
-	if err := completeEarlyEnrollment(ctx, dir, s, p, out); err != nil {
-		return err
-	}
+// Binding can fail transiently after device-code enrollment has succeeded.
+// The saved continuation retries it using the existing enrollment journal.
+func bindEnrolledMachine(ctx context.Context, dir string, s *guidedState) error {
 	var j registrationJournal
 	if err := guidedRead(filepath.Join(dir, "enrollment.json"), &j, true); err != nil {
 		return err

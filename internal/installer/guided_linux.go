@@ -71,7 +71,7 @@ type guidedUI struct {
  cacheQuota,cacheReserve string
 }
 const (
- promptEnroll="Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation, and service startup and selling after admin approval?"
+ promptEnroll="Enroll this host and apply the listed changes, including required reboot, automatic model tests, signed service installation, and service startup and selling after certification?"
  promptContinue="Continue this registered installation automatically after reboot, network interruptions and admin review, including model tests, service startup and selling once certified?"
  promptPausedOnly="The saved approval covered paused startup only. Start selling on this host once the service is verified?"
  promptModule="Load the installed WireGuard kernel module to verify it works? No packages or kernel files will be changed."
@@ -570,10 +570,11 @@ func RunGuidedInstall(ctx context.Context,args []string,input io.Reader,out,diag
     if e:=ui.confirm(promptEnroll);e!=nil{return e}
     s.SellConsent=true
    }
-   if e:=earlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
+   if e:=completeEarlyEnrollment(ctx,planDir,&s,p,diagnostic);e!=nil{return e}
    s.Autonomous=true
    if e:=installContinuation(ctx,&s);e!=nil{return e}
    if e:=writeGuided(statePath,s);e!=nil{return e}
+   if e:=bindEnrolledMachine(ctx,planDir,&s);e!=nil{return e}
    fmt.Fprintln(ui.out,"A verified, root-owned copy of this installer is saved. To resume later from any directory, run: sudo hypermesh-host")
    return nil
   },
